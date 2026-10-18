@@ -2319,4 +2319,27 @@ TEST_F(ResponseHeadersTest, TestHopByHopSanitization) {
   EXPECT_EQ("HTTP/1.0 0 (null)\r\nbar: baz\r\n\r\n", headers2.ToString());
 }
 
+// A single header line of pathological length must not be buffered in
+// full: the parser caps the accumulated name and value per line, drops
+// the oversized line, and still parses the rest of the response.
+TEST_F(ResponseHeadersTest, OversizedHeaderLineIsDropped) {
+  const GoogleString huge_value(
+      ResponseHeadersParser::kMaxHeaderLineBytes + 1000, 'x');
+  const GoogleString http_data = StrCat(
+      "HTTP/1.1 200 OK\r\n"
+      "X-Huge: ",
+      huge_value, "\r\n"
+      "Content-Type: text/html\r\n"
+      "\r\n");
+  int num_consumed = parser_.ParseChunk(http_data, &message_handler_);
+  EXPECT_TRUE(parser_.headers_complete());
+  EXPECT_EQ(http_data.size(), static_cast<size_t>(num_consumed));
+
+  ConstStringStarVector values;
+  EXPECT_TRUE(response_headers_.Lookup(HttpAttributes::kContentType, &values));
+  EXPECT_EQ(1, values.size());
+  EXPECT_FALSE(response_headers_.Lookup("X-Huge", &values));
+  EXPECT_EQ(1, response_headers_.NumAttributes());
+}
+
 }  // namespace net_instaweb
