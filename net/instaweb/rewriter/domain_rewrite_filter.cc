@@ -26,6 +26,7 @@
 #include "net/instaweb/rewriter/public/resource_tag_scanner.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
+#include "net/instaweb/rewriter/public/script_tag_scanner.h"
 #include "net/instaweb/rewriter/public/server_context.h"
 #include "net/instaweb/rewriter/public/static_asset_manager.h"
 #include "pagespeed/kernel/base/basictypes.h"
@@ -401,7 +402,13 @@ void DomainRewriteFilter::StartElementImpl(HtmlElement* element) {
       (element->keyword() == HtmlName::kEmbed ||
        element->keyword() == HtmlName::kFrame ||
        element->keyword() == HtmlName::kIframe);
+  // Preserve subresource integrity by not changing script or stylesheet URLs.
+  const bool has_integrity = ScriptTagScanner::HasIntegrityAttribute(element);
   for (int i = 0, n = attributes.size(); i < n; ++i) {
+    if (has_integrity && (attributes[i].category == semantic_type::kScript ||
+                          attributes[i].category == semantic_type::kStylesheet)) {
+      continue;
+    }
     // Only rewrite attributes that are resource-tags.  If hyperlinks
     // is on that's fine too.
     bool is_resource = (attributes[i].category == semantic_type::kImage ||

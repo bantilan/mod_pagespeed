@@ -173,6 +173,22 @@ TEST_F(JsInlineFilterTest, DoInlineJavascriptSimpleHtml) {
                        "function id(x) { return x; }\n", true);
 }
 
+TEST_F(JsInlineFilterTest, DoNotInlineIntegrityScript) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+  EnableDebug();
+
+  static const char kJs[] = "function id(x) { return x; }\n";
+  SetResponseWithDefaultHeaders("script.js", kContentTypeJavascript, kJs, 3000);
+
+  ValidateExpected("integrity_debug",
+                   "<script src=\"script.js\" Integrity=\"sha384-x\"></script>",
+                   "<script src=\"script.js\" Integrity=\"sha384-x\"></script>"
+                   "<!--JS not inlined because of the integrity "
+                   "attribute-->");
+  EXPECT_EQ(0, statistics()->GetVariable(JsInlineFilter::kNumJsInlined)->Get());
+}
+
 class JsInlineFilterTestCustomOptions : public JsInlineFilterTest {
  protected:
   void SetUp() override {}

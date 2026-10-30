@@ -100,6 +100,12 @@ void JsInlineFilter::StartElementImpl(HtmlElement* element) {
   if (script_tag_scanner_.ParseScriptElement(element, &src) ==
       ScriptTagScanner::kJavaScript) {
     should_inline_ = (src != nullptr) && (src->DecodedValueOrNull() != nullptr);
+    // Inlining drops integrity enforcement, so leave this script unchanged.
+    if (should_inline_ && ScriptTagScanner::HasIntegrityAttribute(element)) {
+      should_inline_ = false;
+      driver()->InsertDebugComment(
+          "JS not inlined because of the integrity attribute", element);
+    }
   }
 }
 
