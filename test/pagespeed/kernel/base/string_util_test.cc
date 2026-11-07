@@ -868,6 +868,20 @@ TEST(IsAsciiTest, IsNonControlAscii) {
   }
 }
 
+TEST(StringUtilTest, ConstantTimeCompare) {
+  EXPECT_TRUE(ConstantTimeCompare("secret", "secret"));
+  EXPECT_FALSE(ConstantTimeCompare("secret", "secreX"));
+  EXPECT_FALSE(ConstantTimeCompare("abc", "abcd"));
+  EXPECT_FALSE(ConstantTimeCompare("abcd", "abc"));
+  EXPECT_TRUE(ConstantTimeCompare("", ""));
+
+  // Zero padding alone would make these compare equal; include the length
+  // difference in the result as well.
+  const GoogleString nulls(256, '\0');
+  EXPECT_FALSE(ConstantTimeCompare("", StringPiece(nulls)));
+  EXPECT_FALSE(ConstantTimeCompare(StringPiece(nulls), ""));
+}
+
 }  // namespace
 
 }  // namespace net_instaweb

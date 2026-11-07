@@ -643,6 +643,10 @@ bool StringEqualConcat(StringPiece str, StringPiece first, StringPiece second);
 // See http://codahale.com/a-lesson-in-timing-attacks/
 int CountCharacterMismatches(StringPiece s1, StringPiece s2);
 
+// Compares all bytes without early exit, for secret-bearing values such as
+// nonces and passwords. Runtime still depends on the input lengths.
+bool ConstantTimeCompare(StringPiece a, StringPiece b);
+
 struct CharStarCompareInsensitive {
   bool operator()(const char* s1, const char* s2) const {
     return (StringCaseCompare(s1, s2) < 0);

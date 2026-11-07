@@ -465,6 +465,26 @@ int CountCharacterMismatches(StringPiece s1, StringPiece s2) {
   return mismatches + std::abs(s1_length - s2_length);
 }
 
+bool ConstantTimeCompare(StringPiece a, StringPiece b) {
+  volatile unsigned char difference = 0;
+  const size_t max_length = std::max(a.size(), b.size());
+  for (size_t i = 0; i < max_length; ++i) {
+    const unsigned char a_byte =
+        i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
+    const unsigned char b_byte =
+        i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
+    difference |= a_byte ^ b_byte;
+  }
+
+  // Fold every byte of the length difference so lengths differing by a
+  // multiple of 256 cannot compare equal after zero-padding.
+  const size_t length_difference = a.size() ^ b.size();
+  for (size_t i = 0; i < sizeof(size_t); ++i) {
+    difference |= static_cast<unsigned char>(length_difference >> (i * 8));
+  }
+  return difference == 0;
+}
+
 void ParseShellLikeString(StringPiece input,
                           std::vector<GoogleString>* output) {
   output->clear();
