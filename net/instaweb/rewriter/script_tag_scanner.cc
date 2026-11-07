@@ -162,6 +162,16 @@ int ScriptTagScanner::ExecutionMode(const HtmlElement* element) const {
   return flags;
 }
 
+bool ScriptTagScanner::HasIntegrityAttribute(const HtmlElement* element) {
+  const HtmlElement::AttributeList& attrs = element->attributes();
+  for (const auto& attr : attrs) {
+    if (StringCaseEqual(attr.name_str(), "integrity")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 GoogleString ScriptTagScanner::Normalized(const StringPiece& str) {
   GoogleString normal_form;
   TrimWhitespace(str, &normal_form);

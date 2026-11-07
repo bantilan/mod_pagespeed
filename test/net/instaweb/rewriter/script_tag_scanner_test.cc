@@ -57,6 +57,7 @@ class ScriptTagScannerTest : public HtmlParseTestBase {
           info.url = src->DecodedValueOrNull();
         }
         info.flags = script_tag_scanner_.ExecutionMode(element);
+        info.has_integrity = ScriptTagScanner::HasIntegrityAttribute(element);
         scripts_.push_back(info);
       }
     }
@@ -71,6 +72,8 @@ class ScriptTagScannerTest : public HtmlParseTestBase {
 
     int FlagsAt(int pos) { return scripts_[pos].flags; }
 
+    bool HasIntegrityAt(int pos) { return scripts_[pos].has_integrity; }
+
     const char* Name() const override { return "ScriptCollector"; }
 
    private:
@@ -78,6 +81,7 @@ class ScriptTagScannerTest : public HtmlParseTestBase {
       GoogleString url;
       ScriptTagScanner::ScriptClassification classification;
       int flags;
+      bool has_integrity;
     };
 
     std::vector<ScriptInfo> scripts_;
@@ -137,6 +141,17 @@ TEST_F(ScriptTagScannerTest, FindNoScriptTag) {
   ASSERT_EQ(1, collector_.Size());
   EXPECT_EQ(GoogleString("myscript.js"), collector_.UrlAt(0));
   EXPECT_EQ(ScriptTagScanner::kJavaScript, collector_.ClassificationAt(0));
+}
+
+TEST_F(ScriptTagScannerTest, IntegrityAttributeIsMatchedCaseInsensitively) {
+  ValidateNoChanges("integrity_attribute",
+                    "<script src=a.js integrity=sha256-x></script>"
+                    "<script src=b.js Integrity=sha256-y></script>"
+                    "<script src=c.js></script>");
+  ASSERT_EQ(3, collector_.Size());
+  EXPECT_TRUE(collector_.HasIntegrityAt(0));
+  EXPECT_TRUE(collector_.HasIntegrityAt(1));
+  EXPECT_FALSE(collector_.HasIntegrityAt(2));
 }
 
 TEST_F(ScriptTagScannerTest, TypeNoVal) {

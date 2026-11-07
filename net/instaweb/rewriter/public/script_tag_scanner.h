@@ -56,6 +56,10 @@ class ScriptTagScanner {
   // kExecuteDefer and kExecuteAsync on elements without src=''
   int ExecutionMode(const HtmlElement* element) const;
 
+  // Returns true when the element has an integrity attribute, matching its
+  // name case-insensitively because HTML attribute names may preserve case.
+  static bool HasIntegrityAttribute(const HtmlElement* element);
+
  private:
   // Normalizes the input str by trimming whitespace and lowercasing.
   static GoogleString Normalized(const StringPiece& str);
