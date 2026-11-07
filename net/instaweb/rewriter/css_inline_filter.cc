@@ -32,6 +32,7 @@
 #include "net/instaweb/rewriter/public/script_tag_scanner.h"
 #include "net/instaweb/rewriter/public/server_context.h"
 #include "pagespeed/kernel/base/charset_util.h"
+#include "pagespeed/kernel/base/hasher.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/html/html_element.h"
@@ -56,11 +57,19 @@ class CssInlineFilter::Context : public InlineRewriteContext {
     if (charset != nullptr) {
       attrs_charset_ = GoogleString(charset);
     }
+    filter->driver()->containing_charset().CopyToString(&htmls_charset_);
   }
 
   bool ShouldInline(const ResourcePtr& resource,
                     GoogleString* reason) const override {
-    return filter_->ShouldInline(resource, attrs_charset_, reason);
+    return filter_->ShouldInline(resource, attrs_charset_, htmls_charset_,
+                                 reason);
+  }
+
+  GoogleString CacheKeySuffix() const override {
+    GoogleString charsets = StrCat(htmls_charset_, "/", attrs_charset_);
+    LowerString(&charsets);
+    return FindServerContext()->lock_hasher()->Hash(charsets);
   }
 
   bool PolicyPermitsRendering() const override {
@@ -96,6 +105,7 @@ class CssInlineFilter::Context : public InlineRewriteContext {
   CssInlineFilter* filter_;
   GoogleUrl base_url_;
   GoogleString attrs_charset_;
+  GoogleString htmls_charset_;
 
   DISALLOW_COPY_AND_ASSIGN(Context);
 };
@@ -209,6 +219,7 @@ bool CssInlineFilter::HasClosingStyleTag(StringPiece contents) {
 
 bool CssInlineFilter::ShouldInline(const ResourcePtr& resource,
                                    const StringPiece& attrs_charset,
+                                   const StringPiece& htmls_charset,
                                    GoogleString* reason) const {
   // If the contents are bigger than our threshold, don't inline.
   StringPiece contents(resource->ExtractUncompressedContents());
@@ -232,7 +243,6 @@ bool CssInlineFilter::ShouldInline(const ResourcePtr& resource,
 
   // If the charset is incompatible with the HTML's, we may not be able to
   // inline.
-  StringPiece htmls_charset(driver()->containing_charset());
   GoogleString css_charset = RewriteFilter::GetCharsetForStylesheet(
       resource.get(), attrs_charset, htmls_charset);
   if (!StringCaseEqual(htmls_charset, css_charset)) {

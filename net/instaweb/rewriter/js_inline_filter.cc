@@ -24,10 +24,13 @@
 #include "net/instaweb/rewriter/public/javascript_code_block.h"
 #include "net/instaweb/rewriter/public/resource.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
+#include "net/instaweb/rewriter/public/rewrite_filter.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
 #include "net/instaweb/rewriter/public/script_tag_scanner.h"
 #include "net/instaweb/rewriter/public/server_context.h"
 #include "pagespeed/kernel/base/basictypes.h"
+#include "pagespeed/kernel/base/charset_util.h"
+#include "pagespeed/kernel/base/hasher.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
@@ -45,11 +48,18 @@ class JsInlineFilter::Context : public InlineRewriteContext {
  public:
   Context(JsInlineFilter* filter, HtmlElement* element,
           HtmlElement::Attribute* src)
-      : InlineRewriteContext(filter, element, src), filter_(filter) {}
+      : InlineRewriteContext(filter, element, src), filter_(filter) {
+    const char* charset = element->AttributeValue(HtmlName::kCharset);
+    if (charset != nullptr) {
+      attrs_charset_ = charset;
+    }
+    filter->driver()->containing_charset().CopyToString(&htmls_charset_);
+  }
 
   bool ShouldInline(const ResourcePtr& resource,
                     GoogleString* reason) const override {
-    return filter_->ShouldInline(resource, reason);
+    return filter_->ShouldInline(resource, attrs_charset_, htmls_charset_,
+                                 reason);
   }
 
   void RenderInline(const ResourcePtr& resource, const StringPiece& text,
@@ -59,6 +69,12 @@ class JsInlineFilter::Context : public InlineRewriteContext {
 
   const char* id() const override {
     return RewriteOptions::kJavascriptInlineId;
+  }
+
+  GoogleString CacheKeySuffix() const override {
+    GoogleString charsets = StrCat(htmls_charset_, "/", attrs_charset_);
+    LowerString(&charsets);
+    return FindServerContext()->lock_hasher()->Hash(charsets);
   }
 
   bool PolicyPermitsRendering() const override {
@@ -71,6 +87,8 @@ class JsInlineFilter::Context : public InlineRewriteContext {
 
  private:
   JsInlineFilter* filter_;
+  GoogleString attrs_charset_;
+  GoogleString htmls_charset_;
   DISALLOW_COPY_AND_ASSIGN(Context);
 };
 
@@ -129,6 +147,8 @@ void JsInlineFilter::EndElementImpl(HtmlElement* element) {
 }
 
 bool JsInlineFilter::ShouldInline(const ResourcePtr& resource,
+                                  const StringPiece& attrs_charset,
+                                  const StringPiece& htmls_charset,
                                   GoogleString* reason) const {
   // Don't inline if it's too big.
   StringPiece contents(resource->ExtractUncompressedContents());
@@ -147,6 +167,23 @@ bool JsInlineFilter::ShouldInline(const ResourcePtr& resource,
       JavascriptCodeBlock::UnsafeToRename(contents)) {
     *reason = "JS not inlined since it may be looking for its source";
     return false;
+  }
+
+  StringPiece script_charset = RewriteFilter::GetCharsetForScript(
+      resource.get(), attrs_charset, htmls_charset);
+  if (!StringCaseEqual(htmls_charset, script_charset)) {
+    StringPiece clean_contents(contents);
+    StripUtf8Bom(&clean_contents);
+    for (char ch : clean_contents) {
+      const unsigned char c = static_cast<unsigned char>(ch);
+      if (c == 0 || c >= 0x80) {
+        *reason = StrCat(
+            "JS not inlined due to apparent charset incompatibility; "
+            "we think the HTML is ",
+                         htmls_charset, " while the JS is ", script_charset);
+        return false;
+      }
+    }
   }
 
   return true;

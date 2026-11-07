@@ -189,6 +189,45 @@ TEST_F(JsInlineFilterTest, DoNotInlineIntegrityScript) {
   EXPECT_EQ(0, statistics()->GetVariable(JsInlineFilter::kNumJsInlined)->Get());
 }
 
+TEST_F(JsInlineFilterTest, CharsetMismatchNotInlined) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+
+  ResponseHeaders headers;
+  SetDefaultLongCacheHeaders(&kContentTypeJavascript, &headers);
+  headers.MergeContentType("text/javascript; charset=iso-8859-1");
+  const GoogleString script = "var s = 'caf\xE9';\n";
+  SetFetchResponse(StrCat(kTestDomain, "latin1.js"), headers, script);
+
+  ValidateNoChanges("charset_mismatch",
+                    "<meta charset=\"utf-8\"><script src=latin1.js></script>");
+}
+
+TEST_F(JsInlineFilterTest, InlineDecisionIsScopedToPageCharset) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+
+  ResponseHeaders headers;
+  SetDefaultLongCacheHeaders(&kContentTypeJavascript, &headers);
+  headers.MergeContentType("text/javascript; charset=UTF-8");
+  const GoogleString script = "var s = '\xE4\xB8\xAD';\n";
+  SetFetchResponse(StrCat(kTestDomain, "shared.js"), headers, script);
+  const GoogleString utf8 =
+      "<meta charset=\"utf-8\"><script src=shared.js></script>";
+  const GoogleString gbk =
+      "<meta charset=\"gbk\"><script src=shared.js></script>";
+
+  ValidateExpected("charset_utf8_first", utf8,
+                   StrCat("<meta charset=\"utf-8\"><script>", script,
+                          "</script>"));
+  ValidateNoChanges("charset_gbk_second", gbk);
+  lru_cache()->Clear();
+  ValidateNoChanges("charset_gbk_first", gbk);
+  ValidateExpected("charset_utf8_second", utf8,
+                   StrCat("<meta charset=\"utf-8\"><script>", script,
+                          "</script>"));
+}
+
 class JsInlineFilterTestCustomOptions : public JsInlineFilterTest {
  protected:
   void SetUp() override {}

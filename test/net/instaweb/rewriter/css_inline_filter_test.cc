@@ -589,6 +589,31 @@ TEST_F(CssInlineFilterTest, CharsetDetermination) {
   EXPECT_STREQ("iso-8859-1", result);
 }
 
+TEST_F(CssInlineFilterTest, InlineDecisionIsScopedToPageCharset) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineCss);
+
+  ResponseHeaders headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &headers);
+  headers.MergeContentType("text/css; charset=UTF-8");
+  const GoogleString css = "body { content: '\xE4\xB8\xAD'; }";
+  SetFetchResponse(StrCat(kTestDomain, "shared.css"), headers, css);
+  const GoogleString utf8 =
+      "<meta charset=\"utf-8\"><link rel=stylesheet href=shared.css>";
+  const GoogleString gbk =
+      "<meta charset=\"gbk\"><link rel=stylesheet href=shared.css>";
+
+  ValidateExpected("css_charset_utf8_first", utf8,
+                   StrCat("<meta charset=\"utf-8\"><style>", css,
+                          "</style>"));
+  ValidateNoChanges("css_charset_gbk_second", gbk);
+  lru_cache()->Clear();
+  ValidateNoChanges("css_charset_gbk_first", gbk);
+  ValidateExpected("css_charset_utf8_second", utf8,
+                   StrCat("<meta charset=\"utf-8\"><style>", css,
+                          "</style>"));
+}
+
 TEST_F(CssInlineFilterTest, InlineWithCompatibleBom) {
   const GoogleString css = "BODY { color: red; }\n";
   const GoogleString css_with_bom = StrCat(kUtf8Bom, css);
