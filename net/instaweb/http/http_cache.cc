@@ -48,7 +48,9 @@ namespace {
 // Similar to RewriteOptions::kOptionVersion which can be used to flush the
 // metadata cache.
 // 4: in-place cache entries follow the stricter origin/server cache policy.
-const int kHttpCacheVersion = 4;
+// Invalidate prior optimized resources, which may have been generated from a
+// self-fetch that bypassed address-based origin access rules.
+const int kHttpCacheVersion = 5;
 
 // Maximum size of response content in bytes. -1 indicates that there is no size
 // limit.
