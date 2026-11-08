@@ -47,7 +47,8 @@ namespace {
 // Increment this value to flush HTTP cache.
 // Similar to RewriteOptions::kOptionVersion which can be used to flush the
 // metadata cache.
-const int kHttpCacheVersion = 3;
+// 4: in-place cache entries follow the stricter origin/server cache policy.
+const int kHttpCacheVersion = 4;
 
 // Maximum size of response content in bytes. -1 indicates that there is no size
 // limit.

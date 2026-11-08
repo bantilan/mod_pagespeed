@@ -20,6 +20,7 @@
 #include "pagespeed/system/in_place_resource_recorder.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "base/logging.h"
 #include "net/instaweb/http/public/http_cache.h"
@@ -28,6 +29,7 @@
 #include "net/instaweb/http/public/inflating_fetch.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/kernel/http/response_headers.h"
@@ -43,6 +45,65 @@ const char kNumNotCacheable[] = "ipro_recorder_not_cacheable";
 const char kNumFailed[] = "ipro_recorder_failed";
 const char kNumDroppedDueToLoad[] = "ipro_recorder_dropped_due_to_load";
 const char kNumDroppedDueToSize[] = "ipro_recorder_dropped_due_to_size";
+
+const char* const kOriginCachingHeaderNames[] = {
+    HttpAttributes::kCacheControl, HttpAttributes::kExpires,
+    HttpAttributes::kPragma, HttpAttributes::kSetCookie,
+    HttpAttributes::kSetCookie2, HttpAttributes::kVary};
+const int kNumOriginCachingHeaderNames = arraysize(kOriginCachingHeaderNames);
+
+bool IsOriginCachingHeader(StringPiece name, bool* is_vary) {
+  for (int i = 0; i < kNumOriginCachingHeaderNames; ++i) {
+    if (StringCaseEqual(name, kOriginCachingHeaderNames[i])) {
+      *is_vary = StringCaseEqual(name, HttpAttributes::kVary);
+      return true;
+    }
+  }
+  return false;
+}
+
+void VaryTokens(const ResponseHeaders& headers, StringSet* tokens) {
+  for (int i = 0, n = headers.NumAttributes(); i < n; ++i) {
+    if (!StringCaseEqual(headers.Name(i), HttpAttributes::kVary)) {
+      continue;
+    }
+    StringPieceVector parts;
+    SplitStringPieceToVector(headers.Value(i), ",", &parts, true);
+    for (StringPiece part : parts) {
+      TrimWhitespace(&part);
+      if (!part.empty()) {
+        GoogleString token = part.as_string();
+        LowerString(&token);
+        tokens->insert(token);
+      }
+    }
+  }
+}
+
+bool StatesCacheLifetime(const ResponseHeaders& headers) {
+  if (headers.Has(HttpAttributes::kExpires)) {
+    return true;
+  }
+  ConstStringStarVector values;
+  if (headers.Lookup(HttpAttributes::kCacheControl, &values)) {
+    for (const GoogleString* value : values) {
+      if (value == nullptr) {
+        continue;
+      }
+      StringPieceVector directives;
+      SplitStringPieceToVector(*value, ",", &directives,
+                               true /* omit_empty_strings */);
+      for (StringPiece directive : directives) {
+        TrimWhitespace(&directive);
+        if (StringCaseStartsWith(directive, "max-age") ||
+            StringCaseStartsWith(directive, "s-maxage")) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 
 }  // namespace
 
@@ -146,6 +207,10 @@ void InPlaceResourceRecorder::ConsiderResponseHeaders(
 
   status_code_ = response_headers->status_code();
 
+  if (origin_caching_headers_ == nullptr) {
+    SetOriginCachingHeaders(*response_headers);
+  }
+
   // Shortcut for bailing out early when the response will be too large.
   int64 content_length;
   if (max_response_bytes_ <= 0 &&
@@ -221,10 +286,19 @@ void InPlaceResourceRecorder::ConsiderResponseHeaders(
     return;
   }
 
-  bool is_cacheable = response_headers->IsProxyCacheable(
-      request_properties_,
-      ResponseHeaders::GetVaryOption(http_options_.respect_vary),
-      ResponseHeaders::kNoValidator);
+  const bool server_allows_storing =
+      !origin_caching_headers_ || response_headers->IsProxyCacheable(
+                                     request_properties_,
+                                     ResponseHeaders::GetVaryOption(
+                                         http_options_.respect_vary),
+                                     ResponseHeaders::kNoValidator);
+  ApplyOriginCachingHeaders(response_headers);
+  const bool is_cacheable =
+      server_allows_storing && response_headers->IsProxyCacheable(
+                                   request_properties_,
+                                   ResponseHeaders::GetVaryOption(
+                                       http_options_.respect_vary),
+                                   ResponseHeaders::kNoValidator);
   if (!is_cacheable) {
     DroppedAsUncacheable();
     num_not_cacheable_->Add(1);
@@ -253,6 +327,81 @@ void InPlaceResourceRecorder::SaveCacheControl(const char* cache_control) {
   if (cache_control != nullptr) {
     cache_control_ = cache_control;
   }
+}
+
+void InPlaceResourceRecorder::SetOriginCachingHeaders(
+    const ResponseHeaders& origin) {
+  std::unique_ptr<ResponseHeaders> copy(
+      new ResponseHeaders(origin.http_options()));
+  bool states_caching = false;
+  for (int i = 0, n = origin.NumAttributes(); i < n; ++i) {
+    bool is_vary = false;
+    if (IsOriginCachingHeader(origin.Name(i), &is_vary)) {
+      copy->Add(origin.Name(i), origin.Value(i));
+      states_caching = states_caching ||
+                       StringCaseEqual(origin.Name(i),
+                                       HttpAttributes::kCacheControl) ||
+                       StringCaseEqual(origin.Name(i),
+                                       HttpAttributes::kExpires) ||
+                       StringCaseEqual(origin.Name(i),
+                                       HttpAttributes::kPragma);
+    }
+  }
+  if (states_caching) {
+    origin_caching_headers_ = std::move(copy);
+  }
+}
+
+bool InPlaceResourceRecorder::ApplyOriginCachingHeaders(
+    ResponseHeaders* headers) const {
+  if (!origin_caching_headers_ || headers == nullptr) {
+    return false;
+  }
+
+  int64 server_ttl_ms = -1;
+  ResponseHeaders server(headers->http_options());
+  server.CopyFrom(*headers);
+  if (cache_control_set_) {
+    server.RemoveAll(HttpAttributes::kCacheControl);
+    if (!cache_control_.empty()) {
+      server.Add(HttpAttributes::kCacheControl, cache_control_);
+    }
+  }
+  if (StatesCacheLifetime(server)) {
+    server.ComputeCaching();
+    server_ttl_ms = server.cache_ttl_ms();
+  }
+
+  StringSet final_vary;
+  VaryTokens(*headers, &final_vary);
+  for (int i = 0; i < kNumOriginCachingHeaderNames; ++i) {
+    if (!StringCaseEqual(kOriginCachingHeaderNames[i], HttpAttributes::kVary)) {
+      headers->RemoveAll(kOriginCachingHeaderNames[i]);
+    }
+  }
+  StringSet origin_vary;
+  VaryTokens(*origin_caching_headers_, &origin_vary);
+  for (int i = 0, n = origin_caching_headers_->NumAttributes(); i < n; ++i) {
+    bool is_vary = false;
+    IsOriginCachingHeader(origin_caching_headers_->Name(i), &is_vary);
+    if (!is_vary) {
+      headers->Add(origin_caching_headers_->Name(i),
+                   origin_caching_headers_->Value(i));
+    }
+  }
+  for (const GoogleString& token : origin_vary) {
+    if (final_vary.find(token) == final_vary.end()) {
+      headers->Add(HttpAttributes::kVary, token);
+    }
+  }
+  headers->ComputeCaching();
+  if (server_ttl_ms >= 0 && server_ttl_ms < headers->cache_ttl_ms()) {
+    // This is a shared cache entry: clamp s-maxage without changing the
+    // origin's browser-facing max-age.
+    headers->SetSMaxAge(server_ttl_ms / Timer::kSecondMs);
+    headers->ComputeCaching();
+  }
+  return true;
 }
 
 void InPlaceResourceRecorder::DoneAndSetHeaders(
@@ -303,6 +452,8 @@ void InPlaceResourceRecorder::DoneAndSetHeaders(
         response_headers->Add(HttpAttributes::kCacheControl, cache_control_);
       }
     }
+
+    ApplyOriginCachingHeaders(response_headers);
 
     resource_value_.SetHeaders(response_headers);
     cache_->Put(url_, fragment_, request_properties_, http_options_,

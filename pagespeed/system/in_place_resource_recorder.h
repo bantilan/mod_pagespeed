@@ -20,6 +20,8 @@
 #ifndef PAGESPEED_SYSTEM_IN_PLACE_RESOURCE_RECORDER_H_
 #define PAGESPEED_SYSTEM_IN_PLACE_RESOURCE_RECORDER_H_
 
+#include <memory>
+
 #include "net/instaweb/http/public/async_fetch.h"
 #include "net/instaweb/http/public/http_value.h"
 #include "net/instaweb/http/public/inflating_fetch.h"
@@ -154,6 +156,8 @@ class InPlaceResourceRecorder : public Writer {
   };
 
   bool IsIproContentType(ResponseHeaders* response_headers);
+  void SetOriginCachingHeaders(const ResponseHeaders& headers);
+  bool ApplyOriginCachingHeaders(ResponseHeaders* headers) const;
 
   void DroppedDueToSize();
   void DroppedAsUncacheable();
@@ -200,6 +204,10 @@ class InPlaceResourceRecorder : public Writer {
   // it the empty string.
   bool cache_control_set_;
   GoogleString cache_control_;
+
+  // Caching fields captured from the first response-header snapshot, usually
+  // before the server's later response directives are applied.
+  std::unique_ptr<ResponseHeaders> origin_caching_headers_;
 
   DISALLOW_COPY_AND_ASSIGN(InPlaceResourceRecorder);
 };

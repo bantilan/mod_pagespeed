@@ -31,6 +31,7 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/kernel/http/request_headers.h"
@@ -199,6 +200,125 @@ TEST_F(InPlaceResourceRecorderTest, BasicOperation) {
   StringPiece contents;
   EXPECT_TRUE(value_out.ExtractContents(&contents));
   EXPECT_EQ(StrCat(kHello, kBye), contents);
+}
+
+TEST_F(InPlaceResourceRecorderTest, OriginPrivatePolicyPreventsSharedStore) {
+  ResponseHeaders origin_headers;
+  origin_headers.set_status_code(HttpStatus::kOK);
+  origin_headers.Add(HttpAttributes::kCacheControl, "private, max-age=3600");
+
+  ResponseHeaders server_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &server_headers);
+  server_headers.Replace(HttpAttributes::kCacheControl,
+                         "public, max-age=7200");
+  server_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &origin_headers);
+  recorder->Write(kHello, message_handler());
+  recorder.release()->DoneAndSetHeaders(&server_headers, true);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  EXPECT_EQ(HTTPCache::FindResult(HTTPCache::kRecentFailure,
+                                  kFetchStatusUncacheable200),
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
+}
+
+TEST_F(InPlaceResourceRecorderTest, OriginNoStorePolicyPreventsSharedStore) {
+  ResponseHeaders origin_headers;
+  origin_headers.set_status_code(HttpStatus::kOK);
+  origin_headers.Add(HttpAttributes::kCacheControl, "no-store");
+
+  ResponseHeaders server_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &server_headers);
+  server_headers.Replace(HttpAttributes::kCacheControl,
+                         "public, max-age=7200");
+  server_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &origin_headers);
+  recorder->Write(kHello, message_handler());
+  recorder.release()->DoneAndSetHeaders(&server_headers, true);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  EXPECT_EQ(HTTPCache::FindResult(HTTPCache::kRecentFailure,
+                                  kFetchStatusUncacheable200),
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
+}
+
+TEST_F(InPlaceResourceRecorderTest, StoredLifetimeIsClampedToOrigin) {
+  ResponseHeaders origin_headers;
+  origin_headers.set_status_code(HttpStatus::kOK);
+  origin_headers.Add(HttpAttributes::kCacheControl, "public, max-age=30");
+
+  ResponseHeaders server_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &server_headers);
+  server_headers.Replace(HttpAttributes::kCacheControl,
+                         "public, max-age=7200");
+  server_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &origin_headers);
+  recorder->Write(kHello, message_handler());
+  recorder.release()->DoneAndSetHeaders(&server_headers, true);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  ASSERT_EQ(kFoundResult,
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
+  EXPECT_LE(headers_out.cache_ttl_ms(), 30 * Timer::kSecondMs);
+}
+
+TEST_F(InPlaceResourceRecorderTest, StoredLifetimeIsClampedToServer) {
+  ResponseHeaders origin_headers;
+  origin_headers.set_status_code(HttpStatus::kOK);
+  origin_headers.Add(HttpAttributes::kCacheControl, "public, max-age=3600");
+
+  ResponseHeaders server_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &server_headers);
+  server_headers.Replace(HttpAttributes::kCacheControl,
+                         "public, max-age=30");
+  server_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &origin_headers);
+  recorder->Write(kHello, message_handler());
+  recorder.release()->DoneAndSetHeaders(&server_headers, true);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  ASSERT_EQ(kFoundResult,
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
+  EXPECT_LE(headers_out.cache_ttl_ms(), 30 * Timer::kSecondMs);
+}
+
+TEST_F(InPlaceResourceRecorderTest, ServerNoStorePolicyPreventsSharedStore) {
+  ResponseHeaders origin_headers;
+  origin_headers.set_status_code(HttpStatus::kOK);
+  origin_headers.Add(HttpAttributes::kCacheControl, "public, max-age=3600");
+
+  ResponseHeaders server_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &server_headers);
+  server_headers.Replace(HttpAttributes::kCacheControl, "no-store");
+  server_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &origin_headers);
+  recorder->Write(kHello, message_handler());
+  recorder.release()->DoneAndSetHeaders(&server_headers, true);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  EXPECT_EQ(HTTPCache::FindResult(HTTPCache::kRecentFailure,
+                                  kFetchStatusUncacheable200),
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
 }
 
 TEST_F(InPlaceResourceRecorderTest, IncompleteResponse) {
