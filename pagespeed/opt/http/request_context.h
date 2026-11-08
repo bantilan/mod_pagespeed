@@ -147,6 +147,15 @@ class RequestContext : public RefCounted<RequestContext> {
     minimal_private_suffix.CopyToString(&minimal_private_suffix_);
   }
 
+  // The exact request hostname, used to keep cache entries for virtual hosts
+  // isolated even when they share a registrable domain.
+  const GoogleString& cache_partition_host() const {
+    return cache_partition_host_;
+  }
+  void set_cache_partition_host(StringPiece host) {
+    host.CopyToString(&cache_partition_host_);
+  }
+
   // Indicates whether the request-headers tell us that a browser can
   // render webp images.
   void SetAcceptsWebp(bool x);
@@ -254,6 +263,7 @@ class RequestContext : public RefCounted<RequestContext> {
   bool accepts_gzip_;
   bool frozen_;
   GoogleString minimal_private_suffix_;
+  GoogleString cache_partition_host_;
 
   int64 request_id_;
 

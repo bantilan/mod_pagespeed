@@ -3410,14 +3410,21 @@ void RewriteDriver::ClearRequestProperties() {
       server_context_->user_agent_matcher()));
 }
 
-const GoogleString& RewriteDriver::CacheFragment() const {
+GoogleString RewriteDriver::CacheFragment() const {
   CHECK(options_ != NULL);
   const GoogleString& fragment = options_->cache_fragment();
+  CHECK(request_context_.get() != NULL) << "NULL request context in "
+                                        << "RewriteDriver::CacheFragment";
+  const GoogleString& host = request_context_->cache_partition_host();
+  if (!host.empty()) {
+    const GoogleString& base_fragment =
+        fragment.empty() ? request_context_->minimal_private_suffix()
+                         : fragment;
+    return StrCat(base_fragment, "/", host);
+  }
   if (!fragment.empty()) {
     return fragment;
   }
-  CHECK(request_context_.get() != NULL) << "NULL request context in "
-                                        << "RewriteDriver::CacheFragment";
   return request_context_->minimal_private_suffix();
 }
 

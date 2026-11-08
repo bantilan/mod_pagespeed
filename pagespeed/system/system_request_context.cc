@@ -50,6 +50,7 @@ SystemRequestContext::SystemRequestContext(
     : RequestContext(logging_mutex, timer),
       local_port_(local_port),
       local_ip_(BracketIpv6(local_ip)) {
+  set_cache_partition_host(hostname_for_cache_fragmentation);
   set_minimal_private_suffix(
       domain_registry::MinimalPrivateSuffix(hostname_for_cache_fragmentation));
 }

@@ -196,6 +196,24 @@ TEST_F(RewriteDriverTest, NoChanges) {
                     "</form></body>");
 }
 
+TEST_F(RewriteDriverTest, CacheFragmentIsolatedByRequestHost) {
+  RequestContextPtr first = RequestContext::NewTestRequestContext(
+      factory()->thread_system());
+  first->set_minimal_private_suffix("example.com");
+  first->set_cache_partition_host("shop.example.com");
+  rewrite_driver()->set_request_context(first);
+  const GoogleString first_fragment = rewrite_driver()->CacheFragment();
+
+  RequestContextPtr second = RequestContext::NewTestRequestContext(
+      factory()->thread_system());
+  second->set_minimal_private_suffix("example.com");
+  second->set_cache_partition_host("blog.example.com");
+  rewrite_driver()->set_request_context(second);
+
+  EXPECT_NE(first_fragment, rewrite_driver()->CacheFragment());
+  EXPECT_STREQ("example.com/shop.example.com", first_fragment.c_str());
+}
+
 TEST_F(RewriteDriverTest, CloneMarksNested) {
   RequestHeaders request_headers;
   request_headers.Add(HttpAttributes::kAccept, "image/webp");

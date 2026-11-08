@@ -1188,7 +1188,7 @@ class RewriteDriver : public HtmlParse {
 
   // We fragment the cache based on the hostname we got from the request, unless
   // that was overridden in the options with a cache_fragment.
-  const GoogleString& CacheFragment() const;
+  GoogleString CacheFragment() const;
 
   // Utility function to set/clear cookies for PageSpeed options. gurl is the
   // URL of the request from which the host is extracted for a cookie attribute.
