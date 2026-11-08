@@ -278,6 +278,30 @@ TEST_F(GoogleUrlTest, TestTrivialLeafSansQuery) {
   EXPECT_STREQ("d.ext", queryless.LeafSansQuery());
 }
 
+TEST_F(GoogleUrlTest, LeafAndDirectoryIgnoreFragment) {
+  GoogleUrl fragment("http://a.com/b/c/d.ext#part/other.ext");
+  EXPECT_STREQ("d.ext", fragment.LeafSansQuery());
+  EXPECT_STREQ("d.ext#part/other.ext", fragment.LeafWithQuery());
+  EXPECT_STREQ("http://a.com/b/c/", fragment.AllExceptLeaf());
+  EXPECT_STREQ("/b/c/", fragment.PathSansLeaf());
+
+  GoogleUrl empty_leaf("http://a.com/b/c/#d.ext");
+  EXPECT_STREQ("", empty_leaf.LeafSansQuery());
+  EXPECT_STREQ("http://a.com/b/c/", empty_leaf.AllExceptLeaf());
+  EXPECT_STREQ("/b/c/", empty_leaf.PathSansLeaf());
+}
+
+TEST_F(GoogleUrlTest, PathlessUrlFragmentHasNoLeafOrDirectory) {
+  GoogleUrl pathless("custom:#part/one");
+  ASSERT_TRUE(pathless.IsAnyValid());
+  EXPECT_STREQ("", pathless.LeafSansQuery());
+  EXPECT_STREQ("", pathless.LeafWithQuery());
+  EXPECT_STREQ("", pathless.AllExceptLeaf());
+  EXPECT_STREQ("", pathless.PathSansLeaf());
+  EXPECT_LE(pathless.PathSansLeaf().size(), pathless.Spec().size());
+  EXPECT_LE(pathless.AllExceptLeaf().size(), pathless.Spec().size());
+}
+
 TEST_F(GoogleUrlTest, ResolveRelative) {
   GoogleUrl base(StringPiece("http://www.google.com"));
   ASSERT_TRUE(base.IsWebValid());

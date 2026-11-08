@@ -1228,6 +1228,14 @@ TEST_F(RewriteDriverTest, LoadResourcesContentType) {
   EXPECT_TRUE(resource.get() != nullptr);
   EXPECT_EQ(&kContentTypeJavascript, resource->type());
 
+  // A fragment does not participate in extension or directory detection.
+  WriteFile("/htmlcontent/static/baz.css", "");
+  ResourcePtr fragment_resource(
+      rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+          "http://www.example.com/static/baz.css#part/two.js"));
+  EXPECT_TRUE(fragment_resource.get() != nullptr);
+  EXPECT_EQ(&kContentTypeCss, fragment_resource->type());
+
   // Write file with bogus extension.
   WriteFile("/htmlcontent/bar.bogus", "");
   // Load it normally.

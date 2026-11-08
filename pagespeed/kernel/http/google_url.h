@@ -112,7 +112,7 @@ class GoogleUrl {
   StringPiece AllAfterQuery() const;
 
   // For "http://a.com/b/c/d?e=f/g" returns "http://a.com/b/c/",
-  // including trailing slash.
+  // including trailing slash. Slashes in the query or fragment are ignored.
   // Returns a StringPiece, only valid for the lifetime of this object.
   StringPiece AllExceptLeaf() const;
 
@@ -120,7 +120,8 @@ class GoogleUrl {
   // Returns a StringPiece, only valid for the lifetime of this object.
   StringPiece LeafWithQuery() const;
 
-  // For "http://a.com/b/c/d?e=f/g" returns "d", omitting leading slash.
+  // For "http://a.com/b/c/d?e=f/g" returns "d", omitting leading slash;
+  // query and fragment are not part of the leaf.
   // Returns a StringPiece, only valid for the lifetime of this object.
   StringPiece LeafSansQuery() const;
 
@@ -131,7 +132,7 @@ class GoogleUrl {
 
   // For "http://a.com/b/c/d/g.html" returns "/b/c/d/" including leading and
   // trailing slashes.
-  // For queries, "http://a.com/b/c/d?E=f/g" returns "/b/c/".
+  // For queries or fragments, slashes after the path do not affect the result.
   // Returns a StringPiece, only valid for the lifetime of this object.
   StringPiece PathSansLeaf() const;
 
