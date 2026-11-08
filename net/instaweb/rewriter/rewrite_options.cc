@@ -88,6 +88,7 @@ const char RewriteOptions::kCssFlattenMaxBytes[] = "CssFlattenMaxBytes";
 const char RewriteOptions::kCssImageInlineMaxBytes[] = "CssImageInlineMaxBytes";
 const char RewriteOptions::kCssInlineMaxBytes[] = "CssInlineMaxBytes";
 const char RewriteOptions::kCssOutlineMinBytes[] = "CssOutlineMinBytes";
+const char RewriteOptions::kCssParseMaxBytes[] = "CssParseMaxBytes";
 const char RewriteOptions::kCssPreserveURLs[] = "CssPreserveURLs";
 const char RewriteOptions::kDefaultCacheHtml[] = "DefaultCacheHtml";
 const char RewriteOptions::kDisableRewriteOnNoTransform[] =
@@ -406,6 +407,8 @@ const int64 RewriteOptions::kDefaultCssInlineMaxBytes = 2048;
 const int64 RewriteOptions::kDefaultCssFlattenMaxBytes = 1024000;
 const int64 RewriteOptions::kDefaultCssImageInlineMaxBytes = 0;
 const int64 RewriteOptions::kDefaultCssOutlineMinBytes = 3000;
+// CSS parsing has a substantially larger memory cost than the source bytes.
+const int64 RewriteOptions::kDefaultCssParseMaxBytes = 2 << 20;
 // 3K is bigger than Roboto loader for Chrome (2.2k)
 const int64 RewriteOptions::kDefaultGoogleFontCssInlineMaxBytes = 3 * 1024;
 const int64 RewriteOptions::kDefaultImageInlineMaxBytes = 3072;
@@ -1232,6 +1235,11 @@ void RewriteOptions::AddProperties() {
       kCssFlattenMaxBytes,
       kQueryScope,
       "Number of bytes below which stylesheets will be flattened.", true);
+  AddBaseProperty(
+      kDefaultCssParseMaxBytes, &RewriteOptions::css_parse_max_bytes_, "cpmb",
+      kCssParseMaxBytes, kDirectoryScope,
+      "Largest stylesheet, in bytes, that the CSS rewriter parses; larger "
+      "ones are passed through unmodified (<= 0 for no limit).", true);
   AddBaseProperty(
       kDefaultCssImageInlineMaxBytes,
       &RewriteOptions::css_image_inline_max_bytes_,

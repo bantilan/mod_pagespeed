@@ -886,6 +886,7 @@ TEST_F(RewriteOptionsTest, LookupOptionByNameTest) {
       RewriteOptions::kCssImageInlineMaxBytes,
       RewriteOptions::kCssInlineMaxBytes,
       RewriteOptions::kCssOutlineMinBytes,
+      RewriteOptions::kCssParseMaxBytes,
       RewriteOptions::kCssPreserveURLs,
       RewriteOptions::kDefaultCacheHtml,
       RewriteOptions::kDisableBackgroundFetchesForBots,

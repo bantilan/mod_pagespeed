@@ -1870,6 +1870,22 @@ TEST_F(ParserTest, MediaError) {
             stylesheet->ToString());
 }
 
+TEST_F(ParserTest, BoundsCopiedMediaQueries) {
+  string css = "@media screen and (min-width: ";
+  css.append(1024, '1');
+  css += "px) {";
+  for (int i = 0; i < 5000; ++i) {
+    css += ".a{}";
+  }
+  css += "}";
+
+  Parser parser(css);
+  scoped_ptr<Stylesheet> stylesheet(parser.ParseStylesheet());
+  ASSERT_TRUE(stylesheet.get() != NULL);
+  EXPECT_NE(Parser::kNoError, parser.errors_seen_mask());
+  EXPECT_TRUE(Parser::kMediaError & parser.errors_seen_mask());
+}
+
 TEST_F(ParserTest, HtmlCommentError) {
   Parser good("<!-- a { color: red } -->");
   scoped_ptr<Stylesheet> stylesheet(good.ParseStylesheet());

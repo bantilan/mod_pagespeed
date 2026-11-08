@@ -41,6 +41,19 @@ MediaQueries* MediaQueries::DeepCopy() const {
   return copy;
 }
 
+int64_t MediaQueries::ApproximateBytes() const {
+  int64_t bytes = sizeof(MediaQueries);
+  for (const MediaQuery* query : *this) {
+    bytes += sizeof(MediaQuery) + query->media_type().utf8_length();
+    for (int i = 0, n = query->expressions().size(); i < n; ++i) {
+      const MediaExpression& expression = query->expression(i);
+      bytes += sizeof(MediaExpression) + expression.name().utf8_length() +
+               (expression.has_value() ? expression.value().utf8_length() : 0);
+    }
+  }
+  return bytes;
+}
+
 MediaQuery* MediaQuery::DeepCopy() const {
   MediaQuery* copy = new MediaQuery;
   copy->set_qualifier(this->qualifier());

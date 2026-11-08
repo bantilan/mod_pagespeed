@@ -26,6 +26,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #include "third_party/css_parser/src/strings/stringpiece.h"
 #include "third_party/css_parser/src/util/utf8/public/unicodetext.h"
@@ -133,6 +134,8 @@ class MediaQueries : public std::vector<MediaQuery*> {
   void Clear();
 
   MediaQueries* DeepCopy() const;
+  // Approximate heap space used by this object graph, including strings.
+  int64_t ApproximateBytes() const;
   string ToString() const;
 
  private:

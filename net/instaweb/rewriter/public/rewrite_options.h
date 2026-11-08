@@ -273,6 +273,7 @@ class RewriteOptions {
   static const char kCssImageInlineMaxBytes[];
   static const char kCssInlineMaxBytes[];
   static const char kCssOutlineMinBytes[];
+  static const char kCssParseMaxBytes[];
   static const char kCssPreserveURLs[];
   static const char kDefaultCacheHtml[];
   static const char kDisableBackgroundFetchesForBots[];
@@ -827,6 +828,7 @@ class RewriteOptions {
   static const int64 kDefaultCssImageInlineMaxBytes;
   static const int64 kDefaultCssInlineMaxBytes;
   static const int64 kDefaultCssOutlineMinBytes;
+  static const int64 kDefaultCssParseMaxBytes;
   static const int64 kDefaultGoogleFontCssInlineMaxBytes;
   static const int64 kDefaultImageInlineMaxBytes;
   static const int64 kDefaultJsInlineMaxBytes;
@@ -1605,6 +1607,10 @@ class RewriteOptions {
   int64 css_flatten_max_bytes() const { return css_flatten_max_bytes_.value(); }
   void set_css_flatten_max_bytes(int64 x) {
     set_option(x, &css_flatten_max_bytes_);
+  }
+  int64 css_parse_max_bytes() const { return css_parse_max_bytes_.value(); }
+  void set_css_parse_max_bytes(int64 x) {
+    set_option(x, &css_parse_max_bytes_);
   }
   bool cache_small_images_unrewritten() const {
     return cache_small_images_unrewritten_.value();
@@ -3682,6 +3688,7 @@ class RewriteOptions {
 
   scoped_ptr<ThreadSystem::RWLock> cache_purge_mutex_;
   Option<int64> css_flatten_max_bytes_;
+  Option<int64> css_parse_max_bytes_;
   Option<bool> cache_small_images_unrewritten_;
   Option<bool> no_transform_optimized_images_;
 

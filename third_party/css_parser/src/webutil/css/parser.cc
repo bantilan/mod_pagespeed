@@ -84,6 +84,7 @@ Parser::Parser(const char* utf8text, const char* textend)
       quirks_mode_(true),
       preservation_mode_(false),
       max_function_depth_(kDefaultMaxFunctionDepth),
+      media_queries_bytes_(0),
       errors_seen_mask_(kNoError),
       unparseable_sections_seen_mask_(kNoError) {
 }
@@ -95,6 +96,7 @@ Parser::Parser(const char* utf8text)
       quirks_mode_(true),
       preservation_mode_(false),
       max_function_depth_(kDefaultMaxFunctionDepth),
+      media_queries_bytes_(0),
       errors_seen_mask_(kNoError),
       unparseable_sections_seen_mask_(kNoError) {
 }
@@ -106,6 +108,7 @@ Parser::Parser(StringPiece s)
       quirks_mode_(true),
       preservation_mode_(false),
       max_function_depth_(kDefaultMaxFunctionDepth),
+      media_queries_bytes_(0),
       errors_seen_mask_(kNoError),
       unparseable_sections_seen_mask_(kNoError) {
 }
@@ -2606,7 +2609,15 @@ void Parser::ParseStatement(const MediaQueries* media_queries,
           DCHECK_EQ('{', *in_);
           in_++;
           SkipSpace();
+          const int64_t copied_query_bytes = media_queries->ApproximateBytes();
           while (in_ < end_ && *in_ != '}') {
+            media_queries_bytes_ += copied_query_bytes;
+            if (media_queries_bytes_ > MaxMediaQueriesBytes(end_ - begin_)) {
+              ReportParsingError(kMediaError,
+                                 "Too many copies of @media queries.");
+              in_ = end_;
+              break;
+            }
             const char* oldin = in_;
             // Parse either a ruleset or at-rule.
             ParseStatement(media_queries.get(), stylesheet);

@@ -367,6 +367,19 @@ void CssFilter::Context::RewriteSingle(
   GetCssBaseUrlToUse(input_resource, &css_base_gurl_to_use);
   GoogleUrl css_trim_gurl_to_use;
   GetCssTrimUrlToUse(input_resource, output_resource_, &css_trim_gurl_to_use);
+  const int64 parse_max_bytes = Driver()->options()->css_parse_max_bytes();
+  if (parse_max_bytes > 0 && in_text_size_ > parse_max_bytes) {
+    Driver()->message_handler()->Message(
+        kInfo, "CSS %s not rewritten: %s bytes exceeds CssParseMaxBytes (%s).",
+        css_base_gurl_to_use.spec_c_str(),
+        Integer64ToString(in_text_size_).c_str(),
+        Integer64ToString(parse_max_bytes).c_str());
+    mutable_output_partition(0)->add_debug_message(
+        StrCat("CSS not rewritten because it exceeds CssParseMaxBytes: ",
+               css_base_gurl_to_use.Spec()));
+    RewriteDone(kRewriteFailed, 0);
+    return;
+  }
   bool parsed = RewriteCssText(css_base_gurl_to_use, css_trim_gurl_to_use,
                                input_contents, in_text_size_,
                                IsInlineAttribute() /* text_is_declarations */,

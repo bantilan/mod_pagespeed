@@ -226,6 +226,18 @@ TEST_F(CssFilterTest, SimpleRewriteCssTest) {
   ValidateRewrite("rewrite_css", kInputStyle, kOutputStyle, kExpectSuccess);
 }
 
+TEST_F(CssFilterTest, CssParseMaxBytesPassesThroughOversizedStylesheet) {
+  const GoogleString css = "body { color: red; }";
+  options()->set_css_parse_max_bytes(8);
+  ValidateRewrite("css_parse_limit", css, css, kExpectFailure);
+}
+
+TEST_F(CssFilterTest, CssParseMaxBytesCanBeDisabled) {
+  options()->set_css_parse_max_bytes(0);
+  ValidateRewrite("css_parse_unlimited", kInputStyle, kOutputStyle,
+                  kExpectSuccess);
+}
+
 TEST_F(CssFilterTest, SimpleRewriteCssTestExternalUnhealthy) {
   DebugWithMessage("");  // TODO(jmaessen): Needs debug feedback.
   lru_cache()->set_is_healthy(false);

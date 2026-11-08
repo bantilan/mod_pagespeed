@@ -22,6 +22,7 @@
 #ifndef WEBUTIL_CSS_PARSER_H__
 #define WEBUTIL_CSS_PARSER_H__
 
+#include <cstdint>
 #include <memory>
 #include "base/scoped_ptr.h"
 #include <string>
@@ -194,6 +195,12 @@ class Parser {
   int max_function_depth() const { return max_function_depth_; }
   void set_max_function_depth(int x) { max_function_depth_ = x; }
   static const int kDefaultMaxFunctionDepth = 10;
+
+  // Bound the memory spent copying @media queries onto their contained rules.
+  // The fixed allowance avoids penalizing small stylesheets.
+  static int64_t MaxMediaQueriesBytes(int64_t css_bytes) {
+    return (1 << 20) + 64 * css_bytes;
+  }
 
   // This is a bitmask of errors seen during the parse.  This is decidedly
   // incomplete --- there are definitely many errors that are not reported here.
@@ -608,6 +615,7 @@ class Parser {
   // and CSS hacks) so that they can be re-serialized precisely.
   bool preservation_mode_;
   int max_function_depth_;
+  int64_t media_queries_bytes_;
 
   // errors_seen_mask_ is non-zero iff we failed to parse part of the CSS
   // and could not recover and so we have lost information.
