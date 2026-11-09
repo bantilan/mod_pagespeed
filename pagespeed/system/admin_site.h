@@ -113,6 +113,10 @@ class AdminSite {
   void StatisticsHandler(const RewriteOptions& options, AdminSource source,
                          AsyncFetch* fetch, Statistics* stats);
 
+  // Displays a summary of PageSpeed runtime and optimization savings.
+  void DashboardHandler(AdminSource source, AsyncFetch* fetch,
+                        Statistics* stats);
+
   // Responds to 'fetch' with data used on statistics page and graphs page
   // in JSON format.
   void StatisticsJsonHandler(AsyncFetch* fetch, Statistics* stats);
@@ -154,6 +158,7 @@ class AdminSite {
   MessageHandler* message_handler_;
   StaticAssetManager* static_asset_manager_;
   Timer* timer_;
+  int64 start_time_ms_;
   DISALLOW_COPY_AND_ASSIGN(AdminSite);
 };
 

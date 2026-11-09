@@ -114,6 +114,20 @@ TEST_F(AdminSiteTest, ColorMessagesInHistoryPage) {
       buffer, ::testing::HasSubstr(StringPrintf(kColorTemplate, "brown")));
   EXPECT_THAT(buffer, ::testing::HasSubstr("style=\"margin:0;\""));
 }
+
+TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->DashboardHandler(AdminSite::kPageSpeedAdmin, &fetch,
+                                factory()->statistics());
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Performance dashboard"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("TOTAL BYTES SAVED"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("PAGESPEED UPTIME"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("JAVASCRIPT SAVED"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("CSS SAVED"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("IMAGE SAVED"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-admin-sidebar"));
+}
 // TODO(xqyin): Add unit tests for other methods in AdminSite.
 
 }  // namespace

@@ -19,6 +19,7 @@
 
 #include "pagespeed/system/admin_site.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <set>
@@ -79,24 +80,62 @@ struct Tab {
   const char* title;
   const char* admin_link;       // relative from /pagespeed_admin/
   const char* statistics_link;  // relative from /mod_pagespeed_statistics
-  const char* space;            // html for inter-link spacing.
 };
-
-const char kShortBreak[] = " ";
-const char kLongBreak[] = " &nbsp;&nbsp; ";
 
 // TODO(jmarantz): disable or recolor links to pages that are not available
 // based on the current config.
 const Tab kTabs[] = {
-    {"Statistics", "Statistics", "statistics", "?", kLongBreak},
-    {"Configuration", "Configuration", "config", "?config", kShortBreak},
-    {"Histograms", "Histograms", "histograms", "?histograms", kLongBreak},
-    {"Caches", "Caches", "cache", "?cache", kLongBreak},
-    {"Console", "Console", "console", nullptr, kLongBreak},
-    {"Message History", "Message History", "message_history", nullptr,
-     kLongBreak},
-    {"Graphs", "Graphs", "graphs", nullptr, kLongBreak},
+    {"Dashboard", "Dashboard", "dashboard", nullptr},
+    {"Statistics", "Statistics", "statistics", "?"},
+    {"Configuration", "Configuration", "config", "?config"},
+    {"Histograms", "Histograms", "histograms", "?histograms"},
+    {"Caches", "Caches", "cache", "?cache"},
+    {"Console", "Console", "console", nullptr},
+    {"Message History", "Message History", "message_history", nullptr},
+    {"Graphs", "Graphs", "graphs", nullptr},
 };
+
+int64 ReadVariable(const Statistics* stats, StringPiece name) {
+  Variable* variable = stats->FindVariable(name);
+  return variable == nullptr ? 0 : variable->Get();
+}
+
+GoogleString FormatDashboardBytes(int64 bytes) {
+  static const int64 kKilobyte = 1024;
+  static const int64 kMegabyte = kKilobyte * 1024;
+  static const int64 kGigabyte = kMegabyte * 1024;
+  int64 unit = 1;
+  const char* suffix = "B";
+  if (bytes >= kGigabyte) {
+    unit = kGigabyte;
+    suffix = "GB";
+  } else if (bytes >= kMegabyte) {
+    unit = kMegabyte;
+    suffix = "MB";
+  } else if (bytes >= kKilobyte) {
+    unit = kKilobyte;
+    suffix = "KB";
+  }
+  if (unit == 1) {
+    return StrCat(IntegerToString(bytes), " ", suffix);
+  }
+  return StrCat(IntegerToString(bytes / unit), ".",
+                IntegerToString((bytes % unit) * 10 / unit), " ", suffix);
+}
+
+GoogleString FormatDashboardUptime(int64 elapsed_ms) {
+  int64 elapsed_seconds = std::max<int64>(0, elapsed_ms / 1000);
+  int64 days = elapsed_seconds / 86400;
+  int64 hours = (elapsed_seconds / 3600) % 24;
+  int64 minutes = (elapsed_seconds / 60) % 60;
+  int64 seconds = elapsed_seconds % 60;
+  if (days > 0) {
+    return StrCat(IntegerToString(days), "d ", IntegerToString(hours), "h ",
+                  IntegerToString(minutes), "m");
+  }
+  return StrCat(IntegerToString(hours), "h ", IntegerToString(minutes), "m ",
+                IntegerToString(seconds), "s");
+}
 
 // Controls the generation of an HTML Admin page.  Constructing it
 // establishes the content-type as HTML and response code 200, and
@@ -152,28 +191,37 @@ class AdminHtml {
       if (link != nullptr) {
         StringPiece style;
         if (tab.admin_link == current_link) {
-          style = " style='color:darkblue;text-decoration:underline;'";
+          style = " class='pagespeed-admin-tab-active' aria-current='page'";
           fetch->Write(StrCat("<title>PageSpeed ", tab.title, "</title>"),
                        handler_);
         }
-        StrAppend(&buf, "<a href='", link, "'", style, ">", tab.label, "</a>",
-                  tab.space);
+        StrAppend(&buf, "<a href='", link, "'", style, ">", tab.label,
+                  "</a>\n");
       }
     }
 
     fetch->Write(StrCat(head_extra, "</head>"), handler_);
-    fetch->Write(StrCat("<body class='pagespeed-admin-body'>"
-                        "<div class='pagespeed-admin-tabs'>\n"
-                        "<b>Pagespeed Admin</b>",
-                        kLongBreak, "\n"),
+    fetch->Write("<body class='pagespeed-admin-body'>"
+                 "<header class='pagespeed-admin-header'>"
+                 "<div class='pagespeed-admin-brand'>"
+                 "<span class='pagespeed-admin-brand-mark' "
+                 "aria-hidden='true'></span>mod_pagespeed</div>"
+                 "<span class='pagespeed-admin-header-label'>ADMIN "
+                 "CONSOLE</span></header>"
+                 "<div class='pagespeed-admin-layout'>"
+                 "<aside class='pagespeed-admin-sidebar'>"
+                 "<div class='pagespeed-admin-sidebar-label'>WORKSPACE</div>"
+                 "<nav class='pagespeed-admin-tabs' "
+                 "aria-label='PageSpeed administration'>",
                  handler_);
     fetch->Write(buf, handler_);
-    fetch->Write("</div><hr/>\n", handler_);
+    fetch->Write("</nav></aside><main class='pagespeed-admin-content'>\n",
+                 handler_);
     fetch->Flush(handler_);
   }
 
   ~AdminHtml() {
-    fetch_->Write("</body></html>", handler_);
+    fetch_->Write("</main></div></body></html>", handler_);
     fetch_->Done(true);
   }
 
@@ -188,7 +236,8 @@ AdminSite::AdminSite(StaticAssetManager* static_asset_manager, Timer* timer,
                      MessageHandler* message_handler)
     : message_handler_(message_handler),
       static_asset_manager_(static_asset_manager),
-      timer_(timer) {}
+      timer_(timer),
+      start_time_ms_(timer->NowMs()) {}
 
 // Handler which serves PSOL console.
 void AdminSite::ConsoleHandler(const SystemRewriteOptions& global_options,
@@ -290,6 +339,74 @@ void AdminSite::StatisticsHandler(const RewriteOptions& options,
   fetch->Write(StrCat("<script type='text/javascript'>", statistics_js,
                       "\npagespeed.Statistics.Start();</script>\n"),
                message_handler_);
+}
+
+void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
+                                 Statistics* stats) {
+  AdminHtml admin_html("dashboard", "", source, timer_, fetch,
+                       message_handler_);
+
+  int64 javascript_saved =
+      ReadVariable(stats, "javascript_total_bytes_saved");
+  UpDownCounter* css_saved_counter =
+      stats->FindUpDownCounter("css_filter_total_bytes_saved");
+  int64 css_saved =
+      css_saved_counter == nullptr ? 0 : css_saved_counter->Get();
+  int64 image_saved = ReadVariable(stats, "image_rewrite_total_bytes_saved");
+  int64 total_saved = std::max<int64>(0, javascript_saved) +
+                      std::max<int64>(0, css_saved) +
+                      std::max<int64>(0, image_saved);
+  GoogleString uptime = FormatDashboardUptime(timer_->NowMs() - start_time_ms_);
+
+  fetch->Write(
+      "<section class='pagespeed-dashboard'>"
+      "<div class='pagespeed-dashboard-heading'>"
+      "<div><p class='pagespeed-dashboard-eyebrow'>OVERVIEW</p>"
+      "<h1>Performance dashboard</h1>"
+      "<p class='pagespeed-dashboard-description'>Cumulative totals "
+      "collected by "
+      "this PageSpeed instance.</p></div></div>"
+      "<div class='pagespeed-dashboard-grid'>"
+      "<article class='pagespeed-dashboard-card pagespeed-dashboard-total'>"
+      "<div class='pagespeed-dashboard-card-label'>TOTAL BYTES SAVED</div>",
+      message_handler_);
+  fetch->Write(StrCat("<div class='pagespeed-dashboard-total-value'>",
+                      FormatDashboardBytes(total_saved), "</div>"),
+               message_handler_);
+  fetch->Write(
+      "<div class='pagespeed-dashboard-card-note'>Combined savings from "
+      "JavaScript, CSS, and image rewrites</div></article>"
+      "<article class='pagespeed-dashboard-card pagespeed-dashboard-uptime'>"
+      "<div class='pagespeed-dashboard-card-label'>PAGESPEED UPTIME</div>",
+      message_handler_);
+  fetch->Write(StrCat("<div class='pagespeed-dashboard-total-value'>", uptime,
+                      "</div>"),
+               message_handler_);
+  fetch->Write(
+      "<div class='pagespeed-dashboard-card-note'>Since this admin instance "
+      "initialized</div></article>"
+      "<article class='pagespeed-dashboard-card'>"
+      "<div class='pagespeed-dashboard-card-label'>JAVASCRIPT SAVED</div>",
+      message_handler_);
+  fetch->Write(
+      StrCat("<div class='pagespeed-dashboard-value'>",
+             FormatDashboardBytes(std::max<int64>(0, javascript_saved)),
+             "</div></article>"
+             "<article class='pagespeed-dashboard-card'>"
+             "<div class='pagespeed-dashboard-card-label'>CSS SAVED</div>"
+             "<div class='pagespeed-dashboard-value'>",
+             FormatDashboardBytes(std::max<int64>(0, css_saved)),
+             "</div></article>"
+             "<article class='pagespeed-dashboard-card'>"
+             "<div class='pagespeed-dashboard-card-label'>IMAGE SAVED</div>"
+             "<div class='pagespeed-dashboard-value'>",
+             FormatDashboardBytes(std::max<int64>(0, image_saved)),
+             "</div></article></div>"
+             "<p class='pagespeed-dashboard-footnote'>Savings are "
+             "cumulative since the statistics counters were last "
+             "reset. They represent optimized resource bytes, not "
+             "a measurement of all network traffic.</p></section>"),
+      message_handler_);
 }
 
 void AdminSite::GraphsHandler(const RewriteOptions& options, AdminSource source,
@@ -747,7 +864,9 @@ void AdminSite::AdminPage(
     fetch->Done(true);
   } else {
     StringPiece leaf = stripped_gurl.LeafSansQuery();
-    if ((leaf == "statistics") || (leaf.empty())) {
+    if ((leaf == "dashboard") || leaf.empty()) {
+      DashboardHandler(kPageSpeedAdmin, fetch, stats);
+    } else if (leaf == "statistics") {
       StatisticsHandler(*options, kPageSpeedAdmin, fetch, stats);
     } else if (leaf == "stats_json") {
       StatisticsJsonHandler(fetch, stats);

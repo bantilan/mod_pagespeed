@@ -49,10 +49,15 @@ tbody,tfoot,thead,tr {
   vertical-align: baseline;
 }
 body {
-  line-height: 1;
-  color: black;
-  background: white;
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 0 0 48px;
+  color: #1d2927;
+  background: #f2f5f2;
+  font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+      "Segoe UI", sans-serif;
 }
+*, *::before, *::after { box-sizing: inherit; }
 input::-moz-focus-inner {
   border: 0;
 }
@@ -64,19 +69,23 @@ input::-moz-focus-inner {
   TODO(jmarantz): Get UX help to style the whole admin site better.
 ------------------------------------------------------------------*/
 a {
-  color:#15c;
+  color: #176b57;
   cursor:pointer;
   text-decoration:none;
 }
 a:visited {
-  color: #61c;
+  color: #176b57;
 }
 a:hover {
-  text-decoration:underline;
+  color: #0e493b;
+  text-decoration: underline;
 }
 a:active {
-  color:#d14836;
-  text-decoration:underline;
+  color: #a4472f;
+}
+a:focus-visible {
+  outline: 3px solid #e3a54a;
+  outline-offset: 3px;
 }
 /*------------------------------------------------------------------
 mod rules
@@ -104,12 +113,202 @@ mod rules
   position:absolute;
 }
 .pagespeed-admin-body {
-  font-family: sans-serif;
-  font-size: 12px;
+  margin: 0;
+}
+.pagespeed-admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  padding: 0 28px;
+  color: #f5f7f2;
+  background: #173b35;
+  border-bottom: 1px solid #31584d;
+}
+.pagespeed-admin-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -.035em;
+}
+.pagespeed-admin-brand-mark {
+  position: relative;
+  width: 27px;
+  height: 27px;
+  border: 2px solid #e4a84f;
+  border-radius: 8px 8px 8px 2px;
+  transform: rotate(-8deg);
+}
+.pagespeed-admin-brand-mark::before,
+.pagespeed-admin-brand-mark::after {
+  position: absolute;
+  content: "";
+  background: #e4a84f;
+  border-radius: 2px;
+}
+.pagespeed-admin-brand-mark::before { width: 5px; height: 13px; left: 5px; bottom: 4px; }
+.pagespeed-admin-brand-mark::after { width: 5px; height: 18px; left: 13px; bottom: 4px; }
+.pagespeed-admin-header-label {
+  padding: 5px 9px;
+  border: 1px solid #45695e;
+  border-radius: 4px;
+  color: #c6d6cd;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+.pagespeed-admin-layout {
+  display: grid;
+  grid-template-columns: 228px minmax(0, 1fr);
+  min-height: calc(100vh - 64px);
+}
+.pagespeed-admin-sidebar {
+  padding: 25px 14px;
+  background: #e7ede8;
+  border-right: 1px solid #d5dfd8;
+}
+.pagespeed-admin-sidebar-label {
+  padding: 0 12px 11px;
+  color: #75847b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .13em;
 }
 .pagespeed-admin-tabs {
-  font-size: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  font-size: 14px;
 }
+.pagespeed-admin-tabs a {
+  display: block;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #3c5045;
+  font-weight: 550;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.pagespeed-admin-tabs a:hover,
+.pagespeed-admin-tabs a:focus-visible {
+  border-color: #d2ddd5;
+  background: #f3f6f3;
+  color: #173b35;
+  text-decoration: none;
+}
+.pagespeed-admin-tabs a.pagespeed-admin-tab-active {
+  border-color: #d0ded4;
+  background: #fff;
+  color: #145844;
+  font-weight: 700;
+  box-shadow: inset 3px 0 #d69a45, 0 1px 3px rgba(30, 55, 43, .05);
+}
+.pagespeed-admin-content {
+  min-width: 0;
+  padding: 28px clamp(18px, 4vw, 54px) 48px;
+}
+.pagespeed-admin-body h1,
+.pagespeed-admin-body h2,
+.pagespeed-admin-body h3 {
+  color: #203b34;
+  line-height: 1.25;
+}
+.pagespeed-admin-body h1 { margin: 0 0 20px; font-size: 26px; }
+.pagespeed-admin-body h2 { margin: 22px 0 12px; font-size: 20px; }
+.pagespeed-admin-body h3 { margin: 18px 0 10px; font-size: 16px; }
+.pagespeed-admin-body table {
+  max-width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(31, 55, 47, .07);
+}
+.pagespeed-admin-body th,
+.pagespeed-admin-body td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #e2e9e4;
+  text-align: left;
+}
+.pagespeed-admin-body th {
+  color: #34574c;
+  background: #e8efea;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.pagespeed-dashboard-heading { margin: 0 0 24px; }
+.pagespeed-dashboard-eyebrow {
+  margin: 0 0 7px;
+  color: #a36b27;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .15em;
+}
+.pagespeed-dashboard-heading h1 { margin: 0 0 6px; }
+.pagespeed-dashboard-description,
+.pagespeed-dashboard-footnote { color: #66756c; }
+.pagespeed-dashboard-description { margin: 0; }
+.pagespeed-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.pagespeed-dashboard-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-dashboard-total { grid-column: span 2; background: #e7efe9; }
+.pagespeed-dashboard-uptime { background: #f7f0e4; }
+.pagespeed-dashboard-card-label {
+  color: #718077;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+}
+.pagespeed-dashboard-total-value {
+  margin-top: 12px;
+  color: #173b35;
+  font-size: clamp(25px, 3vw, 38px);
+  font-weight: 750;
+  letter-spacing: -.045em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.pagespeed-dashboard-value {
+  margin-top: 13px;
+  color: #203b34;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -.03em;
+}
+.pagespeed-dashboard-card-note {
+  margin-top: 9px;
+  color: #64736a;
+  font-size: 12px;
+}
+.pagespeed-dashboard-footnote { margin: 20px 0 0; font-size: 12px; }
 .pagespeed-sub-tabs {
   font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  .pagespeed-admin-header { min-height: 56px; padding: 0 16px; }
+  .pagespeed-admin-layout { grid-template-columns: 1fr; }
+  .pagespeed-admin-sidebar { padding: 12px; border-right: 0; border-bottom: 1px solid #d5dfd8; }
+  .pagespeed-admin-sidebar-label { padding: 0 4px 7px; }
+  .pagespeed-admin-tabs { flex-direction: row; flex-wrap: wrap; }
+  .pagespeed-admin-tabs a { padding: 7px 9px; }
+  .pagespeed-admin-content { padding: 22px 16px 36px; }
+  .pagespeed-admin-body table { display: block; overflow-x: auto; }
+  .pagespeed-dashboard-grid { grid-template-columns: 1fr; }
+  .pagespeed-dashboard-total { grid-column: auto; }
 }
