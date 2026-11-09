@@ -59,12 +59,6 @@ pagespeed.Messages = function(opt_xhr) {
   this.numUnfilteredMessages_ = this.psolMessages_.length;
 
   /**
-   * The option of reversing list.
-   * @private {boolean}
-   */
-  this.reverse_ = false;
-
-  /**
    * The option of filtering.
    * @private {string}
    */
@@ -73,51 +67,61 @@ pagespeed.Messages = function(opt_xhr) {
   /** @private {string} */
   this.severityFilter_ = 'all';
 
+  /** @private {boolean} */
+  this.groupByMessage_ = true;
+
+  /** @private {boolean} */
+  this.newestFirst_ = true;
+
   /**
    * The option of auto-refresh.
    * @private {boolean}
    */
   this.autoRefresh_ = false;
 
-  var wrapper = document.createElement('div');
-  wrapper.style.overflow = 'hidden';
-  wrapper.style.clear = 'both';
-
-  var uiTable = document.createElement('div');
-  uiTable.id = 'ui-div';
-  uiTable.className = 'pagespeed-stat-toolbar';
-  uiTable.innerHTML =
-      '<label>Reverse order <input type="checkbox" id="reverse" ' +
-      (this.reverse_ ? 'checked' : '') + '></label>' +
-      '<label>Auto refresh <input type="checkbox" ' +
-      'id="auto-refresh" ' + (this.autoRefresh_ ? 'checked' : '') +
-      '></label><label class="pagespeed-stat-filter">Filter ' +
-      '<input id="text-filter" type="search" placeholder="Search messages">' +
-      '</label><label>Severity <select id="severity-filter">' +
-      '<option value="all">All levels</option>' +
-      '<option value="info">Info</option>' +
-      '<option value="warning">Warning</option>' +
-      '<option value="error">Error</option>' +
-      '<option value="fatal">Fatal</option></select></label>';
-  wrapper.appendChild(uiTable);
-
-  var numElement = document.createElement('div');
-  numElement.id = 'num';
-  numElement.className = 'pagespeed-show-number';
-  wrapper.appendChild(numElement);
+  var wrapper = document.createElement('section');
+  wrapper.id = 'message-history-controls';
+  wrapper.className = 'pagespeed-message-controls';
+  wrapper.innerHTML =
+      '<div class="pagespeed-message-tools">' +
+      '<label class="pagespeed-message-search-label">Search logs ' +
+      '<input id="text-filter" type="search" ' +
+      'placeholder="Search message or source"></label>' +
+      '<label>Date from <input id="date-from" type="date"></label>' +
+      '<label>Date to <input id="date-to" type="date"></label>' +
+      '<label class="pagespeed-message-toggle">Group by message ' +
+      '<input id="group-by-message" type="checkbox" checked></label>' +
+      '<label class="pagespeed-message-toggle">Auto refresh ' +
+      '<input id="auto-refresh" type="checkbox"></label></div>' +
+      '<div class="pagespeed-message-filter-row">' +
+      '<div class="pagespeed-message-levels" role="group" ' +
+      'aria-label="Filter log severity">' +
+      '<button type="button" data-level="all" class="active">All logs ' +
+      '<span data-count="all">0</span></button>' +
+      '<button type="button" data-level="error">Errors ' +
+      '<span data-count="error">0</span></button>' +
+      '<button type="button" data-level="warning">Warnings ' +
+      '<span data-count="warning">0</span></button>' +
+      '<button type="button" data-level="info">Info ' +
+      '<span data-count="info">0</span></button>' +
+      '<button type="button" data-level="fatal">Fatal ' +
+      '<span data-count="fatal">0</span></button></div>' +
+      '<label class="pagespeed-message-toggle">Newest first ' +
+      '<input id="newest-first" type="checkbox" checked></label></div>' +
+      '<p id="num" class="pagespeed-message-count" aria-live="polite"></p>';
 
   var logElement = document.getElementById('log');
   document.body.insertBefore(wrapper, logElement);
 
-  this.updateMessageCount();
+  this.update();
 };
 
 
 /**
  * Updates the option of reversing the messages list.
  */
-pagespeed.Messages.prototype.toggleReverse = function() {
-  this.reverse_ = !this.reverse_;
+pagespeed.Messages.prototype.toggleOrder = function() {
+  this.newestFirst_ = document.getElementById('newest-first').checked;
   this.update();
 };
 
@@ -144,56 +148,79 @@ pagespeed.Messages.prototype.setFilter = function(element) {
  * @param {!Element} element
  */
 pagespeed.Messages.prototype.setSeverityFilter = function(element) {
-  this.severityFilter_ = element.value;
+  this.severityFilter_ = element.getAttribute('data-level');
+  this.update();
+};
+
+
+pagespeed.Messages.prototype.setDateFilter = function() {
+  this.dateFrom_ = document.getElementById('date-from').value;
+  this.dateTo_ = document.getElementById('date-to').value;
+  this.update();
+};
+
+
+pagespeed.Messages.prototype.toggleGrouping = function() {
+  this.groupByMessage_ = document.getElementById('group-by-message').checked;
   this.update();
 };
 
 
 /**
- * Update the text showing the number of messages.
- * @param {number=} opt_num An optional specified number to show when
- *     filtering the messages.
- */
-pagespeed.Messages.prototype.updateMessageCount = function(opt_num) {
-  // The default number of messages is the length of the array when opt_num
-  // is not specified.
-  var total = (opt_num != undefined) ? opt_num : this.psolMessages_.length;
-  if (total == this.numUnfilteredMessages_) {
-    document.getElementById('num').textContent = 'Total entries: ' +
-        total;
-  } else {
-    document.getElementById('num').textContent =
-        'Visible entries: ' + total + '/' + this.numUnfilteredMessages_;
-  }
-};
-
-
-/**
- * Reverses or filters messages according to the options.
+ * Applies search, date, and severity filters, then renders grouped messages.
  */
 pagespeed.Messages.prototype.update = function() {
   var logElement = document.getElementById('log');
-  var messages = goog.array.clone(this.psolMessages_);
-  if (this.filter_) {
-    for (var i = messages.length - 1; i >= 0; --i) {
-      if (!goog.string.caseInsensitiveContains(messages[i].text,
-                                                this.filter_)) {
-        messages.splice(i, 1);
-      }
+  var matching = goog.array.clone(this.psolMessages_);
+  var query = this.filter_.toLowerCase();
+  var from = this.dateFrom_ ? new Date(this.dateFrom_ + 'T00:00:00').getTime() :
+                              0;
+  var to = this.dateTo_ ? new Date(this.dateTo_ + 'T23:59:59').getTime() :
+                          Number.MAX_VALUE;
+
+  for (var i = matching.length - 1; i >= 0; --i) {
+    var timestamp = pagespeed.Messages.getTimestamp_(matching[i].text);
+    var matchesText = !query ||
+        goog.string.caseInsensitiveContains(matching[i].text, query);
+    var matchesDate = !timestamp || (timestamp >= from && timestamp <= to);
+    if (!matchesText || !matchesDate) {
+      matching.splice(i, 1);
     }
+  }
+
+  var counts = {all: matching.length, error: 0, warning: 0, info: 0, fatal: 0};
+  for (var j = 0; j < matching.length; ++j) {
+    if (counts[matching[j].severity] != undefined) {
+      ++counts[matching[j].severity];
+    }
+  }
+  var buttons = document.querySelectorAll('.pagespeed-message-levels button');
+  for (var k = 0; k < buttons.length; ++k) {
+    var level = buttons[k].getAttribute('data-level');
+    buttons[k].className = level == this.severityFilter_ ? 'active' : '';
+    buttons[k].setAttribute('aria-pressed',
+                            level == this.severityFilter_ ? 'true' : 'false');
+    buttons[k].querySelector('[data-count]').textContent = counts[level];
   }
   if (this.severityFilter_ != 'all') {
-    for (var j = messages.length - 1; j >= 0; --j) {
-      if (messages[j].severity != this.severityFilter_) {
-        messages.splice(j, 1);
+    for (var m = matching.length - 1; m >= 0; --m) {
+      if (matching[m].severity != this.severityFilter_) {
+        matching.splice(m, 1);
       }
     }
   }
-  this.updateMessageCount(messages.length);
-  if (this.reverse_) {
-    messages.reverse();
-  }
-  pagespeed.Messages.renderEntries_(logElement, messages, this.reverse_);
+  var newestFirst = this.newestFirst_;
+  matching.sort(function(a, b) {
+    var delta = pagespeed.Messages.getTimestamp_(b.text) -
+                pagespeed.Messages.getTimestamp_(a.text);
+    return newestFirst ? delta : -delta;
+  });
+
+  var groups = pagespeed.Messages.groupEntries_(matching,
+                                                 this.groupByMessage_);
+  document.getElementById('num').textContent = 'Showing ' + groups.length +
+      ' grouped logs (' + matching.length + ' total occurrences)';
+  pagespeed.Messages.renderEntries_(logElement, groups);
 };
 
 
@@ -218,74 +245,123 @@ pagespeed.Messages.readEntries_ = function(logElement) {
 
 
 /** @private */
-pagespeed.Messages.renderEntries_ = function(logElement, entries, newestFirst) {
-  if ((' ' + logElement.className + ' ').indexOf(
-          ' pagespeed-messages-ready ') < 0) {
-    logElement.className += ' pagespeed-messages-ready';
-  }
+pagespeed.Messages.getTimestamp_ = function(text) {
+  var match = text.match(/^\[([^\]]+)\]/);
+  var timestamp = match ? Date.parse(match[1]) : 0;
+  return isNaN(timestamp) ? 0 : timestamp;
+};
+
+
+/** @private */
+pagespeed.Messages.groupEntries_ = function(entries, groupByMessage) {
   var groups = [];
   var byKey = {};
   for (var i = 0; i < entries.length; ++i) {
     var entry = entries[i];
     var match = entry.text.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s*/);
     entry.timestamp = match ? match[1] : '';
+    entry.timestampMs = pagespeed.Messages.getTimestamp_(entry.text);
     entry.body = match ? entry.text.substring(match[0].length) : entry.text;
-    entry.body = entry.body.replace(/^\d+\s+/, '');
-    var key = entry.severity + '|' + entry.body;
+    // Drop the per-process id so identical messages from worker processes group.
+    entry.body = entry.body.replace(/^\[\d+\]\s+/, '');
+    var key = groupByMessage ? '$' + entry.severity + '|' + entry.body :
+                              '$entry|' + i;
     if (!byKey[key]) {
-      byKey[key] = {severity: entry.severity, entries: []};
+      byKey[key] = {severity: entry.severity, body: entry.body, entries: []};
       groups.push(byKey[key]);
     }
     byKey[key].entries.push(entry);
   }
+  return groups;
+};
 
+
+/** @private */
+pagespeed.Messages.formatDate_ = function(timestamp) {
+  return timestamp ? new Date(timestamp).toLocaleString() :
+                     'Timestamp unavailable';
+};
+
+
+/** @private */
+pagespeed.Messages.renderEntries_ = function(logElement, groups) {
+  if ((' ' + logElement.className + ' ').indexOf(
+          ' pagespeed-messages-ready ') < 0) {
+    logElement.className += ' pagespeed-messages-ready';
+  }
   var fragment = document.createDocumentFragment();
   if (!groups.length) {
     var empty = document.createElement('p');
     empty.className = 'pagespeed-message-empty';
-    empty.textContent = 'No messages match this filter.';
+    empty.textContent = 'No messages match these filters.';
     fragment.appendChild(empty);
   }
-  for (var j = 0; j < groups.length; ++j) {
-    var group = groups[j];
-    var latest = group.entries[newestFirst ? 0 : group.entries.length - 1];
+  for (var i = 0; i < groups.length; ++i) {
+    var group = groups[i];
+    var firstTime = Number.MAX_VALUE;
+    var lastTime = 0;
+    for (var j = 0; j < group.entries.length; ++j) {
+      var occurrenceTime = group.entries[j].timestampMs;
+      if (occurrenceTime) {
+        firstTime = Math.min(firstTime, occurrenceTime);
+        lastTime = Math.max(lastTime, occurrenceTime);
+      }
+    }
+    if (firstTime == Number.MAX_VALUE) {
+      firstTime = 0;
+    }
     var card = document.createElement('article');
     card.className = 'pagespeed-message-card severity-' + group.severity;
-    var meta = document.createElement('div');
-    meta.className = 'pagespeed-message-meta';
+    var head = document.createElement('div');
+    head.className = 'pagespeed-message-card-head';
     var tag = document.createElement('span');
     tag.className = 'pagespeed-message-tag';
     tag.textContent = group.severity;
-    meta.appendChild(tag);
-    var date = document.createElement('time');
-    date.className = 'pagespeed-message-date';
-    date.textContent = latest.timestamp || 'Timestamp unavailable';
-    meta.appendChild(date);
-    card.appendChild(meta);
-    var heading = document.createElement('h2');
-    heading.className = 'pagespeed-message-title';
-    heading.textContent = latest.body || latest.text;
-    card.appendChild(heading);
+    head.appendChild(tag);
+    var summary = document.createElement('div');
+    summary.className = 'pagespeed-message-summary';
+    var title = document.createElement('h2');
+    title.className = 'pagespeed-message-title';
+    title.textContent = group.body || '(empty message)';
+    summary.appendChild(title);
+    var occurrence = document.createElement('span');
+    occurrence.className = 'pagespeed-message-occurrence-count';
+    occurrence.textContent = group.entries.length + ' occurrence' +
+        (group.entries.length == 1 ? '' : 's');
+    summary.appendChild(occurrence);
+    var range = document.createElement('span');
+    range.className = 'pagespeed-message-date-range';
+    range.textContent = 'First: ' + pagespeed.Messages.formatDate_(firstTime) +
+        '  |  Last: ' + pagespeed.Messages.formatDate_(lastTime);
+    summary.appendChild(range);
+    head.appendChild(summary);
+    card.appendChild(head);
 
     if (group.entries.length > 1) {
       var details = document.createElement('details');
       details.className = 'pagespeed-message-occurrences';
-      var summary = document.createElement('summary');
-      summary.textContent = 'Show ' + group.entries.length + ' entries';
-      details.appendChild(summary);
-      var list = document.createElement('ol');
+      var detailsSummary = document.createElement('summary');
+      detailsSummary.textContent = 'Show all ' + group.entries.length +
+          ' occurrences';
+      details.appendChild(detailsSummary);
+      var table = document.createElement('table');
+      table.className = 'pagespeed-admin-data-table';
+      table.innerHTML = '<thead><tr><th>Timestamp</th><th>Message</th>' +
+                        '</tr></thead>';
+      var tbody = document.createElement('tbody');
       for (var k = 0; k < group.entries.length; ++k) {
-        var item = document.createElement('li');
-        var itemDate = document.createElement('time');
-        itemDate.textContent = group.entries[k].timestamp ||
-                               'Timestamp unavailable';
-        item.appendChild(itemDate);
-        var itemText = document.createElement('p');
-        itemText.textContent = group.entries[k].body || group.entries[k].text;
-        item.appendChild(itemText);
-        list.appendChild(item);
+        var row = document.createElement('tr');
+        var dateCell = document.createElement('td');
+        dateCell.textContent = pagespeed.Messages.formatDate_(
+            group.entries[k].timestampMs);
+        var messageCell = document.createElement('td');
+        messageCell.textContent = group.entries[k].body;
+        row.appendChild(dateCell);
+        row.appendChild(messageCell);
+        tbody.appendChild(row);
       }
-      details.appendChild(list);
+      table.appendChild(tbody);
+      details.appendChild(table);
       card.appendChild(details);
     }
     fragment.appendChild(card);
@@ -331,8 +407,9 @@ pagespeed.Messages.prototype.parseMessagesFromResponse = function(text) {
   } else {
     goog.array.clear(this.psolMessages_);
     this.numUnfilteredMessages_ = 0;
-    this.updateMessageCount();
-    document.getElementById('log').textContent = pagespeed.Messages.DUMP_ERROR_;
+    this.update();
+    document.querySelector('#log .pagespeed-message-empty').textContent =
+        pagespeed.Messages.DUMP_ERROR_;
   }
 };
 
@@ -368,8 +445,8 @@ pagespeed.Messages.prototype.parseAjaxResponse = function() {
     console.log(this.xhr_.getLastError());
     goog.array.clear(this.psolMessages_);
     this.numUnfilteredMessages_ = 0;
-    this.updateMessageCount();
-    document.getElementById('log').textContent =
+    this.update();
+    document.querySelector('#log .pagespeed-message-empty').textContent =
         pagespeed.Messages.REFRESH_ERROR_;
   }
 };
@@ -386,11 +463,21 @@ pagespeed.Messages.Start = function() {
     goog.events.listen(
         filterElement, 'keyup', goog.bind(messagesObj.setFilter,
                                           messagesObj, filterElement));
-    goog.events.listen(document.getElementById('severity-filter'), 'change',
-                       goog.bind(messagesObj.setSeverityFilter, messagesObj,
-                                 document.getElementById('severity-filter')));
-    goog.events.listen(document.getElementById('reverse'), 'change',
-                       goog.bind(messagesObj.toggleReverse, messagesObj));
+    var levelButtons = document.querySelectorAll(
+        '.pagespeed-message-levels button');
+    for (var i = 0; i < levelButtons.length; ++i) {
+      goog.events.listen(levelButtons[i], 'click',
+                         goog.bind(messagesObj.setSeverityFilter,
+                                   messagesObj, levelButtons[i]));
+    }
+    goog.events.listen(document.getElementById('date-from'), 'change',
+                       goog.bind(messagesObj.setDateFilter, messagesObj));
+    goog.events.listen(document.getElementById('date-to'), 'change',
+                       goog.bind(messagesObj.setDateFilter, messagesObj));
+    goog.events.listen(document.getElementById('group-by-message'), 'change',
+                       goog.bind(messagesObj.toggleGrouping, messagesObj));
+    goog.events.listen(document.getElementById('newest-first'), 'change',
+                       goog.bind(messagesObj.toggleOrder, messagesObj));
     goog.events.listen(document.getElementById('auto-refresh'), 'change',
                        goog.bind(messagesObj.toggleAutorefresh, messagesObj));
     goog.events.listen(messagesObj.xhr_, goog.net.EventType.COMPLETE,

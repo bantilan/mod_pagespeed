@@ -188,7 +188,7 @@ casper.test.begin('Check Console Page', 3, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Message History Page', 4, function suite(test) {
+casper.test.begin('Check Message History Page', 8, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
@@ -196,10 +196,25 @@ casper.test.begin('Check Message History Page', 4, function suite(test) {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
     test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'EVENT LOG');
-    test.assertExists('#severity-filter option[value="warning"]');
+    test.assertExists(
+        '.pagespeed-message-levels button[data-level="warning"]');
+    test.assertExists('#group-by-message');
   });
 
-  casper.then(function() { test.assertEquals(errors, []); });
+  casper.then(function() {
+    this.click('.pagespeed-message-levels button[data-level="warning"]');
+    test.assertSelectorHasText(
+        '.pagespeed-message-levels button[data-level="warning"]', 'Warnings');
+    this.click('.pagespeed-message-levels button[data-level="all"]');
+    this.click('#group-by-message');
+    var counts = this.evaluate(function() {
+      return [parseInt(document.querySelector('[data-count="all"]').textContent),
+        document.querySelectorAll('#log .pagespeed-message-card').length];
+    });
+    test.assertEquals(counts[1], counts[0]);
+    test.assertSelectorHasText('#num', 'grouped logs');
+    test.assertEquals(errors, []);
+  });
 
   casper.run(function() { test.done(); });
 });
