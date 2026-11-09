@@ -301,7 +301,7 @@ mod rules
   gap: 12px;
   margin-top: 14px;
 }
-.pagespeed-message-entry { display: none; }
+.pagespeed-messages-ready .pagespeed-message-entry { display: none; }
 .pagespeed-message-empty {
   margin: 0;
   padding: 24px;
@@ -403,6 +403,15 @@ mod rules
   border: 1px solid #dfe6df;
   border-radius: 5px;
   background: #fbfcfa;
+  font: inherit;
+}
+.pagespeed-stat-toolbar select {
+  min-width: 120px;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid #dfe6df;
+  border-radius: 5px;
+  background: #fbfcfa;
+  color: #33483d;
   font: inherit;
 }
 .pagespeed-stat-toolbar input[type='checkbox'] { accent-color: #39765e; }
@@ -595,6 +604,8 @@ mod rules
   color: #66756c;
   font-size: 12px;
 }
+.pagespeed-purge-status[data-result='success'] { color: #28704b; }
+.pagespeed-purge-status[data-result='error'] { color: #a54e38; }
 .pagespeed-images-summary {
   display: flex;
   align-items: baseline;

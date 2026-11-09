@@ -70,6 +70,9 @@ pagespeed.Messages = function(opt_xhr) {
    */
   this.filter_ = '';
 
+  /** @private {string} */
+  this.severityFilter_ = 'all';
+
   /**
    * The option of auto-refresh.
    * @private {boolean}
@@ -90,7 +93,12 @@ pagespeed.Messages = function(opt_xhr) {
       'id="auto-refresh" ' + (this.autoRefresh_ ? 'checked' : '') +
       '></label><label class="pagespeed-stat-filter">Filter ' +
       '<input id="text-filter" type="search" placeholder="Search messages">' +
-      '</label>';
+      '</label><label>Severity <select id="severity-filter">' +
+      '<option value="all">All levels</option>' +
+      '<option value="info">Info</option>' +
+      '<option value="warning">Warning</option>' +
+      '<option value="error">Error</option>' +
+      '<option value="fatal">Fatal</option></select></label>';
   wrapper.appendChild(uiTable);
 
   var numElement = document.createElement('div');
@@ -132,6 +140,15 @@ pagespeed.Messages.prototype.setFilter = function(element) {
 };
 
 
+/** Updates the selected severity filter.
+ * @param {!Element} element
+ */
+pagespeed.Messages.prototype.setSeverityFilter = function(element) {
+  this.severityFilter_ = element.value;
+  this.update();
+};
+
+
 /**
  * Update the text showing the number of messages.
  * @param {number=} opt_num An optional specified number to show when
@@ -165,6 +182,13 @@ pagespeed.Messages.prototype.update = function() {
       }
     }
   }
+  if (this.severityFilter_ != 'all') {
+    for (var j = messages.length - 1; j >= 0; --j) {
+      if (messages[j].severity != this.severityFilter_) {
+        messages.splice(j, 1);
+      }
+    }
+  }
   this.updateMessageCount(messages.length);
   if (this.reverse_) {
     messages.reverse();
@@ -195,6 +219,10 @@ pagespeed.Messages.readEntries_ = function(logElement) {
 
 /** @private */
 pagespeed.Messages.renderEntries_ = function(logElement, entries, newestFirst) {
+  if ((' ' + logElement.className + ' ').indexOf(
+          ' pagespeed-messages-ready ') < 0) {
+    logElement.className += ' pagespeed-messages-ready';
+  }
   var groups = [];
   var byKey = {};
   for (var i = 0; i < entries.length; ++i) {
@@ -358,6 +386,9 @@ pagespeed.Messages.Start = function() {
     goog.events.listen(
         filterElement, 'keyup', goog.bind(messagesObj.setFilter,
                                           messagesObj, filterElement));
+    goog.events.listen(document.getElementById('severity-filter'), 'change',
+                       goog.bind(messagesObj.setSeverityFilter, messagesObj,
+                                 document.getElementById('severity-filter')));
     goog.events.listen(document.getElementById('reverse'), 'change',
                        goog.bind(messagesObj.toggleReverse, messagesObj));
     goog.events.listen(document.getElementById('auto-refresh'), 'change',
@@ -366,5 +397,10 @@ pagespeed.Messages.Start = function() {
                        goog.bind(messagesObj.parseAjaxResponse, messagesObj));
     setInterval(goog.bind(messagesObj.autoRefresh, messagesObj), 5000);
   };
-  goog.events.listen(window, 'load', messagesOnload);
+  if (document.readyState == 'complete' ||
+      document.readyState == 'interactive') {
+    messagesOnload();
+  } else {
+    goog.events.listen(window, 'load', messagesOnload);
+  }
 };

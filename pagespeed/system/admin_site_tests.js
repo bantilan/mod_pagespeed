@@ -188,7 +188,7 @@ casper.test.begin('Check Console Page', 3, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Message History Page', 3, function suite(test) {
+casper.test.begin('Check Message History Page', 4, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
@@ -196,6 +196,7 @@ casper.test.begin('Check Message History Page', 3, function suite(test) {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
     test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'EVENT LOG');
+    test.assertExists('#severity-filter option[value="warning"]');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });

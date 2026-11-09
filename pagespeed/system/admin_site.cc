@@ -592,15 +592,19 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "</section></section><script>(function(){var e=document.querySelectorAll("
       "'.pagespeed-image-time');for(var i=0;i<e.length;i++){var t=Number("
       "e[i].getAttribute('data-timestamp-ms'));if(t>0){e[i].textContent="
-      "new Date(t).toLocaleString();}var b=document.getElementById("
+      "new Date(t).toLocaleString();}}var b=document.getElementById("
       "'pagespeed-purge-cache'),s=document.getElementById("
       "'pagespeed-purge-status');b.addEventListener('click',function(){"
       "if(!window.confirm('Purge the entire PageSpeed cache? Cached resources "
       "will be regenerated as pages are requested.'))return;b.disabled=true;"
       "s.textContent='Purging cache...';fetch('cache?purge=*',{credentials:"
-      "'same-origin',cache:'no-store'}).then(function(r){return r.text();})"
-      ".then(function(t){s.textContent=t;}).catch(function(){s.textContent="
-      "'Cache purge request failed.';}).then(function(){b.disabled=false;});"
+      "'same-origin',cache:'no-store'}).then(function(r){return r.text().then("
+      "function(t){if(!r.ok)throw new Error(t||'HTTP '+r.status);return t;});})"
+      ".then(function(t){s.textContent=t;if(t.replace(/^\\s+|\\s+$/g,'')!="
+      "'Purge successful'){s.setAttribute('data-result','error');}else{"
+      "s.setAttribute('data-result','success');}}).catch(function(){s.textContent="
+      "'Cache purge request failed.';s.setAttribute('data-result','error');})"
+      ".then(function(){b.disabled=false;});"
       "});})();</script>",
       message_handler_);
 }
