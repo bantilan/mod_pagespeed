@@ -136,6 +136,9 @@ TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {
               ::testing::HasSubstr("Inspect recent optimized images"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("Savings by resource"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("Rewrite activity"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Purge cache"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("cache?purge=*"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-purge-status"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("Recent image optimization"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("https://example.com/recent.jpg"));
   EXPECT_THAT(buffer,

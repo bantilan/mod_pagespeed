@@ -243,8 +243,8 @@ mod rules
 }
 .pagespeed-dashboard-heading {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: flex-start;
+  flex-direction: column;
   gap: 18px;
   margin: 0 0 24px;
 }
@@ -334,6 +334,30 @@ mod rules
   border-radius: 50%;
   background: #55a477;
   box-shadow: 0 0 0 4px rgba(85, 164, 119, .14);
+}
+.pagespeed-dashboard-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.pagespeed-purge-button {
+  padding: 9px 13px;
+  border: 1px solid #c87857;
+  border-radius: 6px;
+  background: #fffaf6;
+  color: #8b432a;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pagespeed-purge-button:hover { background: #f8e9df; }
+.pagespeed-purge-button:disabled { opacity: .6; cursor: wait; }
+.pagespeed-purge-status {
+  min-height: 18px;
+  margin: -15px 0 14px;
+  color: #66756c;
+  font-size: 12px;
 }
 .pagespeed-images-summary {
   display: flex;

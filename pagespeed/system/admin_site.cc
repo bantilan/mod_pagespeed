@@ -426,8 +426,12 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "<h1>Performance dashboard</h1>"
       "<p class='pagespeed-dashboard-description'>Optimization activity "
       "and cumulative savings from this PageSpeed instance.</p></div>"
+      "<div class='pagespeed-dashboard-controls'>"
       "<span class='pagespeed-dashboard-live'><i></i> INSTANCE ACTIVE</span>"
-      "</div>"
+      "<button type='button' class='pagespeed-purge-button' "
+      "id='pagespeed-purge-cache'>Purge cache</button></div></div>"
+      "<p class='pagespeed-purge-status' id='pagespeed-purge-status' "
+      "role='status' aria-live='polite'></p>"
       "<div class='pagespeed-dashboard-grid'>"
       "<article class='pagespeed-dashboard-card pagespeed-dashboard-total'>"
       "<div class='pagespeed-dashboard-card-label'>TOTAL DATA SAVED</div>",
@@ -570,7 +574,16 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "</section></section><script>(function(){var e=document.querySelectorAll("
       "'.pagespeed-image-time');for(var i=0;i<e.length;i++){var t=Number("
       "e[i].getAttribute('data-timestamp-ms'));if(t>0){e[i].textContent="
-      "new Date(t).toLocaleString();}}})();</script>",
+      "new Date(t).toLocaleString();}var b=document.getElementById("
+      "'pagespeed-purge-cache'),s=document.getElementById("
+      "'pagespeed-purge-status');b.addEventListener('click',function(){"
+      "if(!window.confirm('Purge the entire PageSpeed cache? Cached resources "
+      "will be regenerated as pages are requested.'))return;b.disabled=true;"
+      "s.textContent='Purging cache...';fetch('cache?purge=*',{credentials:"
+      "'same-origin',cache:'no-store'}).then(function(r){return r.text();})"
+      ".then(function(t){s.textContent=t;}).catch(function(){s.textContent="
+      "'Cache purge request failed.';}).then(function(){b.disabled=false;});"
+      "});})();</script>",
       message_handler_);
 }
 
