@@ -1201,7 +1201,7 @@ RewriteResult ImageRewriteFilter::RewriteLoadedResourceImpl(
             (strings::StartsWith(optimized_url, "http://") ||
              strings::StartsWith(optimized_url, "https://"));
         if (safe_to_record) {
-          GoogleString output_mime_type = output_type->mime_type().as_string();
+          GoogleString output_mime_type = output_type->mime_type();
           driver()->InfoAt(
               rewrite_context,
               "Shrinking image (%u to %u bytes)\tPS_IMAGE_DETAIL\t%lld\t"
