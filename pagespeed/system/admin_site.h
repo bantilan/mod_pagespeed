@@ -117,6 +117,9 @@ class AdminSite {
   void DashboardHandler(AdminSource source, AsyncFetch* fetch,
                         Statistics* stats);
 
+  // Lists recently rewritten images from the bounded PageSpeed message buffer.
+  void ImagesHandler(AdminSource source, AsyncFetch* fetch);
+
   // Responds to 'fetch' with data used on statistics page and graphs page
   // in JSON format.
   void StatisticsJsonHandler(AsyncFetch* fetch, Statistics* stats);

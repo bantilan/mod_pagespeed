@@ -290,12 +290,92 @@ mod rules
   font-weight: 700;
   letter-spacing: -.03em;
 }
+.pagespeed-dashboard-image-link { display: block; }
+.pagespeed-dashboard-image-link:visited { color: #176b57; }
+.pagespeed-dashboard-image-link span {
+  color: #176b57;
+  font-size: 12px;
+  font-weight: 650;
+}
+.pagespeed-dashboard-image-link:hover span { text-decoration: underline; }
 .pagespeed-dashboard-card-note {
   margin-top: 9px;
   color: #64736a;
   font-size: 12px;
 }
 .pagespeed-dashboard-footnote { margin: 20px 0 0; font-size: 12px; }
+.pagespeed-images-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 0 0 16px;
+  color: #66756c;
+  font-size: 12px;
+}
+.pagespeed-images-summary strong {
+  color: #173b35;
+  font-size: 18px;
+}
+.pagespeed-images-summary strong:not(:first-child) { margin-left: 22px; }
+.pagespeed-images-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #dfe7e1;
+  border-radius: 7px;
+  background: #fff;
+}
+.pagespeed-admin-body table.pagespeed-images-table {
+  width: 100%;
+  margin: 0;
+  box-shadow: none;
+}
+.pagespeed-images-table th { white-space: nowrap; }
+.pagespeed-images-table td { vertical-align: top; }
+.pagespeed-images-table code { color: #49675a; font-size: 11px; }
+.pagespeed-images-table .pagespeed-image-url {
+  max-width: 280px;
+  overflow-wrap: anywhere;
+}
+.pagespeed-images-table .pagespeed-image-saved {
+  color: #176b57;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pagespeed-images-table details summary {
+  color: #176b57;
+  cursor: pointer;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.pagespeed-image-compare {
+  display: flex;
+  gap: 12px;
+  min-width: 360px;
+  padding: 12px 0;
+}
+.pagespeed-image-compare figure { width: 50%; min-width: 0; }
+.pagespeed-image-compare img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  background: #eef2ee;
+  border: 1px solid #dfe7e1;
+  border-radius: 4px;
+}
+.pagespeed-image-compare figcaption {
+  margin-top: 5px;
+  color: #68786e;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.pagespeed-images-empty {
+  padding: 26px;
+  border: 1px dashed #c8d5cb;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .65);
+}
+.pagespeed-images-empty h2 { margin: 0 0 8px; font-size: 18px; }
+.pagespeed-images-empty p { margin: 0; color: #66756c; }
 .pagespeed-sub-tabs {
   font-size: 15px;
 }
@@ -311,4 +391,6 @@ mod rules
   .pagespeed-admin-body table { display: block; overflow-x: auto; }
   .pagespeed-dashboard-grid { grid-template-columns: 1fr; }
   .pagespeed-dashboard-total { grid-column: auto; }
+  .pagespeed-images-summary { flex-wrap: wrap; }
+  .pagespeed-images-table td, .pagespeed-images-table th { padding: 7px 8px; }
 }

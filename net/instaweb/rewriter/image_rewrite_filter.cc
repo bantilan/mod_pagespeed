@@ -1187,19 +1187,40 @@ RewriteResult ImageRewriteFilter::RewriteLoadedResourceImpl(
               output_type, StringPiece() /* no charset for images */,
               result.get())) {
         // Static cast to avoid format string trouble.
-        driver()->InfoAt(
-            rewrite_context,
-            "Shrinking image `%s' (%u bytes) to `%s' (%u bytes)",
-            input_resource->url().c_str(),
-            static_cast<unsigned>(image->input_size()),
-            result->url().c_str(),
-            static_cast<unsigned>(image->output_size()));
-
         // Update stats.
         image_rewrites_->Add(1);
         image_rewrite_total_bytes_saved_->Add(
             image->input_size() - image->output_size());
         image_rewrite_total_original_bytes_->Add(image->input_size());
+        const GoogleString& original_url = input_resource->url();
+        const GoogleString& optimized_url = result->url();
+        bool safe_to_record =
+            original_url.size() <= 4096 && optimized_url.size() <= 4096 &&
+            (strings::StartsWith(original_url, "http://") ||
+             strings::StartsWith(original_url, "https://")) &&
+            (strings::StartsWith(optimized_url, "http://") ||
+             strings::StartsWith(optimized_url, "https://"));
+        if (safe_to_record) {
+          GoogleString output_mime_type = output_type->mime_type().as_string();
+          driver()->InfoAt(
+              rewrite_context,
+              "Shrinking image (%u to %u bytes)\tPS_IMAGE_DETAIL\t%lld\t"
+              "%u\t%u\t%s\t%s\t%s",
+              static_cast<unsigned>(image->input_size()),
+              static_cast<unsigned>(image->output_size()),
+              static_cast<long long>(server_context()->timer()->NowMs()),
+              static_cast<unsigned>(image->input_size()),
+              static_cast<unsigned>(image->output_size()),
+              output_mime_type.c_str(), original_url.c_str(),
+              optimized_url.c_str());
+        } else {
+          driver()->InfoAt(
+              rewrite_context,
+              "Shrinking image `%s' (%u bytes) to `%s' (%u bytes)",
+              original_url.c_str(), static_cast<unsigned>(image->input_size()),
+              optimized_url.c_str(),
+              static_cast<unsigned>(image->output_size()));
+        }
         if (result->type()->type() == ContentType::kWebp) {
           image_webp_rewrites_->Add(1);
         }

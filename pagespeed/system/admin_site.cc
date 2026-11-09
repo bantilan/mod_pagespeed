@@ -24,6 +24,7 @@
 #include <memory>
 #include <set>
 #include <vector>
+#include <vector>
 
 #include "net/instaweb/http/public/async_fetch.h"
 #include "net/instaweb/http/public/http_cache.h"
@@ -86,6 +87,7 @@ struct Tab {
 // based on the current config.
 const Tab kTabs[] = {
     {"Dashboard", "Dashboard", "dashboard", nullptr},
+    {"Images", "Optimized Images", "images", nullptr},
     {"Statistics", "Statistics", "statistics", "?"},
     {"Configuration", "Configuration", "config", "?config"},
     {"Histograms", "Histograms", "histograms", "?histograms"},
@@ -117,10 +119,10 @@ GoogleString FormatDashboardBytes(int64 bytes) {
     suffix = "KB";
   }
   if (unit == 1) {
-    return StrCat(IntegerToString(bytes), " ", suffix);
+    return StrCat(Integer64ToString(bytes), " ", suffix);
   }
-  return StrCat(IntegerToString(bytes / unit), ".",
-                IntegerToString((bytes % unit) * 10 / unit), " ", suffix);
+  return StrCat(Integer64ToString(bytes / unit), ".",
+                Integer64ToString((bytes % unit) * 10 / unit), " ", suffix);
 }
 
 GoogleString FormatDashboardUptime(int64 elapsed_ms) {
@@ -130,11 +132,11 @@ GoogleString FormatDashboardUptime(int64 elapsed_ms) {
   int64 minutes = (elapsed_seconds / 60) % 60;
   int64 seconds = elapsed_seconds % 60;
   if (days > 0) {
-    return StrCat(IntegerToString(days), "d ", IntegerToString(hours), "h ",
-                  IntegerToString(minutes), "m");
+    return StrCat(Integer64ToString(days), "d ", Integer64ToString(hours),
+                  "h ", Integer64ToString(minutes), "m");
   }
-  return StrCat(IntegerToString(hours), "h ", IntegerToString(minutes), "m ",
-                IntegerToString(seconds), "s");
+  return StrCat(Integer64ToString(hours), "h ", Integer64ToString(minutes),
+                "m ", Integer64ToString(seconds), "s");
 }
 
 // Controls the generation of an HTML Admin page.  Constructing it
@@ -399,14 +401,141 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
              "</div></article>"
              "<article class='pagespeed-dashboard-card'>"
              "<div class='pagespeed-dashboard-card-label'>IMAGE SAVED</div>"
+             "<a class='pagespeed-dashboard-image-link' href='images'>"
              "<div class='pagespeed-dashboard-value'>",
              FormatDashboardBytes(std::max<int64>(0, image_saved)),
-             "</div></article></div>"
+             "</div><span>View recent image rewrites</span></a>"
+             "</article></div>"
              "<p class='pagespeed-dashboard-footnote'>Savings are "
              "cumulative since the statistics counters were last "
              "reset. They represent optimized resource bytes, not "
              "a measurement of all network traffic.</p></section>"),
       message_handler_);
+}
+
+void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
+  struct ImageRewriteRow {
+    int64 timestamp_ms;
+    int64 original_bytes;
+    int64 optimized_bytes;
+    GoogleString output_mime_type;
+    GoogleString original_url;
+    GoogleString optimized_url;
+  };
+
+  GoogleString log;
+  StringWriter log_writer(&log);
+  std::vector<ImageRewriteRow> rows;
+  int64 total_saved = 0;
+  static const size_t kMaxRows = 100;
+  if (message_handler_->Dump(&log_writer)) {
+    StringPieceVector messages;
+    message_handler_->ParseMessageDumpIntoMessages(log, &messages);
+    for (int i = static_cast<int>(messages.size()) - 1;
+         i >= 0 && rows.size() < kMaxRows; --i) {
+      StringPiece message = messages[i];
+      size_t marker = message.find("PS_IMAGE_DETAIL\t");
+      if (marker == StringPiece::npos) {
+        continue;
+      }
+      StringPieceVector fields;
+      SplitStringPieceToVector(message.substr(marker), "\t", &fields, true);
+      if (fields.size() != 7) {
+        continue;
+      }
+      ImageRewriteRow row;
+      if (!StringToInt64(fields[1], &row.timestamp_ms) ||
+          !StringToInt64(fields[2], &row.original_bytes) ||
+          !StringToInt64(fields[3], &row.optimized_bytes) ||
+          row.original_bytes < row.optimized_bytes) {
+        continue;
+      }
+      row.output_mime_type = fields[4].as_string();
+      row.original_url = fields[5].as_string();
+      row.optimized_url = fields[6].as_string();
+      total_saved += row.original_bytes - row.optimized_bytes;
+      rows.push_back(row);
+    }
+  }
+
+  AdminHtml admin_html("images", "", source, timer_, fetch,
+                       message_handler_);
+  fetch->Write(
+      "<section class='pagespeed-images-page'>"
+      "<div class='pagespeed-dashboard-heading'>"
+      "<p class='pagespeed-dashboard-eyebrow'>IMAGE OPTIMIZATION</p>"
+      "<h1>Recently optimized images</h1>"
+      "<p class='pagespeed-dashboard-description'>Recent successful "
+      "rewrites recorded in the PageSpeed message buffer.</p></div>"
+      "<div class='pagespeed-images-summary'>",
+      message_handler_);
+  fetch->Write(StrCat("<strong>",
+                      IntegerToString(static_cast<int>(rows.size())),
+                      "</strong><span>recent rewrites</span><strong>",
+                      FormatDashboardBytes(total_saved),
+                      "</strong><span>saved in this list</span></div>"),
+               message_handler_);
+
+  if (rows.empty()) {
+    fetch->Write(
+        "<div class='pagespeed-images-empty'><h2>No image rewrites found</h2>"
+        "<p>Successful image rewrites will appear here. The message buffer "
+        "must be enabled, and this list only includes entries still retained "
+        "in that bounded buffer.</p></div></section>",
+        message_handler_);
+  } else {
+    fetch->Write(
+        "<div class='pagespeed-images-table-wrap'><table "
+        "class='pagespeed-images-table'><thead><tr>"
+        "<th>Date</th><th>Original</th><th>Format</th><th>Before</th>"
+        "<th>After</th><th>Saved</th><th>Compare</th>"
+        "</tr></thead><tbody>",
+        message_handler_);
+    for (const ImageRewriteRow& row : rows) {
+      GoogleString escaped_original, escaped_optimized, escaped_mime;
+      HtmlKeywords::Escape(row.original_url, &escaped_original);
+      HtmlKeywords::Escape(row.optimized_url, &escaped_optimized);
+      HtmlKeywords::Escape(row.output_mime_type, &escaped_mime);
+      int64 saved = row.original_bytes - row.optimized_bytes;
+      fetch->Write(
+          StrCat("<tr><td><time class='pagespeed-image-time' "
+                 "data-timestamp-ms='",
+                 Integer64ToString(row.timestamp_ms), "'>", "Loading date...",
+                 "</time></td><td class='pagespeed-image-url'><a href='",
+                 escaped_original,
+                 "' target='_blank' rel='noopener noreferrer' "
+                 "referrerpolicy='no-referrer' title='Open original image'>",
+                 escaped_original, "</a></td><td><code>", escaped_mime,
+                 "</code></td><td>", FormatDashboardBytes(row.original_bytes),
+                 "</td><td>", FormatDashboardBytes(row.optimized_bytes),
+                 "</td><td class='pagespeed-image-saved'>",
+                 FormatDashboardBytes(saved), "</td><td><details>"
+                 "<summary>Preview</summary>"
+                 "<div class='pagespeed-image-compare'>"
+                 "<figure><img loading='lazy' referrerpolicy='no-referrer' "
+                 "src='",
+                 escaped_original,
+                 "' alt='Original image'><figcaption>Original "
+                 "<a href='", escaped_original,
+                 "' target='_blank' rel='noopener noreferrer' "
+                 "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
+                 "<figure><img loading='lazy' referrerpolicy='no-referrer' "
+                 "src='",
+                 escaped_optimized, "' alt='Optimized image'><figcaption>",
+                 escaped_mime, " <a href='", escaped_optimized,
+                 "' target='_blank' rel='noopener noreferrer' "
+                 "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
+                 "</div></details></td></tr>"),
+          message_handler_);
+    }
+    fetch->Write("</tbody></table></div></section>", message_handler_);
+    fetch->Write(
+        "<script>(function(){var e=document.querySelectorAll("
+        "'.pagespeed-image-time');for(var i=0;i<e.length;i++){var t=Number("
+        "e[i].getAttribute('data-timestamp-ms'));if(t>0){e[i].textContent="
+        "new Date(t).toLocaleString();}}})();</script>",
+        message_handler_);
+  }
 }
 
 void AdminSite::GraphsHandler(const RewriteOptions& options, AdminSource source,
@@ -773,29 +902,34 @@ void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
     StringPieceVector messages;
     message_handler_->ParseMessageDumpIntoMessages(log, &messages);
     for (int i = 0, size = messages.size(); i < size; ++i) {
-      if (messages[i].length() > 0) {
-        switch (message_handler_->GetMessageType(messages[i])) {
+      StringPiece display_message = messages[i];
+      size_t detail_marker = display_message.find("\tPS_IMAGE_DETAIL\t");
+      if (detail_marker != StringPiece::npos) {
+        display_message = display_message.substr(0, detail_marker);
+      }
+      if (display_message.length() > 0) {
+        switch (message_handler_->GetMessageType(display_message)) {
           case kError: {
             HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(messages[i]),
+                message_handler_->ReformatMessage(display_message),
                 "color:red; margin:0;", fetch, message_handler_);
             break;
           }
           case kWarning: {
             HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(messages[i]),
+                message_handler_->ReformatMessage(display_message),
                 "color:brown; margin:0;", fetch, message_handler_);
             break;
           }
           case kFatal: {
             HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(messages[i]),
+                message_handler_->ReformatMessage(display_message),
                 "color:orange; margin:0;", fetch, message_handler_);
             break;
           }
           default: {
             HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(messages[i]), "margin:0;",
+                message_handler_->ReformatMessage(display_message), "margin:0;",
                 fetch, message_handler_);
           }
         }
@@ -866,6 +1000,8 @@ void AdminSite::AdminPage(
     StringPiece leaf = stripped_gurl.LeafSansQuery();
     if ((leaf == "dashboard") || leaf.empty()) {
       DashboardHandler(kPageSpeedAdmin, fetch, stats);
+    } else if (leaf == "images") {
+      ImagesHandler(kPageSpeedAdmin, fetch);
     } else if (leaf == "statistics") {
       StatisticsHandler(*options, kPageSpeedAdmin, fetch, stats);
     } else if (leaf == "stats_json") {

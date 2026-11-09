@@ -126,7 +126,26 @@ TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {
   EXPECT_THAT(buffer, ::testing::HasSubstr("JAVASCRIPT SAVED"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("CSS SAVED"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("IMAGE SAVED"));
+  EXPECT_THAT(buffer,
+              ::testing::HasSubstr("View recent image rewrites"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-admin-sidebar"));
+}
+
+TEST_F(AdminSiteTest, ImagesPageShowsRecordedRewriteAndComparison) {
+  message_handler()->Message(
+      kInfo,
+      "PS_IMAGE_DETAIL\t%lld\t%u\t%u\t%s\t%s\t%s",
+      static_cast<long long>(timer()->NowMs()), 10000u, 4000u, "image/webp",
+      "https://example.com/photo.jpg",
+      "https://example.com/photo.jpg.pagespeed.ic.abc.webp");
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->ImagesHandler(AdminSite::kPageSpeedAdmin, &fetch);
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Recently optimized images"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("https://example.com/photo.jpg"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("image/webp"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("6.0 KB"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-image-compare"));
 }
 // TODO(xqyin): Add unit tests for other methods in AdminSite.
 
