@@ -242,12 +242,10 @@ void ImageUrlEncoder::SetLibWebpLevel(
              (options.Enabled(RewriteOptions::kRecompressWebp) ||
               options.Enabled(RewriteOptions::kConvertToWebpLossless))) {
     libwebp_level = ResourceContext::LIBWEBP_LOSSY_LOSSLESS_ALPHA;
-  } else if ((request_properties.SupportsWebpRewrittenUrls() &&
-              (options.Enabled(RewriteOptions::kRecompressWebp) ||
-               options.Enabled(RewriteOptions::kConvertToWebpLossless) ||
-               options.Enabled(RewriteOptions::kConvertJpegToWebp))) ||
-             (request_properties.SupportsAvifRewrittenUrls() &&
-              options.Enabled(RewriteOptions::kConvertToAvif))) {
+  } else if (request_properties.SupportsWebpRewrittenUrls() &&
+             (options.Enabled(RewriteOptions::kRecompressWebp) ||
+              options.Enabled(RewriteOptions::kConvertToWebpLossless) ||
+              options.Enabled(RewriteOptions::kConvertJpegToWebp))) {
     libwebp_level = ResourceContext::LIBWEBP_LOSSY_ONLY;
   }
   resource_context->set_libwebp_level(libwebp_level);
@@ -278,6 +276,9 @@ void ImageUrlEncoder::SetWebpAndMobileUserAgent(const RewriteDriver& driver,
   if (context == nullptr) {
     return;
   }
+  context->set_supports_avif(
+      options->Enabled(RewriteOptions::kConvertToAvif) &&
+      driver.request_properties()->SupportsAvifRewrittenUrls());
 
   if (driver.options()->serve_rewritten_webp_urls_to_any_agent() &&
       !driver.fetch_url().empty() &&
@@ -330,6 +331,9 @@ GoogleString ImageUrlEncoder::CacheKeyFromResourceContext(
     case ResourceContext::LIBWEBP_ANIMATED:
       StrAppend(&user_agent_cache_key, kWebpAnimatedUserAgentKey);
       break;
+  }
+  if (resource_context.supports_avif()) {
+    StrAppend(&user_agent_cache_key, ".avif");
   }
   if (resource_context.mobile_user_agent()) {
     StrAppend(&user_agent_cache_key, kMobileUserAgentKey);

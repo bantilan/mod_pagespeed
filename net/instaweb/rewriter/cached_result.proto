@@ -174,7 +174,7 @@ message OutputPartitions {
 
 // Encapsulates all the data needed to rewrite a resource.  Any filter needing
 // additional information should add it as optional fields here.
-//   Next free tag: 9
+//   Next free tag: 10
 message ResourceContext {
   optional ImageDim desired_image_dims = 1;
   reserved 2;
@@ -198,4 +198,8 @@ message ResourceContext {
   // request must have "Save-Data: on" header to make this true. If true,
   // we'll add a unique identifier to the cache key.
   optional bool may_use_save_data_quality = 8;
+
+  // AVIF support is independent from WebP support and must partition image
+  // rewrite cache entries to avoid serving AVIF to WebP-only clients.
+  optional bool supports_avif = 9 [default = false];
 }

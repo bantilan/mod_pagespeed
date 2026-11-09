@@ -642,7 +642,7 @@ const UrlSegmentEncoder* ImageRewriteFilter::Context::encoder() const {
 GoogleString ImageRewriteFilter::Context::UserAgentCacheKey(
     const ResourceContext* resource_context) const {
   if (resource_context != NULL) {
-    // cache-key is sensitive to whether the UA supports webp or not.
+    // Cache keys vary independently for WebP and AVIF support.
     return ImageUrlEncoder::CacheKeyFromResourceContext(*resource_context);
   }
   return "";
@@ -909,7 +909,7 @@ Image::CompressionOptions* ImageRewriteFilter::ImageOptionsForLoadedResource(
       options->Enabled(RewriteOptions::kConvertJpegToWebp);
   image_options->convert_to_avif =
       options->Enabled(RewriteOptions::kConvertToAvif) &&
-      driver()->request_properties()->SupportsAvifRewrittenUrls();
+      resource_context.supports_avif();
   image_options->recompress_jpeg =
       options->Enabled(RewriteOptions::kRecompressJpeg);
   image_options->recompress_png =

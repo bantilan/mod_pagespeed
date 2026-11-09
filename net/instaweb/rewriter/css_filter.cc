@@ -770,7 +770,7 @@ GoogleString CssFilter::Context::UserAgentCacheKey(
     const ResourceContext* resource_context) const {
   GoogleString key;
   if (resource_context != nullptr) {
-    // CSS cache-key is sensitive to whether the UA supports webp or not.
+    // CSS cache keys vary independently for WebP and AVIF support.
     key = ImageUrlEncoder::CacheKeyFromResourceContext(*resource_context);
   }
   // The cache key we get from the image codec is not sufficient, as
