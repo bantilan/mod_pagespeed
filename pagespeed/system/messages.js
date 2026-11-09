@@ -111,7 +111,7 @@ pagespeed.Messages = function(opt_xhr) {
       '<p id="num" class="pagespeed-message-count" aria-live="polite"></p>';
 
   var logElement = document.getElementById('log');
-  document.body.insertBefore(wrapper, logElement);
+  logElement.parentNode.insertBefore(wrapper, logElement);
 
   this.update();
 };
