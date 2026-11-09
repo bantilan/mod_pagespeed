@@ -97,6 +97,50 @@ const Tab kTabs[] = {
     {"Graphs", "Graphs", "graphs", nullptr},
 };
 
+struct ImageRewriteRow {
+  int64 timestamp_ms;
+  int64 original_bytes;
+  int64 optimized_bytes;
+  GoogleString output_mime_type;
+  GoogleString original_url;
+  GoogleString optimized_url;
+};
+
+void ReadRecentImageRewrites(MessageHandler* message_handler, size_t max_rows,
+                             std::vector<ImageRewriteRow>* rows) {
+  GoogleString log;
+  StringWriter log_writer(&log);
+  if (!message_handler->Dump(&log_writer)) {
+    return;
+  }
+  StringPieceVector messages;
+  message_handler->ParseMessageDumpIntoMessages(log, &messages);
+  for (int i = static_cast<int>(messages.size()) - 1;
+       i >= 0 && rows->size() < max_rows; --i) {
+    StringPiece message = messages[i];
+    size_t marker = message.find("PS_IMAGE_DETAIL\t");
+    if (marker == StringPiece::npos) {
+      continue;
+    }
+    StringPieceVector fields;
+    SplitStringPieceToVector(message.substr(marker), "\t", &fields, true);
+    if (fields.size() != 7) {
+      continue;
+    }
+    ImageRewriteRow row;
+    if (!StringToInt64(fields[1], &row.timestamp_ms) ||
+        !StringToInt64(fields[2], &row.original_bytes) ||
+        !StringToInt64(fields[3], &row.optimized_bytes) ||
+        row.original_bytes < row.optimized_bytes) {
+      continue;
+    }
+    row.output_mime_type = fields[4].as_string();
+    row.original_url = fields[5].as_string();
+    row.optimized_url = fields[6].as_string();
+    rows->push_back(row);
+  }
+}
+
 int64 ReadVariable(const Statistics* stats, StringPiece name) {
   Variable* variable = stats->FindVariable(name);
   return variable == nullptr ? 0 : variable->Get();
@@ -137,6 +181,10 @@ GoogleString FormatDashboardUptime(int64 elapsed_ms) {
   }
   return StrCat(Integer64ToString(hours), "h ", Integer64ToString(minutes),
                 "m ", Integer64ToString(seconds), "s");
+}
+
+int DashboardPercent(int64 value, int64 total) {
+  return total <= 0 ? 0 : static_cast<int>(value * 100 / total);
 }
 
 // Controls the generation of an HTML Admin page.  Constructing it
@@ -355,22 +403,34 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
   int64 css_saved =
       css_saved_counter == nullptr ? 0 : css_saved_counter->Get();
   int64 image_saved = ReadVariable(stats, "image_rewrite_total_bytes_saved");
+  javascript_saved = std::max<int64>(0, javascript_saved);
+  css_saved = std::max<int64>(0, css_saved);
+  image_saved = std::max<int64>(0, image_saved);
   int64 total_saved = std::max<int64>(0, javascript_saved) +
                       std::max<int64>(0, css_saved) +
                       std::max<int64>(0, image_saved);
+  int64 javascript_rewrites =
+      ReadVariable(stats, "javascript_blocks_minified");
+  int64 css_rewrites = ReadVariable(stats, "css_filter_blocks_rewritten");
+  int64 image_rewrites = ReadVariable(stats, "image_rewrites");
+  int64 total_rewrites = javascript_rewrites + css_rewrites + image_rewrites;
   GoogleString uptime = FormatDashboardUptime(timer_->NowMs() - start_time_ms_);
+  int javascript_percent = DashboardPercent(javascript_saved, total_saved);
+  int css_percent = DashboardPercent(css_saved, total_saved);
+  int image_percent = DashboardPercent(image_saved, total_saved);
 
   fetch->Write(
       "<section class='pagespeed-dashboard'>"
       "<div class='pagespeed-dashboard-heading'>"
-      "<div><p class='pagespeed-dashboard-eyebrow'>OVERVIEW</p>"
+      "<div><p class='pagespeed-dashboard-eyebrow'>LIVE OVERVIEW</p>"
       "<h1>Performance dashboard</h1>"
-      "<p class='pagespeed-dashboard-description'>Cumulative totals "
-      "collected by "
-      "this PageSpeed instance.</p></div></div>"
+      "<p class='pagespeed-dashboard-description'>Optimization activity "
+      "and cumulative savings from this PageSpeed instance.</p></div>"
+      "<span class='pagespeed-dashboard-live'><i></i> INSTANCE ACTIVE</span>"
+      "</div>"
       "<div class='pagespeed-dashboard-grid'>"
       "<article class='pagespeed-dashboard-card pagespeed-dashboard-total'>"
-      "<div class='pagespeed-dashboard-card-label'>TOTAL BYTES SAVED</div>",
+      "<div class='pagespeed-dashboard-card-label'>TOTAL DATA SAVED</div>",
       message_handler_);
   fetch->Write(StrCat("<div class='pagespeed-dashboard-total-value'>",
                       FormatDashboardBytes(total_saved), "</div>"),
@@ -388,74 +448,139 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "<div class='pagespeed-dashboard-card-note'>Since this admin instance "
       "initialized</div></article>"
       "<article class='pagespeed-dashboard-card'>"
-      "<div class='pagespeed-dashboard-card-label'>JAVASCRIPT SAVED</div>",
+      "<div class='pagespeed-dashboard-card-label'>SUCCESSFUL REWRITES</div>",
       message_handler_);
   fetch->Write(
       StrCat("<div class='pagespeed-dashboard-value'>",
-             FormatDashboardBytes(std::max<int64>(0, javascript_saved)),
-             "</div></article>"
+             Integer64ToString(total_rewrites),
+             "</div><div class='pagespeed-dashboard-card-note'>Across image, "
+             "CSS, and JavaScript resources</div></article>"
              "<article class='pagespeed-dashboard-card'>"
-             "<div class='pagespeed-dashboard-card-label'>CSS SAVED</div>"
-             "<div class='pagespeed-dashboard-value'>",
-             FormatDashboardBytes(std::max<int64>(0, css_saved)),
-             "</div></article>"
-             "<article class='pagespeed-dashboard-card'>"
-             "<div class='pagespeed-dashboard-card-label'>IMAGE SAVED</div>"
+             "<div class='pagespeed-dashboard-card-label'>IMAGE REWRITES</div>"
              "<a class='pagespeed-dashboard-image-link' href='images'>"
              "<div class='pagespeed-dashboard-value'>",
-             FormatDashboardBytes(std::max<int64>(0, image_saved)),
-             "</div><span>View recent image rewrites</span></a>"
-             "</article></div>"
-             "<p class='pagespeed-dashboard-footnote'>Savings are "
-             "cumulative since the statistics counters were last "
-             "reset. They represent optimized resource bytes, not "
-             "a measurement of all network traffic.</p></section>"),
+             Integer64ToString(image_rewrites),
+             "</div><span>Inspect recent optimized images</span></a>"
+             "</article></div>"),
+      message_handler_);
+
+  fetch->Write(
+      "<div class='pagespeed-dashboard-panels'>"
+      "<section class='pagespeed-dashboard-panel'>"
+      "<div class='pagespeed-dashboard-panel-heading'><div><h2>Savings by "
+      "resource</h2><p>Cumulative optimized bytes since statistics reset</p>"
+      "</div><span class='pagespeed-dashboard-period'>LIFETIME</span></div>"
+      "<div class='pagespeed-dashboard-chart' role='img' aria-label='Savings "
+      "by resource: JavaScript, CSS, and images'>"
+      "<div class='pagespeed-dashboard-stack'>"
+      "<span class='pagespeed-dashboard-stack-js' style='width:",
+      message_handler_);
+  fetch->Write(StrCat(IntegerToString(javascript_percent), "%'></span>"
+                      "<span class='pagespeed-dashboard-stack-css' style='width:",
+                      IntegerToString(css_percent), "%'></span>"
+                      "<span class='pagespeed-dashboard-stack-image' "
+                      "style='width:",
+                      IntegerToString(image_percent), "%'></span></div>"),
+               message_handler_);
+
+  const char* labels[] = {"JavaScript", "CSS", "Images"};
+  const char* classes[] = {"js", "css", "image"};
+  int64 values[] = {javascript_saved, css_saved, image_saved};
+  int percentages[] = {javascript_percent, css_percent, image_percent};
+  for (int i = 0; i < arraysize(labels); ++i) {
+    fetch->Write(StrCat("<div class='pagespeed-dashboard-breakdown-row'>"
+                        "<span class='pagespeed-dashboard-legend-dot "
+                        "pagespeed-dashboard-legend-",
+                        classes[i], "'></span><span>", labels[i],
+                        "</span><strong>",
+                        FormatDashboardBytes(values[i]), "</strong><small>",
+                        IntegerToString(percentages[i]), "%</small></div>"),
+                 message_handler_);
+  }
+  fetch->Write(
+      "<p class='pagespeed-dashboard-footnote'>Savings are cumulative since "
+      "the statistics counters were last reset. They represent optimized "
+      "resource bytes, not a measurement of all network traffic.</p>"
+      "</section><section class='pagespeed-dashboard-panel'>"
+      "<div class='pagespeed-dashboard-panel-heading'><div>"
+      "<h2>Rewrite activity</h2><p>Successful resource rewrites by type</p>"
+      "</div></div><div class='pagespeed-dashboard-activity'>",
+      message_handler_);
+  const char* activity_labels[] = {"Images", "JavaScript", "CSS"};
+  const char* activity_classes[] = {"image", "js", "css"};
+  int64 activity_values[] = {image_rewrites, javascript_rewrites, css_rewrites};
+  for (int i = 0; i < arraysize(activity_labels); ++i) {
+    int percent = DashboardPercent(activity_values[i], total_rewrites);
+    fetch->Write(StrCat("<div class='pagespeed-dashboard-activity-row'>"
+                        "<span class='pagespeed-dashboard-activity-icon "
+                        "pagespeed-dashboard-activity-",
+                        activity_classes[i], "'>",
+                        i == 0 ? "IM" : (i == 1 ? "JS" : "#"),
+                        "</span><div class='pagespeed-dashboard-activity-main'>"
+                        "<div><strong>", activity_labels[i], "</strong>"
+                        "<span>", Integer64ToString(activity_values[i]),
+                        " rewrites</span></div><span class='pagespeed-dashboard-"
+                        "activity-track'><i style='width:",
+                        IntegerToString(percent), "%'></i></span></div></div>"),
+                 message_handler_);
+  }
+  fetch->Write(
+      "</div></section></div><section class='pagespeed-dashboard-panel "
+      "pagespeed-dashboard-recent'><div class='pagespeed-dashboard-panel-"
+      "heading'><div><h2>Recent image optimization</h2><p>Latest image assets "
+      "rewritten by PageSpeed</p></div><a href='images'>Browse image history "
+      "&rarr;</a></div>",
+      message_handler_);
+  std::vector<ImageRewriteRow> recent_rows;
+  ReadRecentImageRewrites(message_handler_, 4, &recent_rows);
+  if (recent_rows.empty()) {
+    fetch->Write(
+        "<div class='pagespeed-dashboard-recent-empty'>Successful image "
+        "rewrites will appear here while their entries remain in the bounded "
+        "message buffer.</div>",
+        message_handler_);
+  } else {
+    fetch->Write(
+        "<div class='pagespeed-dashboard-recent-wrap'><table "
+        "class='pagespeed-dashboard-recent-table'><thead><tr><th>IMAGE</th>"
+        "<th>FORMAT</th><th>BEFORE</th><th>AFTER</th><th>SAVED</th><th>TIME</th>"
+        "</tr></thead><tbody>",
+        message_handler_);
+    for (const ImageRewriteRow& row : recent_rows) {
+      GoogleString escaped_url, escaped_mime;
+      HtmlKeywords::Escape(row.original_url, &escaped_url);
+      HtmlKeywords::Escape(row.output_mime_type, &escaped_mime);
+      int64 saved = row.original_bytes - row.optimized_bytes;
+      fetch->Write(
+          StrCat("<tr><td class='pagespeed-dashboard-recent-url' title='",
+                 escaped_url, "'>", escaped_url, "</td><td><code>",
+                 escaped_mime, "</code></td><td>",
+                 FormatDashboardBytes(row.original_bytes), "</td><td>",
+                 FormatDashboardBytes(row.optimized_bytes),
+                 "</td><td class='pagespeed-dashboard-recent-saved'>",
+                 FormatDashboardBytes(saved),
+                 "</td><td><time class='pagespeed-image-time' "
+                 "data-timestamp-ms='", Integer64ToString(row.timestamp_ms),
+                 "'>Loading date...</time></td></tr>"),
+          message_handler_);
+    }
+    fetch->Write("</tbody></table></div>", message_handler_);
+  }
+  fetch->Write(
+      "</section></section><script>(function(){var e=document.querySelectorAll("
+      "'.pagespeed-image-time');for(var i=0;i<e.length;i++){var t=Number("
+      "e[i].getAttribute('data-timestamp-ms'));if(t>0){e[i].textContent="
+      "new Date(t).toLocaleString();}}})();</script>",
       message_handler_);
 }
 
 void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
-  struct ImageRewriteRow {
-    int64 timestamp_ms;
-    int64 original_bytes;
-    int64 optimized_bytes;
-    GoogleString output_mime_type;
-    GoogleString original_url;
-    GoogleString optimized_url;
-  };
-
-  GoogleString log;
-  StringWriter log_writer(&log);
   std::vector<ImageRewriteRow> rows;
   int64 total_saved = 0;
   static const size_t kMaxRows = 100;
-  if (message_handler_->Dump(&log_writer)) {
-    StringPieceVector messages;
-    message_handler_->ParseMessageDumpIntoMessages(log, &messages);
-    for (int i = static_cast<int>(messages.size()) - 1;
-         i >= 0 && rows.size() < kMaxRows; --i) {
-      StringPiece message = messages[i];
-      size_t marker = message.find("PS_IMAGE_DETAIL\t");
-      if (marker == StringPiece::npos) {
-        continue;
-      }
-      StringPieceVector fields;
-      SplitStringPieceToVector(message.substr(marker), "\t", &fields, true);
-      if (fields.size() != 7) {
-        continue;
-      }
-      ImageRewriteRow row;
-      if (!StringToInt64(fields[1], &row.timestamp_ms) ||
-          !StringToInt64(fields[2], &row.original_bytes) ||
-          !StringToInt64(fields[3], &row.optimized_bytes) ||
-          row.original_bytes < row.optimized_bytes) {
-        continue;
-      }
-      row.output_mime_type = fields[4].as_string();
-      row.original_url = fields[5].as_string();
-      row.optimized_url = fields[6].as_string();
-      total_saved += row.original_bytes - row.optimized_bytes;
-      rows.push_back(row);
-    }
+  ReadRecentImageRewrites(message_handler_, kMaxRows, &rows);
+  for (const ImageRewriteRow& row : rows) {
+    total_saved += row.original_bytes - row.optimized_bytes;
   }
 
   AdminHtml admin_html("images", "", source, timer_, fetch,
@@ -485,11 +610,24 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
         message_handler_);
   } else {
     fetch->Write(
+        "<div class='pagespeed-images-toolbar'><label "
+        "class='pagespeed-images-search-wrap'><input type='search' "
+        "id='pagespeed-images-search' placeholder='Search image URL or format' "
+        "aria-label='Search image URL or format'></label><div>"
+        "<label class='pagespeed-images-filter-label'>Format "
+        "<select id='pagespeed-images-format' aria-label='Filter by format'>"
+        "<option value='all'>All formats</option><option value='image/avif'>"
+        "AVIF</option><option value='image/webp'>WebP</option>"
+        "<option value='image/jpeg'>JPEG</option><option value='image/png'>"
+        "PNG</option></select></label><label class='pagespeed-images-filter-label'>"
+        "Sort <select id='pagespeed-images-sort' aria-label='Sort images'>"
+        "<option value='newest'>Newest first</option><option value='saved'>"
+        "Most saved</option></select></label></div></div>"
         "<div class='pagespeed-images-table-wrap'><table "
         "class='pagespeed-images-table'><thead><tr>"
         "<th>Date</th><th>Original</th><th>Format</th><th>Before</th>"
-        "<th>After</th><th>Saved</th><th>Compare</th>"
-        "</tr></thead><tbody>",
+        "<th>After</th><th>Saved</th><th>Preview</th>"
+        "</tr></thead><tbody id='pagespeed-images-rows'>",
         message_handler_);
     for (const ImageRewriteRow& row : rows) {
       GoogleString escaped_original, escaped_optimized, escaped_mime;
@@ -499,9 +637,13 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
       int64 saved = row.original_bytes - row.optimized_bytes;
       GoogleString row_html;
       StrAppend(&row_html,
-                "<tr><td><time class='pagespeed-image-time' "
-                 "data-timestamp-ms='",
-                Integer64ToString(row.timestamp_ms), "'>", "Loading date...",
+                "<tr data-format='", escaped_mime,
+                "' data-timestamp-ms='",
+                Integer64ToString(row.timestamp_ms), "' data-saved-bytes='",
+                Integer64ToString(saved),
+                "'><td><time class='pagespeed-image-time' ");
+      StrAppend(&row_html, "data-timestamp-ms='",
+                Integer64ToString(row.timestamp_ms), "'>Loading date...",
                 "</time></td><td class='pagespeed-image-url'><a href='");
       StrAppend(&row_html, escaped_original,
                 "' target='_blank' rel='noopener noreferrer' "
@@ -512,31 +654,103 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
       StrAppend(&row_html, FormatDashboardBytes(row.optimized_bytes),
                 "</td><td class='pagespeed-image-saved'>");
       StrAppend(&row_html, FormatDashboardBytes(saved),
-                "</td><td><details><summary>Preview</summary>"
-                "<div class='pagespeed-image-compare'>"
-                "<figure><img loading='lazy' referrerpolicy='no-referrer' "
-                "src='");
-      StrAppend(&row_html, escaped_original,
-                "' alt='Original image'><figcaption>Original "
-                "<a href='", escaped_original,
-                "' target='_blank' rel='noopener noreferrer' "
-                "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
-                "<figure><img loading='lazy' referrerpolicy='no-referrer' "
-                "src='");
+                "</td><td><button type='button' class='pagespeed-image-"
+                "preview-button' data-original-url='");
+      StrAppend(&row_html, escaped_original, "' data-optimized-url='");
       StrAppend(&row_html, escaped_optimized,
-                "' alt='Optimized image'><figcaption>", escaped_mime,
-                " <a href='", escaped_optimized,
-                "' target='_blank' rel='noopener noreferrer' "
-                "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
-                "</div></details></td></tr>");
+                "' data-format='", escaped_mime, "' data-original-bytes='");
+      StrAppend(&row_html, Integer64ToString(row.original_bytes),
+                "' data-optimized-bytes='");
+      StrAppend(&row_html, Integer64ToString(row.optimized_bytes),
+                "'>Compare</button></td></tr>");
       fetch->Write(row_html, message_handler_);
     }
-    fetch->Write("</tbody></table></div></section>", message_handler_);
     fetch->Write(
-        "<script>(function(){var e=document.querySelectorAll("
-        "'.pagespeed-image-time');for(var i=0;i<e.length;i++){var t=Number("
-        "e[i].getAttribute('data-timestamp-ms'));if(t>0){e[i].textContent="
-        "new Date(t).toLocaleString();}}})();</script>",
+        "</tbody></table></div><div class='pagespeed-images-list-footer'>"
+        "<span id='pagespeed-images-result-count'></span><span>Entries are "
+        "limited to the message buffer's recent history.</span></div>"
+        "<div id='pagespeed-images-empty-filter' class='pagespeed-images-empty-"
+        "filter' style='display:none'>No images match those filters.</div>"
+        "<div class='pagespeed-image-modal' "
+        "id='pagespeed-image-modal' role='dialog' aria-modal='true' "
+        "aria-labelledby='pagespeed-image-modal-title' aria-hidden='true'>"
+        "<div class='pagespeed-image-modal-card'><div class='pagespeed-image-"
+        "modal-header'><div><h2 id='pagespeed-image-modal-title'>Image "
+        "comparison</h2><p id='pagespeed-image-modal-meta'></p></div>"
+        "<button type='button' class='pagespeed-image-modal-close' "
+        "aria-label='Close image comparison'>&times;</button></div>"
+        "<div class='pagespeed-image-modal-compare'><figure><img "
+        "id='pagespeed-image-modal-original' alt='Original image' "
+        "referrerpolicy='no-referrer'><figcaption><span>Original</span>"
+        "<span><strong id='pagespeed-image-modal-original-size'></strong> "
+        "<a id='pagespeed-image-modal-original-link' target='_blank' "
+        "rel='noopener noreferrer' referrerpolicy='no-referrer'>Open</a></span>"
+        "</figcaption>"
+        "</figure><figure><img id='pagespeed-image-modal-optimized' "
+        "alt='Optimized image' referrerpolicy='no-referrer'><figcaption>"
+        "<span><span id='pagespeed-image-modal-format'></span><br><strong "
+        "id='pagespeed-image-modal-optimized-size'></strong></span>"
+        "<a id='pagespeed-image-modal-optimized-link' target='_blank' "
+        "rel='noopener noreferrer' referrerpolicy='no-referrer'>Open</a>"
+        "</figcaption>"
+        "</figure></div><p class='pagespeed-image-modal-saved' "
+        "id='pagespeed-image-modal-saved'></p></div></div></section>",
+        message_handler_);
+    fetch->Write(
+        "<script>(function(){var times=document.querySelectorAll("
+        "'.pagespeed-image-time');for(var i=0;i<times.length;i++){var t=Number("
+        "times[i].getAttribute('data-timestamp-ms'));if(t>0){times[i].textContent="
+        "new Date(t).toLocaleString();}}var modal=document.getElementById("
+        "'pagespeed-image-modal');var rows=document.getElementById("
+        "'pagespeed-images-rows');if(rows){var search=document.getElementById("
+        "'pagespeed-images-search');var format=document.getElementById("
+        "'pagespeed-images-format');var sort=document.getElementById("
+        "'pagespeed-images-sort');var entries=Array.prototype.slice.call("
+        "rows.querySelectorAll('tr'));var count=document.getElementById("
+        "'pagespeed-images-result-count');var empty=document.getElementById("
+        "'pagespeed-images-empty-filter');function filterRows(){var query=search."
+        "value.toLowerCase();var selected=format.value;entries.sort(function(a,b){"
+        "return sort.value==='saved'?Number(b.getAttribute('data-saved-bytes'))-"
+        "Number(a.getAttribute('data-saved-bytes')):Number(b.getAttribute("
+        "'data-timestamp-ms'))-Number(a.getAttribute('data-timestamp-ms'));});"
+        "var visible=0;for(var j=0;j<entries.length;j++){var match=(selected==="
+        "'all'||entries[j].getAttribute('data-format')===selected)&&"
+        "entries[j].textContent.toLowerCase().indexOf(query)!==-1;entries[j]."
+        "style.display=match?'':'none';if(match)visible++;rows.appendChild("
+        "entries[j]);}count.textContent='Showing '+visible+' of '+entries.length+"
+        "' rewrites';empty.style.display=visible?'none':'block';}search.addEventListener("
+        "'input',filterRows);format.addEventListener('change',filterRows);sort."
+        "addEventListener('change',filterRows);filterRows();}if(!modal)return;"
+        "var close=modal.querySelector("
+        "'.pagespeed-image-modal-close');function hide(){modal.classList.remove("
+        "'is-open');modal.setAttribute('aria-hidden','true');document.body."
+        "style.overflow='';if(lastTrigger)lastTrigger.focus();}var lastTrigger=null;"
+        "document.addEventListener('click',function(event){"
+        "var button=event.target.closest('.pagespeed-image-preview-button');"
+        "if(button){var original=button.getAttribute('data-original-url');"
+        "var optimized=button.getAttribute('data-optimized-url');var format="
+        "button.getAttribute('data-format');var before=Number(button.getAttribute("
+        "'data-original-bytes'));var after=Number(button.getAttribute("
+        "'data-optimized-bytes'));document.getElementById("
+        "'pagespeed-image-modal-title').textContent=original;document.getElementById("
+        "'pagespeed-image-modal-meta').textContent='Original and optimized image';"
+        "document.getElementById('pagespeed-image-modal-original').src=original;"
+        "document.getElementById('pagespeed-image-modal-optimized').src=optimized;"
+        "document.getElementById('pagespeed-image-modal-original-link').href=original;"
+        "document.getElementById('pagespeed-image-modal-optimized-link').href=optimized;"
+        "document.getElementById('pagespeed-image-modal-format').textContent=format;"
+        "document.getElementById('pagespeed-image-modal-original-size').textContent="
+        "before.toLocaleString()+' bytes';document.getElementById("
+        "'pagespeed-image-modal-optimized-size').textContent=after.toLocaleString()"
+        "+' bytes';document.getElementById('pagespeed-image-modal-saved').textContent="
+        "'Saved '+Math.max(0,before-after).toLocaleString()+' bytes ('+"
+        "(before>0?Math.round((before-after)*100/before):0)+'% smaller)';modal."
+        "classList.add('is-open');modal.setAttribute('aria-hidden','false');"
+        "document.body.style.overflow='hidden';lastTrigger=button;close.focus();"
+        "return;}if(event."
+        "target===modal||event.target===close){hide();}});document.addEventListener("
+        "'keydown',function(event){if(event.key==='Escape'&&modal.classList."
+        "contains('is-open'))hide();});})();</script>",
         message_handler_);
   }
 }

@@ -116,18 +116,30 @@ TEST_F(AdminSiteTest, ColorMessagesInHistoryPage) {
 }
 
 TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {
+  message_handler()->Message(
+      kInfo, "PS_IMAGE_DETAIL\t%lld\t%u\t%u\t%s\t%s\t%s",
+      static_cast<long long>(timer()->NowMs()), 10000u, 4000u, "image/webp",
+      "https://example.com/recent.jpg",
+      "https://example.com/recent.jpg.pagespeed.ic.abc.webp");
   GoogleString buffer;
   StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
   admin_site_->DashboardHandler(AdminSite::kPageSpeedAdmin, &fetch,
                                 factory()->statistics());
   EXPECT_THAT(buffer, ::testing::HasSubstr("Performance dashboard"));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("TOTAL BYTES SAVED"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("TOTAL DATA SAVED"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("PAGESPEED UPTIME"));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("JAVASCRIPT SAVED"));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("CSS SAVED"));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("IMAGE SAVED"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("JavaScript</span>"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr(">CSS</span>"));
   EXPECT_THAT(buffer,
-              ::testing::HasSubstr("View recent image rewrites"));
+              ::testing::HasSubstr("IMAGE REWRITES"));
+  EXPECT_THAT(buffer,
+              ::testing::HasSubstr("Inspect recent optimized images"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Savings by resource"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Rewrite activity"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Recent image optimization"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("https://example.com/recent.jpg"));
+  EXPECT_THAT(buffer,
+              ::testing::HasSubstr("pagespeed-dashboard-stack-image"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-admin-sidebar"));
 }
 
@@ -145,7 +157,10 @@ TEST_F(AdminSiteTest, ImagesPageShowsRecordedRewriteAndComparison) {
   EXPECT_THAT(buffer, ::testing::HasSubstr("https://example.com/photo.jpg"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("image/webp"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("6.0 KB"));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-image-compare"));
+  EXPECT_THAT(buffer,
+              ::testing::HasSubstr("pagespeed-image-preview-button"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-image-modal"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Image comparison"));
 }
 // TODO(xqyin): Add unit tests for other methods in AdminSite.
 
