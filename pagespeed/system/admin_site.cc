@@ -497,36 +497,39 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
       HtmlKeywords::Escape(row.optimized_url, &escaped_optimized);
       HtmlKeywords::Escape(row.output_mime_type, &escaped_mime);
       int64 saved = row.original_bytes - row.optimized_bytes;
-      fetch->Write(
-          StrCat("<tr><td><time class='pagespeed-image-time' "
+      GoogleString row_html;
+      StrAppend(&row_html,
+                "<tr><td><time class='pagespeed-image-time' "
                  "data-timestamp-ms='",
-                 Integer64ToString(row.timestamp_ms), "'>", "Loading date...",
-                 "</time></td><td class='pagespeed-image-url'><a href='",
-                 escaped_original,
-                 "' target='_blank' rel='noopener noreferrer' "
-                 "referrerpolicy='no-referrer' title='Open original image'>",
-                 escaped_original, "</a></td><td><code>", escaped_mime,
-                 "</code></td><td>", FormatDashboardBytes(row.original_bytes),
-                 "</td><td>", FormatDashboardBytes(row.optimized_bytes),
-                 "</td><td class='pagespeed-image-saved'>",
-                 FormatDashboardBytes(saved), "</td><td><details>"
-                 "<summary>Preview</summary>"
-                 "<div class='pagespeed-image-compare'>"
-                 "<figure><img loading='lazy' referrerpolicy='no-referrer' "
-                 "src='",
-                 escaped_original,
-                 "' alt='Original image'><figcaption>Original "
-                 "<a href='", escaped_original,
-                 "' target='_blank' rel='noopener noreferrer' "
-                 "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
-                 "<figure><img loading='lazy' referrerpolicy='no-referrer' "
-                 "src='",
-                 escaped_optimized, "' alt='Optimized image'><figcaption>",
-                 escaped_mime, " <a href='", escaped_optimized,
-                 "' target='_blank' rel='noopener noreferrer' "
-                 "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
-                 "</div></details></td></tr>"),
-          message_handler_);
+                Integer64ToString(row.timestamp_ms), "'>", "Loading date...",
+                "</time></td><td class='pagespeed-image-url'><a href='");
+      StrAppend(&row_html, escaped_original,
+                "' target='_blank' rel='noopener noreferrer' "
+                "referrerpolicy='no-referrer' title='Open original image'>",
+                escaped_original, "</a></td><td><code>", escaped_mime,
+                "</code></td><td>", FormatDashboardBytes(row.original_bytes),
+                "</td><td>");
+      StrAppend(&row_html, FormatDashboardBytes(row.optimized_bytes),
+                "</td><td class='pagespeed-image-saved'>");
+      StrAppend(&row_html, FormatDashboardBytes(saved),
+                "</td><td><details><summary>Preview</summary>"
+                "<div class='pagespeed-image-compare'>"
+                "<figure><img loading='lazy' referrerpolicy='no-referrer' "
+                "src='");
+      StrAppend(&row_html, escaped_original,
+                "' alt='Original image'><figcaption>Original "
+                "<a href='", escaped_original,
+                "' target='_blank' rel='noopener noreferrer' "
+                "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
+                "<figure><img loading='lazy' referrerpolicy='no-referrer' "
+                "src='");
+      StrAppend(&row_html, escaped_optimized,
+                "' alt='Optimized image'><figcaption>", escaped_mime,
+                " <a href='", escaped_optimized,
+                "' target='_blank' rel='noopener noreferrer' "
+                "referrerpolicy='no-referrer'>Open</a></figcaption></figure>"
+                "</div></details></td></tr>");
+      fetch->Write(row_html, message_handler_);
     }
     fetch->Write("</tbody></table></div></section>", message_handler_);
     fetch->Write(
