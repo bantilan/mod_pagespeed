@@ -139,7 +139,12 @@ void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
   double perc = 0;
   double cumulative_perc = 0;
   // Write prefix of the table.
-  writer->Write("<table>", handler);
+  writer->Write(
+      "<div class='pagespeed-admin-table-wrap'><table class='"
+      "pagespeed-admin-data-table pagespeed-histogram-buckets'>"
+      "<thead><tr><th colspan='3'>Bucket range</th><th>Count</th>"
+      "<th>Share</th><th>Cumulative</th><th>Distribution</th></tr></thead><tbody>",
+      handler);
   for (int i = 0, n = NumBuckets(); i < n; ++i) {
     double value = BucketCount(i);
     if (value == 0) {
@@ -171,7 +176,7 @@ void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
     writer->Write(output, handler);
   }
   // Write suffix of the table.
-  writer->Write("</table>", handler);
+  writer->Write("</tbody></table></div>", handler);
 }
 
 void Histogram::Render(int index, Writer* writer, MessageHandler* handler) {
@@ -203,25 +208,25 @@ UpDownCounter* Statistics::AddGlobalUpDownCounter(const StringPiece& name) {
 namespace {
 
 const char kHistogramProlog[] =
-    "<div>\n"
-    "  <table>\n"
+    "<div class='pagespeed-admin-table-wrap'>\n"
+    "  <table class='pagespeed-admin-data-table pagespeed-histogram-table'>\n"
     "    <thead><tr>\n"
-    "      <td>Histogram Name (click to view)</td>\n"
-    "      <td>Count</td>\n"
-    "      <td>Avg</td>\n"
-    "      <td>StdDev</td>\n"
-    "      <td>Min</td>\n"
-    "      <td>Median</td>\n"
-    "      <td>Max</td>\n"
-    "      <td>90%</td>\n"
-    "      <td>95%</td>\n"
-    "      <td>99%</td>\n"
+    "      <th>Histogram</th>\n"
+    "      <th>Count</th>\n"
+    "      <th>Average</th>\n"
+    "      <th>Std. Dev.</th>\n"
+    "      <th>Min</th>\n"
+    "      <th>Median</th>\n"
+    "      <th>Max</th>\n"
+    "      <th>90th</th>\n"
+    "      <th>95th</th>\n"
+    "      <th>99th</th>\n"
     "    </tr></thead><tbody>\n";
 
 const char kHistogramRowFormat[] =
     "      <tr id='hist_row_%d'>\n"
-    "        <td><label><input type='radio' name='choose_histogram'%s\n"
-    "                   onchange='setHistogram(%d)'>%s</label></td>\n"
+    "        <td><button type='button' class='pagespeed-histogram-select'\n"
+    "                   onclick='setHistogram(%d)' aria-pressed='%s'>%s</button></td>\n"
     "        <td>%.0f</td><td>%.1f</td><td>%.1f</td>\n"  // count, avg, stddev
     "        <td>%.0f</td><td>%.0f</td><td>%.0f</td>\n"  // min, median, max
     "        <td>%.0f</td><td>%.0f</td><td>%.0f</td>\n"  // 90%, 95%, 99%
@@ -246,11 +251,15 @@ const char kHistogramScript[] =
     "    }\n"
     "    var row = document.getElementById('hist_row_' + currentHistogram);\n"
     "    if (row) {\n"
-    "      row.style.backgroundColor = 'white';\n"
+    "      row.className = '';\n"
+    "      var button = row.querySelector('button');\n"
+    "      if (button) button.setAttribute('aria-pressed', 'false');\n"
     "    }\n"
     "    row = document.getElementById('hist_row_' + id);\n"
     "    if (row) {\n"
-    "      row.style.backgroundColor = 'yellow';\n"
+    "      row.className = 'pagespeed-histogram-selected';\n"
+    "      var button = row.querySelector('button');\n"
+    "      if (button) button.setAttribute('aria-pressed', 'true');\n"
     "    }\n"
     "    currentHistogram = id;\n"
     "  }\n"
@@ -323,8 +332,8 @@ GoogleString Histogram::HtmlTableRow(const GoogleString& title, int index) {
   return StringPrintf(
       kHistogramRowFormat,
       index,
-      (index == 0) ? " selected" : "",
       index,
+      (index == 0) ? "true" : "false",
       title.c_str(),
       CountInternal(),
       AverageInternal(),

@@ -23,13 +23,14 @@
 var x = require('casper').selectXPath;
 
 casper.test.begin('Statistics page can load and filter works.',
-                  12, function(test) {
+                  14, function(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
   casper.start('http://localhost/pagespeed_admin/statistics', function() {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
+    test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'LIVE METRICS');
   });
 
   casper.then(function() {
@@ -81,7 +82,8 @@ casper.test.begin('Statistics page can load and filter works.',
     stats_arr = this.evaluate(function() {
       return document.querySelector('#stat').innerHTML.split('<td');
     });
-    test.assertEquals(stats_arr.length, 4);
+    test.assertEquals(stats_arr.length, 1);
+    test.assertSelectorHasText('#stat', 'No metrics match this filter.');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });
@@ -89,13 +91,14 @@ casper.test.begin('Statistics page can load and filter works.',
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Configuration Page', 2, function suite(test) {
+casper.test.begin('Check Configuration Page', 3, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
   casper.start('http://localhost/pagespeed_admin/config', function() {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
+    test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'ACTIVE SETTINGS');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });
@@ -103,13 +106,15 @@ casper.test.begin('Check Configuration Page', 2, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Histograms Page', 2, function suite(test) {
+casper.test.begin('Check Histograms Page', 4, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
   casper.start('http://localhost/pagespeed_admin/histograms', function() {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
+    test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'DISTRIBUTIONS');
+    test.assertNotExists('input[name="choose_histogram"]');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });
@@ -117,7 +122,7 @@ casper.test.begin('Check Histograms Page', 2, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Metadata Caches Page', 2, function suite(test) {
+casper.test.begin('Check Metadata Caches Page', 3, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
@@ -126,6 +131,8 @@ casper.test.begin('Check Metadata Caches Page', 2, function suite(test) {
       function() {
         // Check that the page loaded properly with no errors.
         test.assertEquals(errors, []);
+        test.assertSelectorHasText('.pagespeed-dashboard-eyebrow',
+                                   'CACHE INSPECTION');
       });
 
   casper.then(function() { test.assertEquals(errors, []); });
@@ -166,13 +173,14 @@ casper.test.begin('Check Cache Structure Page', 6, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Console Page', 2, function suite(test) {
+casper.test.begin('Check Console Page', 3, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
   casper.start('http://localhost/pagespeed_admin/console', function() {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
+    test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'OPERATIONS');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });
@@ -180,13 +188,14 @@ casper.test.begin('Check Console Page', 2, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Message History Page', 2, function suite(test) {
+casper.test.begin('Check Message History Page', 3, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
   casper.start('http://localhost/pagespeed_admin/message_history', function() {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
+    test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'EVENT LOG');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });
@@ -194,13 +203,14 @@ casper.test.begin('Check Message History Page', 2, function suite(test) {
   casper.run(function() { test.done(); });
 });
 
-casper.test.begin('Check Graphs Page', 2, function suite(test) {
+casper.test.begin('Check Graphs Page', 3, function suite(test) {
   errors = [];
   casper.on('page.error', function(msg, trace) { errors.push(msg); });
 
   casper.start('http://localhost/pagespeed_admin/graphs', function() {
     // Check that the page loaded properly with no errors.
     test.assertEquals(errors, []);
+    test.assertSelectorHasText('.pagespeed-dashboard-eyebrow', 'TRENDS');
   });
 
   casper.then(function() { test.assertEquals(errors, []); });

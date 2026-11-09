@@ -90,7 +90,7 @@ class AdminSiteTest : public CustomRewriteTestBase<SystemRewriteOptions> {
   scoped_ptr<AdminSite> admin_site_;
 };
 
-TEST_F(AdminSiteTest, ColorMessagesInHistoryPage) {
+TEST_F(AdminSiteTest, StructuredMessagesInHistoryPage) {
   EXPECT_EQ(message_handler(), admin_site_->MessageHandlerForTesting());
   // Due to the size limit to the SharedCircularBuffer, the earliest message
   // in the buffer may be incomplete. In order to always display complete
@@ -103,16 +103,16 @@ TEST_F(AdminSiteTest, ColorMessagesInHistoryPage) {
   message_handler()->Message(kInfo, "Test for %s", "Infos");
   GoogleString buffer;
   StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
-  static const char kColorTemplate[] = "color:%s; margin:0;";
   // The value of the first argument AdminSite::AdminSource
   // does not matter in this test. So we just test for kPageSpeedAdmin here.
   admin_site_->MessageHistoryHandler(*(rewrite_driver()->options()),
                                      AdminSite::kPageSpeedAdmin, &fetch);
-  EXPECT_THAT(
-      buffer, ::testing::HasSubstr(StringPrintf(kColorTemplate, "red")));
-  EXPECT_THAT(
-      buffer, ::testing::HasSubstr(StringPrintf(kColorTemplate, "brown")));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("style=\"margin:0;\""));
+  EXPECT_THAT(buffer, ::testing::HasSubstr(
+                          "class='pagespeed-message-entry' data-severity='error'"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr(
+                          "class='pagespeed-message-entry' data-severity='warning'"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Test for Errors"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Test for Warnings"));
 }
 
 TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {

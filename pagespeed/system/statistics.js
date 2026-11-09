@@ -127,14 +127,13 @@ pagespeed.Statistics = function(opt_xhr) {
   // The UI table of auto-refresh and filtering.
   var uiTable = document.createElement('div');
   uiTable.id = 'ui-div';
+  uiTable.className = 'pagespeed-stat-toolbar';
   uiTable.innerHTML =
-      '<table id="ui-table" border=1 style="float:left; border-collapse: ' +
-      'collapse;border-color:silver;"><tr valign="center">' +
-      '<td>Auto refresh (every 5 seconds): <input type="checkbox" ' +
-      'id="auto-refresh" ' + (this.autoRefresh_ ? 'checked' : '') + '></td>' +
-      '<td>&nbsp;&nbsp;&nbsp;&nbsp;Filter: ' +
-      '<input id="text-filter" type="text" size="70"></td>' +
-      '</tr></table>';
+      '<label>Auto refresh <input type="checkbox" id="auto-refresh"></label>' +
+      '<label class="pagespeed-stat-filter">Filter <input id="text-filter" ' +
+      'type="search" placeholder="Search metrics"></label>' +
+      '<label>Sort by activity <input type="checkbox" id="sort-freq">' +
+      '</label>';
   wrapper.appendChild(uiTable);
 
   var numElement = document.createElement('div');
@@ -143,6 +142,9 @@ pagespeed.Statistics = function(opt_xhr) {
   wrapper.appendChild(numElement);
 
   document.body.insertBefore(wrapper, document.getElementById('stat'));
+
+  goog.events.listen(document.getElementById('sort-freq'), 'change',
+                     goog.bind(this.toggleSorting, this));
 
   this.updateMessageCount();
 };
@@ -226,48 +228,118 @@ pagespeed.Statistics.prototype.update = function() {
   }
   this.updateMessageCount(messages.length);
 
-  // From observation, it's much slower to add the table header in the
-  // constructor and update the table rows when refreshing the page.
-  // So we recreate the table here every time we call this.update().
-  var table = document.createElement('table');
-  for (var i = 0; i < messages.length; ++i) {
-    var row = table.insertRow(-1);
-    var cell = row.insertCell(0);
-    cell.textContent = messages[i].name;
-    cell.className = 'pagespeed-stats-name';
-    cell = row.insertCell(1);
-    cell.textContent = messages[i].value;
-    cell.className = 'pagespeed-stats-value';
-    cell = row.insertCell(2);
-    cell.textContent =
-        this.timesOfChange_[messages[i].name].toString();
-    cell.className = 'pagespeed-stats-number-of-changes';
+  /** @type {!Object<string, !Array<!pagespeed.StatsNode>>} */
+  var groups = {};
+  for (var i = 0; i < pagespeed.Statistics.GROUPS_.length; ++i) {
+    groups[pagespeed.Statistics.GROUPS_[i].id] = [];
   }
-  var header = table.createTHead().insertRow(0);
-  var cell = header.insertCell(0);
-  cell.innerHTML =
-      'Name <input type="checkbox" id="sort-alpha" ' +
-      'title="Sort in alphabetical order."' +
-      (!this.sortByNumberOfChanges_ ? 'checked' : '') + '>';
-  cell.className = 'pagespeed-stats-first-column';
-  header.insertCell(1).textContent = 'Value';
-  cell = header.insertCell(2);
-  cell.innerHTML =
-      'Number of changes <input type="checkbox" id="sort-freq" ' +
-      'title="Sort by the number of changes(descending order)."' +
-      (this.sortByNumberOfChanges_ ? 'checked' : '') + '>';
-  cell.title =
-      'How many times the value changes during the auto-refresh.\n' +
-      'The number of changes only accumulates when auto-refresh is on.';
-  cell.className = 'pagespeed-stats-third-column';
+  for (var i = 0; i < messages.length; ++i) {
+    groups[pagespeed.Statistics.groupForName_(messages[i].name)].push(
+        messages[i]);
+  }
+
   var statElement = document.getElementById('stat');
   statElement.innerHTML = '';
-  statElement.appendChild(table);
-  goog.events.listen(document.getElementById('sort-freq'), 'change',
-                     goog.bind(this.toggleSorting, this));
-  goog.events.listen(document.getElementById('sort-alpha'), 'change',
-                     goog.bind(this.toggleSorting, this));
+  for (var i = 0; i < pagespeed.Statistics.GROUPS_.length; ++i) {
+    var group = pagespeed.Statistics.GROUPS_[i];
+    var items = groups[group.id];
+    if (!items.length) continue;
+
+    var section = document.createElement('section');
+    section.className = 'pagespeed-stat-group';
+    var heading = document.createElement('div');
+    heading.className = 'pagespeed-stat-group-heading';
+    var title = document.createElement('h2');
+    title.textContent = group.title;
+    var description = document.createElement('p');
+    description.textContent = group.description;
+    heading.appendChild(title);
+    heading.appendChild(description);
+    section.appendChild(heading);
+
+    var table = document.createElement('table');
+    table.className = 'pagespeed-admin-data-table pagespeed-stats-table';
+    var header = table.createTHead().insertRow(0);
+    var metricHeader = document.createElement('th');
+    metricHeader.textContent = 'Metric';
+    header.appendChild(metricHeader);
+    var valueHeader = document.createElement('th');
+    valueHeader.textContent = 'Current value';
+    header.appendChild(valueHeader);
+    var changesHeader = document.createElement('th');
+    changesHeader.textContent = 'Changes';
+    changesHeader.title =
+        'Changes observed during auto-refresh; the count grows while ' +
+        'auto-refresh is enabled.';
+    header.appendChild(changesHeader);
+    for (var j = 0; j < items.length; ++j) {
+      var row = table.insertRow(-1);
+      var cell = row.insertCell(0);
+      cell.textContent = items[j].name;
+      cell.className = 'pagespeed-stats-name';
+      cell = row.insertCell(1);
+      cell.textContent = items[j].value;
+      cell.className = 'pagespeed-stats-value';
+      cell = row.insertCell(2);
+      cell.textContent = this.timesOfChange_[items[j].name].toString();
+      cell.className = 'pagespeed-stats-number-of-changes';
+    }
+    var tableWrap = document.createElement('div');
+    tableWrap.className = 'pagespeed-admin-table-wrap';
+    tableWrap.appendChild(table);
+    section.appendChild(tableWrap);
+    statElement.appendChild(section);
+  }
+  if (!messages.length) {
+    var empty = document.createElement('p');
+    empty.className = 'pagespeed-stat-empty';
+    empty.textContent = this.filter_ ? 'No metrics match this filter.' :
+                                      'No statistics are available.';
+    statElement.appendChild(empty);
+  }
 };
+
+
+/**
+ * @param {string} name Statistic name.
+ * @return {string} The functional group for a statistic name.
+ * @private
+ */
+pagespeed.Statistics.groupForName_ = function(name) {
+  var normalized = name.toLowerCase();
+  if (/^(image|webp|avif)_/.test(normalized)) return 'images';
+  if (/^(css|style|stylesheet)_/.test(normalized)) return 'css';
+  if (/^(javascript|js)_/.test(normalized)) return 'javascript';
+  if (/(cache|purge|metadata|property_cache|ipro)/.test(normalized)) {
+    return 'cache';
+  }
+  if (/^(fetch|http|https|url|dns|ssl|proxy|serf|upstream)_/.test(normalized)) {
+    return 'network';
+  }
+  if (/^(html|rewrite|beacon|critical|filter|resource)_/.test(normalized)) {
+    return 'rewriting';
+  }
+  return 'runtime';
+};
+
+
+/** @private {!Array<!{id: string, title: string, description: string}>} */
+pagespeed.Statistics.GROUPS_ = [
+  {id: 'images', title: 'Image Optimization',
+    description: 'Image rewrites, format conversions, and byte savings.'},
+  {id: 'css', title: 'CSS Optimization',
+    description: 'Stylesheet combination, rewriting, and minification.'},
+  {id: 'javascript', title: 'JavaScript Optimization',
+    description: 'Script rewriting, minification, and combination.'},
+  {id: 'cache', title: 'Caching & Resource Delivery',
+    description: 'Cache hits, invalidations, and in-place resource delivery.'},
+  {id: 'network', title: 'Fetching & Network',
+    description: 'Origin fetches, network activity, and response handling.'},
+  {id: 'rewriting', title: 'HTML & Rewrite Pipeline',
+    description: 'HTML processing, rewrite decisions, and beacon activity.'},
+  {id: 'runtime', title: 'Runtime & Other',
+    description: 'Process-level counters and metrics outside the groups above.'}
+];
 
 
 /**

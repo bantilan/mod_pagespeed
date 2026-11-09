@@ -49,14 +49,8 @@ pagespeed.Messages = function(opt_xhr) {
    * The messages to be shown on the page.
    * @private {!Array.<string>}
    */
-  this.psolMessages_ = document.getElementById('log').innerHTML.split('\n');
-  // Note that the element with id 'log' must exist. Otherwise the JS won't
-  // be written to the sources.
-  // The last entry of the messages array is empty because there is a '\n'
-  // at the end.
-  if (this.psolMessages_.length > 0) {
-    this.psolMessages_.pop();
-  }
+  this.psolMessages_ = pagespeed.Messages.readEntries_(
+      document.getElementById('log'));
 
   /**
    * The total number of unfiltered messages.
@@ -88,16 +82,15 @@ pagespeed.Messages = function(opt_xhr) {
 
   var uiTable = document.createElement('div');
   uiTable.id = 'ui-div';
+  uiTable.className = 'pagespeed-stat-toolbar';
   uiTable.innerHTML =
-      '<table id="ui-table" border="1" style="float:left; border-collapse: ' +
-      'collapse;border-color:silver;"><tr valign="center">' +
-      '<td>Reverse: <input type="checkbox" id="reverse" ' +
-      (this.reverse_ ? 'checked' : '') + '></td>' +
-      '<td>Auto refresh (every 5 seconds): <input type="checkbox" ' +
+      '<label>Reverse order <input type="checkbox" id="reverse" ' +
+      (this.reverse_ ? 'checked' : '') + '></label>' +
+      '<label>Auto refresh <input type="checkbox" ' +
       'id="auto-refresh" ' + (this.autoRefresh_ ? 'checked' : '') +
-      '></td><td>&nbsp;&nbsp;&nbsp;&nbsp;Filter: ' +
-      '<input id="text-filter" type="text" size="70"></td>' +
-      '</tr></table>';
+      '></label><label class="pagespeed-stat-filter">Filter ' +
+      '<input id="text-filter" type="search" placeholder="Search messages">' +
+      '</label>';
   wrapper.appendChild(uiTable);
 
   var numElement = document.createElement('div');
@@ -149,11 +142,11 @@ pagespeed.Messages.prototype.updateMessageCount = function(opt_num) {
   // is not specified.
   var total = (opt_num != undefined) ? opt_num : this.psolMessages_.length;
   if (total == this.numUnfilteredMessages_) {
-    document.getElementById('num').textContent = 'Total message count: ' +
+    document.getElementById('num').textContent = 'Total entries: ' +
         total;
   } else {
     document.getElementById('num').textContent =
-        'Visible message count: ' + total + '/' + this.numUnfilteredMessages_;
+        'Visible entries: ' + total + '/' + this.numUnfilteredMessages_;
   }
 };
 
@@ -166,19 +159,113 @@ pagespeed.Messages.prototype.update = function() {
   var messages = goog.array.clone(this.psolMessages_);
   if (this.filter_) {
     for (var i = messages.length - 1; i >= 0; --i) {
-      if (!messages[i] ||
-          !goog.string.caseInsensitiveContains(messages[i], this.filter_)) {
+      if (!goog.string.caseInsensitiveContains(messages[i].text,
+                                                this.filter_)) {
         messages.splice(i, 1);
       }
     }
   }
   this.updateMessageCount(messages.length);
-  // The messages here are already escaped in C++.
   if (this.reverse_) {
-    logElement.innerHTML = messages.reverse().join('\n');
-  } else {
-    logElement.innerHTML = messages.join('\n');
+    messages.reverse();
   }
+  pagespeed.Messages.renderEntries_(logElement, messages, this.reverse_);
+};
+
+
+/** @private */
+pagespeed.Messages.readEntries_ = function(logElement) {
+  var entries = [];
+  var nodes = logElement.getElementsByClassName('pagespeed-message-entry');
+  for (var i = 0; i < nodes.length; ++i) {
+    var entry = {
+      severity: nodes[i].getAttribute('data-severity') || 'info',
+      text: nodes[i].textContent || ''
+    };
+    // SystemMessageHandler stores multiline messages as continuation lines.
+    if (!/^\[[^\]]+\]\s+\[[^\]]+\]/.test(entry.text) && entries.length) {
+      entries[entries.length - 1].text += '\n' + entry.text;
+    } else {
+      entries.push(entry);
+    }
+  }
+  return entries;
+};
+
+
+/** @private */
+pagespeed.Messages.renderEntries_ = function(logElement, entries, newestFirst) {
+  var groups = [];
+  var byKey = {};
+  for (var i = 0; i < entries.length; ++i) {
+    var entry = entries[i];
+    var match = entry.text.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s*/);
+    entry.timestamp = match ? match[1] : '';
+    entry.body = match ? entry.text.substring(match[0].length) : entry.text;
+    entry.body = entry.body.replace(/^\d+\s+/, '');
+    var key = entry.severity + '|' + entry.body;
+    if (!byKey[key]) {
+      byKey[key] = {severity: entry.severity, entries: []};
+      groups.push(byKey[key]);
+    }
+    byKey[key].entries.push(entry);
+  }
+
+  var fragment = document.createDocumentFragment();
+  if (!groups.length) {
+    var empty = document.createElement('p');
+    empty.className = 'pagespeed-message-empty';
+    empty.textContent = 'No messages match this filter.';
+    fragment.appendChild(empty);
+  }
+  for (var j = 0; j < groups.length; ++j) {
+    var group = groups[j];
+    var latest = group.entries[newestFirst ? 0 : group.entries.length - 1];
+    var card = document.createElement('article');
+    card.className = 'pagespeed-message-card severity-' + group.severity;
+    var meta = document.createElement('div');
+    meta.className = 'pagespeed-message-meta';
+    var tag = document.createElement('span');
+    tag.className = 'pagespeed-message-tag';
+    tag.textContent = group.severity;
+    meta.appendChild(tag);
+    var date = document.createElement('time');
+    date.className = 'pagespeed-message-date';
+    date.textContent = latest.timestamp || 'Timestamp unavailable';
+    meta.appendChild(date);
+    card.appendChild(meta);
+    var heading = document.createElement('h2');
+    heading.className = 'pagespeed-message-title';
+    heading.textContent = latest.body || latest.text;
+    card.appendChild(heading);
+
+    if (group.entries.length > 1) {
+      var details = document.createElement('details');
+      details.className = 'pagespeed-message-occurrences';
+      var summary = document.createElement('summary');
+      summary.textContent = 'Show ' + group.entries.length + ' entries';
+      details.appendChild(summary);
+      var list = document.createElement('ol');
+      for (var k = 0; k < group.entries.length; ++k) {
+        var item = document.createElement('li');
+        var itemDate = document.createElement('time');
+        itemDate.textContent = group.entries[k].timestamp ||
+                               'Timestamp unavailable';
+        item.appendChild(itemDate);
+        var itemText = document.createElement('p');
+        itemText.textContent = group.entries[k].body || group.entries[k].text;
+        item.appendChild(itemText);
+        list.appendChild(item);
+      }
+      details.appendChild(list);
+      card.appendChild(details);
+    }
+    fragment.appendChild(card);
+  }
+  while (logElement.firstChild) {
+    logElement.removeChild(logElement.firstChild);
+  }
+  logElement.appendChild(fragment);
 };
 
 
@@ -207,18 +294,11 @@ pagespeed.Messages.DUMP_ERROR_ =
  * </html>
  */
 pagespeed.Messages.prototype.parseMessagesFromResponse = function(text) {
-  var messages = [];
-  // TODO(xqyin): Add a handler method in AdminSite to provide proper XHR
-  // response instead of depending on the format like this.
-  var start = text.indexOf('<div id="log">');
-  var end = text.indexOf('<script type="text/javascript">', start);
-  if (start >= 0 && end >= 0) {
-    start = start + '<div id="log">'.length;
-    end = end - '</div>\n'.length;
-    messages = text.substring(start, end).split('\n');
-    messages.pop();
-    this.psolMessages_ = messages;
-    this.numUnfilteredMessages_ = messages.length;
+  var responseDoc = new DOMParser().parseFromString(text, 'text/html');
+  var responseLog = responseDoc.getElementById('log');
+  if (responseLog) {
+    this.psolMessages_ = pagespeed.Messages.readEntries_(responseLog);
+    this.numUnfilteredMessages_ = this.psolMessages_.length;
     this.update();
   } else {
     goog.array.clear(this.psolMessages_);

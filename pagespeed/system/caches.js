@@ -58,26 +58,27 @@ pagespeed.Caches = function(opt_xhr) {
   this.sortPurgeSetDescendingTime_ = false;
 
   // The navigation bar to switch among different display modes.
-  var modeElement = document.createElement('table');
+  var modeElement = document.createElement('nav');
   modeElement.id = 'nav-bar';
   modeElement.className = 'pagespeed-sub-tabs';
+  modeElement.setAttribute('aria-label', 'Cache views');
   modeElement.innerHTML =
-      '<tr><td><a id="' +
+      '<a id="' +
       pagespeed.Caches.DisplayMode.METADATA_CACHE +
       '" href="javascript:void(0);">' +
-      'Show Metadata Cache</a> - </td>' +
-      '<td><a id="' +
+      'Show Metadata Cache</a>' +
+      '<a id="' +
       pagespeed.Caches.DisplayMode.CACHE_STRUCTURE +
       '" href="javascript:void(0);">' +
-      'Show Cache Structure</a> - </td>' +
-      '<td><a id="' +
+      'Show Cache Structure</a>' +
+      '<a id="' +
       pagespeed.Caches.DisplayMode.PHYSICAL_CACHE +
       '" href="javascript:void(0);">' +
-      'Physical Caches</a> - </td>' +
-      '<td><a id="' +
+      'Physical Caches</a>' +
+      '<a id="' +
       pagespeed.Caches.DisplayMode.PURGE_CACHE +
       '" href="javascript:void(0);">' +
-      'Purge Cache</a></td></tr>';
+      'Purge Cache</a>';
   document.body.insertBefore(
       modeElement,
       document.getElementById(pagespeed.Caches.DisplayDiv.METADATA_CACHE));
@@ -343,6 +344,7 @@ pagespeed.Caches.prototype.updatePurgeSet = function(text) {
   if (messages.length > 0) {
     tableDiv.appendChild(document.createElement('hr'));
     var table = document.createElement('table');
+    table.className = 'pagespeed-admin-data-table pagespeed-purge-set-table';
     if (this.sortPurgeSetDescendingTime_) {
       messages.reverse();
     }
@@ -361,7 +363,8 @@ pagespeed.Caches.prototype.updatePurgeSet = function(text) {
       codeCell.appendChild(code);
     }
     var header = table.createTHead().insertRow(0);
-    var cell = header.insertCell(0);
+    var cell = document.createElement('th');
+    header.appendChild(cell);
     cell.className = 'pagespeed-caches-date-column';
     if (messages.length == 1) {
       cell.textContent = 'Invalidation Time';
@@ -381,7 +384,8 @@ pagespeed.Caches.prototype.updatePurgeSet = function(text) {
                          goog.bind(this.toggleSorting, this));
 
     }
-    cell = header.insertCell(1);
+    cell = document.createElement('th');
+    header.appendChild(cell);
     cell.textContent = 'URL';
     cell.className = 'pagespeed-stats-url-column';
     tableDiv.appendChild(table);
@@ -435,14 +439,15 @@ pagespeed.Caches.prototype.purgeInit = function() {
   // It's actually not a 'form' element because we add listeners to the
   // buttons to submit query params. We don't want users to submit the
   // form by pressing enter without clicking the buttons.
-  var purgeUI = document.createElement('table');
+  var purgeUI = document.createElement('div');
+  purgeUI.className = 'pagespeed-purge-controls';
   purgeUI.innerHTML =
-      'URL: <input id="' + pagespeed.Caches.ElementId.PURGE_TEXT +
-      '" type="text" name="purge" size="110"/><br>' +
-      '<input id="' + pagespeed.Caches.ElementId.PURGE_SUBMIT +
-      '" type="button" value="Purge Individual URL"/>' +
-      '<input id="' + pagespeed.Caches.ElementId.PURGE_ALL +
-      '" type="button" value="Purge Entire Cache"/>';
+      '<label>URL <input id="' + pagespeed.Caches.ElementId.PURGE_TEXT +
+      '" type="text" name="purge" placeholder="https://example.com/path"' +
+      '></label><button id="' + pagespeed.Caches.ElementId.PURGE_SUBMIT +
+      '" type="button">Purge individual URL</button><button id="' +
+      pagespeed.Caches.ElementId.PURGE_ALL +
+      '" type="button">Purge entire cache</button>';
   var purgeElement = document.getElementById(
       pagespeed.Caches.DisplayDiv.PURGE_CACHE);
   purgeElement.insertBefore(purgeUI, purgeElement.firstChild);

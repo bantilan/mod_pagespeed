@@ -116,34 +116,34 @@ pagespeed.Graphs = function(opt_xhr) {
   }
 
   // The navigation bar to switch among different display modes.
-  var navElement = document.createElement('table');
+  var navElement = document.createElement('nav');
   navElement.id = 'nav-bar';
   navElement.className = 'pagespeed-sub-tabs';
+  navElement.setAttribute('aria-label', 'Graph views');
   navElement.innerHTML =
-      '<tr><td><a id="' + pagespeed.Graphs.DisplayMode.CACHE_APPLIED +
+      '<a id="' + pagespeed.Graphs.DisplayMode.CACHE_APPLIED +
       '" href="javascript:void(0);">' +
-      'Per application cache stats</a> - </td>' +
-      '<td><a id="' + pagespeed.Graphs.DisplayMode.CACHE_TYPE +
+      'Per application cache stats</a>' +
+      '<a id="' + pagespeed.Graphs.DisplayMode.CACHE_TYPE +
       '" href="javascript:void(0);">' +
-      'Per type cache stats</a> - </td>' +
-      '<td><a id="' + pagespeed.Graphs.DisplayMode.IPRO +
+      'Per type cache stats</a>' +
+      '<a id="' + pagespeed.Graphs.DisplayMode.IPRO +
       '" href="javascript:void(0);">' +
-      'IPRO status</a> - </td>' +
-      '<td><a id="' + pagespeed.Graphs.DisplayMode.REWRITE_IMAGE +
+      'IPRO status</a>' +
+      '<a id="' + pagespeed.Graphs.DisplayMode.REWRITE_IMAGE +
       '" href="javascript:void(0);">' +
-      'Image rewriting</a> - </td>' +
-      '<td><a id="' + pagespeed.Graphs.DisplayMode.REALTIME +
+      'Image rewriting</a>' +
+      '<a id="' + pagespeed.Graphs.DisplayMode.REALTIME +
       '" href="javascript:void(0);">' +
-      'Realtime</a></td></tr>';
+      'Realtime</a>';
   // The UI table of auto-refresh.
   var uiTable = document.createElement('div');
   uiTable.id = 'ui-div';
+  uiTable.className = 'pagespeed-stat-toolbar';
   uiTable.innerHTML =
-      '<table id="ui-table" border=1 style="border-collapse: ' +
-      'collapse;border-color:silver;"><tr valign="center">' +
-      '<td>Auto refresh (every 5 seconds): <input type="checkbox" ' +
+      '<label>Auto refresh <input type="checkbox" ' +
       'id="auto-refresh" ' + (this.autoRefresh_ ? 'checked' : '') +
-      '></td></tr></table>';
+      '></label>';
   document.body.insertBefore(
       uiTable,
       document.getElementById(pagespeed.Graphs.DisplayDiv.CACHE_APPLIED));

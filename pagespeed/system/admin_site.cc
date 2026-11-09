@@ -183,6 +183,18 @@ GoogleString FormatDashboardUptime(int64 elapsed_ms) {
                 "m ", Integer64ToString(seconds), "s");
 }
 
+void WriteAdminPageHeading(AsyncFetch* fetch, MessageHandler* handler,
+                           StringPiece eyebrow, StringPiece title,
+                           StringPiece description) {
+  fetch->Write(StrCat(
+                   "<div class='pagespeed-dashboard-heading'><div>"
+                   "<p class='pagespeed-dashboard-eyebrow'>",
+                   eyebrow, "</p><h1>", title,
+                   "</h1><p class='pagespeed-dashboard-description'>",
+                   description, "</p></div></div>"),
+               handler);
+}
+
 int DashboardPercent(int64 value, int64 total) {
   return total <= 0 ? 0 : static_cast<int>(value * 100 / total);
 }
@@ -314,6 +326,8 @@ void AdminSite::ConsoleHandler(const SystemRewriteOptions& global_options,
   GoogleString head_markup = StrCat("<style>", CSS_console_css, "</style>\n");
   AdminHtml admin_html("console", head_markup, source, timer_, fetch,
                        message_handler_);
+  WriteAdminPageHeading(fetch, handler, "OPERATIONS", "Console",
+                        "Live PageSpeed diagnostics and operational status.");
   if (statistics_enabled && logging_enabled && log_dir_set) {
     fetch->Write(
         "<div class='console_div' id='suggestions'>\n"
@@ -378,6 +392,9 @@ void AdminSite::StatisticsHandler(const RewriteOptions& options,
       StrCat("<style>", CSS_statistics_css, "</style>\n");
   AdminHtml admin_html("statistics", head_markup, source, timer_, fetch,
                        message_handler_);
+  WriteAdminPageHeading(fetch, message_handler_, "LIVE METRICS", "Statistics",
+                        "Explore PageSpeed counters grouped by the subsystem "
+                        "they describe.");
   // We have to call Dump() here to write data to sources for
   // system/system_test.sh: Line 79. We use JS to update the data in refreshes.
   fetch->Write("<pre id='stat'>", message_handler_);
@@ -546,7 +563,8 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
   } else {
     fetch->Write(
         "<div class='pagespeed-dashboard-recent-wrap'><table "
-        "class='pagespeed-dashboard-recent-table'><thead><tr><th>IMAGE</th>"
+        "class='pagespeed-admin-data-table pagespeed-dashboard-recent-table'>"
+        "<thead><tr><th>IMAGE</th>"
         "<th>FORMAT</th><th>BEFORE</th><th>AFTER</th><th>SAVED</th><th>TIME</th>"
         "</tr></thead><tbody>",
         message_handler_);
@@ -637,7 +655,7 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
         "<option value='newest'>Newest first</option><option value='saved'>"
         "Most saved</option></select></label></div></div>"
         "<div class='pagespeed-images-table-wrap'><table "
-        "class='pagespeed-images-table'><thead><tr>"
+        "class='pagespeed-admin-data-table pagespeed-images-table'><thead><tr>"
         "<th>Date</th><th>Original</th><th>Format</th><th>Before</th>"
         "<th>After</th><th>Saved</th><th>Preview</th>"
         "</tr></thead><tbody id='pagespeed-images-rows'>",
@@ -778,6 +796,9 @@ void AdminSite::GraphsHandler(const RewriteOptions& options, AdminSource source,
   GoogleString head_markup = StrCat("<style>", CSS_graphs_css, "</style>\n");
   AdminHtml admin_html("graphs", head_markup, source, timer_, fetch,
                        message_handler_);
+  WriteAdminPageHeading(fetch, message_handler_, "TRENDS", "Graphs",
+                        "Track cache behavior, image rewrites, and runtime "
+                        "activity over time.");
   fetch->Write(
       "<div id='cache_applied'>Loading Charts...</div>"
       "<div id='cache_type'>Loading Charts...</div>"
@@ -862,23 +883,29 @@ void AdminSite::PrintHistograms(AdminSource source, AsyncFetch* fetch,
                                 Statistics* stats) {
   AdminHtml admin_html("histograms", "", source, timer_, fetch,
                        message_handler_);
+  WriteAdminPageHeading(fetch, message_handler_, "DISTRIBUTIONS", "Histograms",
+                        "Review the spread and percentiles of measured "
+                        "PageSpeed operations.");
+  fetch->Write("<div id='pagespeed-histograms'>", message_handler_);
   stats->RenderHistograms(fetch, message_handler_);
+  fetch->Write("</div>", message_handler_);
 }
 
 namespace {
 
 static const char kTableStart[] =
-    "<table class='pagespeed-caches-structure'>\n"
+    "<div class='pagespeed-admin-table-wrap'><table "
+    "class='pagespeed-admin-data-table pagespeed-caches-structure'>\n"
     "  <thead>\n"
     "    <tr>\n"
-    "      <td>Cache</td><td>Detail</td><td>Structure</td>\n"
+    "      <th>Cache</th><th>Detail</th><th>Structure</th>\n"
     "    </tr>\n"
     "  </thead>\n"
     "  <tbody>";
 
 static const char kTableEnd[] =
     "  </tbody>\n"
-    "</table>";
+    "</table></div>";
 
 // Takes a complicated descriptor like
 //    "HTTPCache(Fallback(small=Batcher(cache=Stats(parefix=memcached_async,"
@@ -1042,6 +1069,9 @@ void AdminSite::PrintCaches(
     GoogleString head_markup = StrCat("<style>", CSS_caches_css, "</style>\n");
     AdminHtml admin_html("cache", head_markup, source, timer_, fetch,
                          message_handler_);
+    WriteAdminPageHeading(fetch, message_handler_, "CACHE INSPECTION", "Caches",
+                          "Inspect cache entries, backend structures, and "
+                          "URL invalidations.");
 
     fetch->Write("<div id='show_metadata'>", message_handler_);
     // Present a small form to enter a URL.
@@ -1115,8 +1145,14 @@ void AdminSite::PrintConfig(
     AdminSource source, AsyncFetch* fetch,
     SystemRewriteOptions* global_system_rewrite_options) {
   AdminHtml admin_html("config", "", source, timer_, fetch, message_handler_);
+  WriteAdminPageHeading(fetch, message_handler_, "ACTIVE SETTINGS",
+                        "Configuration",
+                        "Read the effective PageSpeed options for this "
+                        "server instance.");
+  fetch->Write("<div class='pagespeed-config-panel'>", message_handler_);
   HtmlKeywords::WritePre(global_system_rewrite_options->OptionsToString(), "",
                          fetch, message_handler_);
+  fetch->Write("</div>", message_handler_);
 }
 
 void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
@@ -1126,9 +1162,13 @@ void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
   StringWriter log_writer(&log);
   AdminHtml admin_html("message_history", "", source, timer_, fetch,
                        message_handler_);
+  WriteAdminPageHeading(fetch, message_handler_, "EVENT LOG", "Message History",
+                        "Review recent PageSpeed notices, warnings, and "
+                        "rewrite diagnostics.");
   if (message_handler_->Dump(&log_writer)) {
     fetch->Write("<div id='log'>", message_handler_);
-    // Write pre-tag and color messages.
+    // Keep the raw record text in an escaped, machine-readable element. The
+    // history UI extracts severity and timestamp without parsing HTML styling.
     StringPieceVector messages;
     message_handler_->ParseMessageDumpIntoMessages(log, &messages);
     for (int i = 0, size = messages.size(); i < size; ++i) {
@@ -1138,31 +1178,19 @@ void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
         display_message = display_message.substr(0, detail_marker);
       }
       if (display_message.length() > 0) {
+        const char* severity = "info";
         switch (message_handler_->GetMessageType(display_message)) {
-          case kError: {
-            HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(display_message),
-                "color:red; margin:0;", fetch, message_handler_);
-            break;
-          }
-          case kWarning: {
-            HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(display_message),
-                "color:brown; margin:0;", fetch, message_handler_);
-            break;
-          }
-          case kFatal: {
-            HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(display_message),
-                "color:orange; margin:0;", fetch, message_handler_);
-            break;
-          }
-          default: {
-            HtmlKeywords::WritePre(
-                message_handler_->ReformatMessage(display_message), "margin:0;",
-                fetch, message_handler_);
-          }
+          case kError: severity = "error"; break;
+          case kWarning: severity = "warning"; break;
+          case kFatal: severity = "fatal"; break;
+          default: break;
         }
+        GoogleString escaped_message;
+        HtmlKeywords::Escape(message_handler_->ReformatMessage(display_message),
+                             &escaped_message);
+        fetch->Write(StrCat("<div class='pagespeed-message-entry' data-severity='",
+                            severity, "'>", escaped_message, "</div>\n"),
+                     message_handler_);
       }
     }
     fetch->Write("</div>\n", message_handler_);
