@@ -319,3 +319,5 @@ pagespeed.Configuration.copy_ = function(value, button) {
     document.body.removeChild(field); done();
   }
 };
+
+pagespeed.Configuration.Start();

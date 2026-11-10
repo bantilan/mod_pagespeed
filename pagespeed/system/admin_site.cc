@@ -1175,7 +1175,7 @@ void AdminSite::PrintConfig(
       "</div></div><script type='text/javascript'>",
       message_handler_);
   fetch->Write(JS_config_js, message_handler_);
-  fetch->Write("pagespeed.Configuration.Start();</script>\n", message_handler_);
+  fetch->Write("</script>\n", message_handler_);
 }
 
 void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
