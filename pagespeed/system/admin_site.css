@@ -306,7 +306,7 @@ mod rules
   background: #fff;
 }
 .pagespeed-config-panel pre { margin: 0; border: 0; border-radius: 0; }
-.pagespeed-config-page { display: grid; gap: 15px; min-width: 0; }
+.pagespeed-config-page { display: grid; gap: 16px; min-width: 0; }
 .pagespeed-config-source pre {
   max-height: 70vh;
   overflow: auto;
@@ -346,7 +346,7 @@ mod rules
 .pagespeed-config-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 11px;
+  gap: 14px;
 }
 .pagespeed-config-summary-card {
   min-width: 0;
@@ -372,7 +372,7 @@ mod rules
   display: grid;
   grid-template-columns: minmax(250px, .85fr) minmax(0, 1.4fr);
   align-items: start;
-  gap: 14px;
+  gap: 16px;
 }
 .pagespeed-config-card {
   min-width: 0;
@@ -393,7 +393,7 @@ mod rules
 .pagespeed-config-section-heading h2 { margin: 0; color: #294b3e; font-size: 15px; }
 .pagespeed-config-section-heading p { margin: 4px 0 0; color: #78867c; font-size: 10px; }
 .pagespeed-config-filter-group {
-  margin-top: 9px;
+  margin-top: 14px;
   padding: 12px;
   border: 1px solid #e7ece8;
   border-radius: 7px;

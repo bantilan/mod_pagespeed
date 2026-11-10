@@ -18,29 +18,35 @@
 .pagespeed-sub-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  align-items: center;
+  gap: 4px;
   margin: 0 0 16px;
-  padding: 8px;
-  border: 1px solid #dfe7e1;
-  border-radius: 9px;
-  background: #f5f8f5;
+  padding: 0 0 11px;
+  border: 0;
+  border-bottom: 1px solid #edf0ed;
+  border-radius: 0;
+  background: transparent;
 }
 .pagespeed-sub-tabs a {
-  padding: 9px 13px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: #5e7166;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #637268;
   font-size: 11px;
   font-weight: 650;
   text-decoration: none;
-  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  transition: background .15s ease, color .15s ease;
 }
 .pagespeed-sub-tabs a:hover,
 .pagespeed-sub-tabs a.pagespeed-underline-link {
-  border-color: #d7e4da;
-  background: #fff;
-  color: #245b43;
-  box-shadow: 0 2px 7px rgba(31, 55, 47, .06);
+  background: #39765e;
+  color: #fff;
+  text-decoration: none;
+}
+.pagespeed-sub-tabs a:focus-visible {
+  outline: 2px solid #39765e;
+  outline-offset: 2px;
 }
 
 /* Cache views share the admin cards and table language. */
