@@ -314,26 +314,24 @@ pagespeed.Messages.renderEntries_ = function(logElement, groups) {
     card.className = 'pagespeed-message-card severity-' + group.severity;
     var head = document.createElement('div');
     head.className = 'pagespeed-message-card-head';
+    var summary = document.createElement('div');
+    summary.className = 'pagespeed-message-summary';
+    var meta = document.createElement('div');
+    meta.className = 'pagespeed-message-meta';
     var tag = document.createElement('span');
     tag.className = 'pagespeed-message-tag';
     tag.textContent = group.severity;
-    head.appendChild(tag);
-    var summary = document.createElement('div');
-    summary.className = 'pagespeed-message-summary';
-    var title = document.createElement('h2');
-    title.className = 'pagespeed-message-title';
-    title.textContent = group.body || '(empty message)';
-    summary.appendChild(title);
-    var occurrence = document.createElement('span');
-    occurrence.className = 'pagespeed-message-occurrence-count';
-    occurrence.textContent = group.entries.length + ' occurrence' +
-        (group.entries.length == 1 ? '' : 's');
-    summary.appendChild(occurrence);
+    meta.appendChild(tag);
     var range = document.createElement('span');
     range.className = 'pagespeed-message-date-range';
     range.textContent = 'First: ' + pagespeed.Messages.formatDate_(firstTime) +
         '  |  Last: ' + pagespeed.Messages.formatDate_(lastTime);
-    summary.appendChild(range);
+    meta.appendChild(range);
+    summary.appendChild(meta);
+    var title = document.createElement('h2');
+    title.className = 'pagespeed-message-title';
+    title.textContent = group.body || '(empty message)';
+    summary.appendChild(title);
     head.appendChild(summary);
     card.appendChild(head);
 

@@ -468,12 +468,17 @@ pagespeed.Statistics.prototype.renderOptimizationActivity_ = function(values) {
 
 /** Refresh category counts and selected state. */
 pagespeed.Statistics.prototype.updateCategoryTabs_ = function() {
-  var counts = {all: this.psolMessages_.length, cache: 0, css: 0,
-                images: 0, fonts: 0, other: 0};
+  var categories = ['all', 'cache', 'css', 'images', 'fonts', 'other'];
+  var counts = [this.psolMessages_.length, 0, 0, 0, 0, 0];
   for (var i = 0; i < this.psolMessages_.length; i++) {
     var category = pagespeed.Statistics.categoryForName_(
         this.psolMessages_[i].name);
-    counts[category]++;
+    for (var j = 1; j < categories.length; j++) {
+      if (categories[j] == category) {
+        counts[j]++;
+        break;
+      }
+    }
   }
   var buttons = document.querySelectorAll(
       '#pagespeed-stat-category-tabs [data-category]');
@@ -481,7 +486,14 @@ pagespeed.Statistics.prototype.updateCategoryTabs_ = function() {
     var category = buttons[i].getAttribute('data-category');
     var label = category == 'all' ? 'All counters' :
         category.charAt(0).toUpperCase() + category.substring(1);
-    buttons[i].textContent = label + ' (' + counts[category] + ')';
+    var count = 0;
+    for (var j = 0; j < categories.length; j++) {
+      if (categories[j] == category) {
+        count = counts[j];
+        break;
+      }
+    }
+    buttons[i].textContent = label + ' (' + count + ')';
     buttons[i].className = category == this.activeCategory_ ? 'is-active' : '';
     buttons[i].setAttribute('aria-selected',
                             category == this.activeCategory_ ? 'true' : 'false');

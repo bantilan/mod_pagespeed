@@ -617,8 +617,7 @@ mod rules
   background: #eef5ef;
   color: #24523d;
 }
-.pagespeed-message-levels button span,
-.pagespeed-message-occurrence-count {
+.pagespeed-message-levels button span {
   padding: 2px 7px;
   border-radius: 999px;
   background: #edf1ed;
@@ -691,7 +690,14 @@ mod rules
   width: 100%;
   flex-direction: column;
   align-items: flex-start;
-  gap: 7px;
+  gap: 9px;
+}
+.pagespeed-message-meta {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 .pagespeed-message-title {
   margin: 0;
@@ -702,9 +708,8 @@ mod rules
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.pagespeed-message-occurrence-count { display: inline-block; margin: 0; }
 .pagespeed-message-date-range {
-  display: block;
+  display: inline-block;
   color: #728077;
   font-size: 11px;
 }
