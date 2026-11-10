@@ -61,6 +61,7 @@ BASE_LIBS = \
   net/instaweb/libinstaweb_console_css_data2c.a \
   net/instaweb/libinstaweb_console_js_data2c.a \
   net/instaweb/libinstaweb_console_js_opt_data2c.a \
+  net/instaweb/libinstaweb_config_js_data2c.a \
   net/instaweb/libinstaweb_critical_css_beacon_data2c.a \
   net/instaweb/libinstaweb_critical_css_beacon_opt_data2c.a \
   net/instaweb/libinstaweb_critical_css_loader_data2c.a \
