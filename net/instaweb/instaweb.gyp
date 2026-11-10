@@ -1551,7 +1551,6 @@
         'instaweb_console_css_data2c',
         'instaweb_console_js_data2c',
         'instaweb_console_js_opt_data2c',
-        'instaweb_config_js_data2c',
         'instaweb_core.gyp:instaweb_rewriter_html',
         'instaweb_critical_css_beacon_data2c',
         'instaweb_critical_css_beacon_opt_data2c',
@@ -1732,6 +1731,7 @@
       'type': '<(library)',
       'dependencies': [
         'instaweb_util',
+        'instaweb_config_js_data2c',
         '<(DEPTH)/build/build_util.gyp:mod_pagespeed_version_header',
         '<(DEPTH)/third_party/serf/serf.gyp:serf',
         '<(DEPTH)/pagespeed/kernel.gyp:pagespeed_http',
