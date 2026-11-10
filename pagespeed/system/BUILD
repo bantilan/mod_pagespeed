@@ -57,9 +57,6 @@ closure_compiler_gen(
     entry_points = [
         "goog:pagespeed.Graphs",
     ],
-    externs = [
-        "third_party/closure/externs/google_visualization_api.js",
-    ],
     js_dir = "system",
     js_src = "pagespeed/system/graphs.js",
     opt = False,
@@ -69,9 +66,6 @@ closure_compiler_gen(
     name = "graphs_opt",
     entry_points = [
         "goog:pagespeed.Graphs",
-    ],
-    externs = [
-        "third_party/closure/externs/google_visualization_api.js",
     ],
     js_dir = "system",
     js_src = "pagespeed/system/graphs.js",

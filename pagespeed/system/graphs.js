@@ -30,12 +30,7 @@ goog.require('goog.array');
 goog.require('goog.events');
 goog.require('goog.net.EventType');
 goog.require('goog.net.XhrIo');
-goog.require('goog.string');
-
-// Google Charts API.
-// Requires <script src='https://www.google.com/jsapi'></script> loaded in HTML.
-google.load('visualization', '1',
-            {'packages': ['table', 'corechart', 'annotatedtimeline']});
+goog.require('goog.object');
 
 
 /** @typedef {{name: string, value:string}} */
@@ -106,10 +101,7 @@ pagespeed.Graphs = function(opt_xhr) {
   this.chartCache_ = {};
 
   // Hide all div elements.
-  // To use AnnotatedTimeLine charts, we must specify the size of the container
-  // elements explicitly instead of setting the size in the options of charts.
-  // Since we cannot get the size of an element with 'display:none;', we hide
-  // all the elements by positioning them off the left hand side.
+  // Keep inactive views out of layout while preserving their chart state.
   for (var i in pagespeed.Graphs.DisplayDiv) {
     var chartDiv = document.getElementById(pagespeed.Graphs.DisplayDiv[i]);
     chartDiv.className = 'pagespeed-hidden-offscreen';
@@ -443,186 +435,218 @@ pagespeed.Graphs.screenData = function(prefix, name) {
 
 
 /**
- * Initialize a chart using Google Charts API.
- * @param {string} id The ID of the chart div to create.
- * @param {string} title The title of the chart.
- * @param {string} chartType The type of chart. AnnotatedTimeLine or BarChart.
- * @param {string} targetId The id of the target HTML element.
- * @return {Object} The created chart object.
+ * Find or create a chart panel in its selected graph view.
+ * @param {string} id Unique chart id.
+ * @param {string} title Visible chart title.
+ * @param {string} targetId The id of the graph view container.
+ * @return {Element} Chart content element.
  */
-pagespeed.Graphs.prototype.initChart = function(
-    id, title, chartType, targetId) {
-  var theChart;
-  // TODO(oschaaf): Title might not be unique
-  if (this.chartCache_[title]) {
-    theChart = this.chartCache_[title];
-  } else {
-    // The element identified by the id must exist.
-    var targetElement = document.getElementById(targetId);
-    // Remove the status info when it starts to draw charts.
-    if (targetElement.textContent == 'Loading Charts...') {
-      targetElement.textContent = '';
-    }
-    var dest = document.createElement('div');
-    if (chartType == 'AnnotatedTimeLine') {
-      dest.className = 'pagespeed-graphs-chart';
-    }
-    dest.id = id;
-    var chartTitle = document.createElement('p');
-    chartTitle.textContent = title;
-
-    chartTitle.className = 'pagespeed-graphs-title';
-    targetElement.appendChild(chartTitle);
-    targetElement.appendChild(dest);
-    theChart = new google.visualization[chartType](dest);
-    this.chartCache_[title] = theChart;
-  }
-  return theChart;
+pagespeed.Graphs.prototype.initChart = function(id, title, targetId) {
+  var chart = this.chartCache_[title];
+  if (chart) return chart;
+  var target = document.getElementById(targetId);
+  if (target.textContent == 'Loading Charts...') target.textContent = '';
+  var panel = document.createElement('section');
+  panel.className = 'pagespeed-graphs-panel';
+  var heading = document.createElement('div');
+  heading.className = 'pagespeed-graphs-panel-heading';
+  var titleNode = document.createElement('h2');
+  titleNode.className = 'pagespeed-graphs-title';
+  titleNode.textContent = title;
+  heading.appendChild(titleNode);
+  panel.appendChild(heading);
+  chart = document.createElement('div');
+  chart.className = 'pagespeed-graphs-chart';
+  chart.id = id;
+  panel.appendChild(chart);
+  target.appendChild(panel);
+  this.chartCache_[title] = chart;
+  return chart;
 };
 
-
 /**
- * Draw a bar chart using Google Charts API.
- * @param {string} prefix The statistics prefix of data for the chart.
- * @param {string} title The title of the chart.
- * @param {string} targetId The id of the target HTML element.
+ * Draw a responsive horizontal bar chart from the latest statistic snapshot.
+ * @param {string} prefix Statistics prefix.
+ * @param {string} title Chart title.
+ * @param {string} targetId Graph view id.
  */
 pagespeed.Graphs.prototype.drawBarChart = function(prefix, title, targetId) {
   var id = 'pagespeed-graphs-' + prefix;
   var settingPrefix = prefix + '_';
-  var theChart = this.initChart(id, title, 'BarChart', targetId);
-  var dest = document.getElementById(id);
+  var chart = this.initChart(id, title, targetId);
+  while (chart.firstChild) chart.removeChild(chart.firstChild);
+  if (!this.psolMessages_.length) return;
+  var messages = this.psolMessages_[this.psolMessages_.length - 1].messages;
   var rows = [];
-  var data = new google.visualization.DataTable();
-
-  var messages = goog.array.clone(
-      this.psolMessages_[this.psolMessages_.length - 1].messages);
-  var numBars = 0;
-  for (var i = 0; i < messages.length; ++i) {
-    if (!pagespeed.Graphs.screenData(settingPrefix, messages[i].name)) {
-      continue;
-    }
-    ++numBars;
-
-    // Removes the prefix.
-    var caption = messages[i].name.substring(settingPrefix.length);
-    // We use regexp here to replace underscores all at once.
-    // Using '_' would only replace one underscore at a time.
-    caption = caption.replace(/_/g, ' ');
-    rows.push([caption, Number(messages[i].value)]);
+  var total = 0;
+  for (var i = 0; i < messages.length; i++) {
+    if (!pagespeed.Graphs.screenData(settingPrefix, messages[i].name)) continue;
+    var value = Number(messages[i].value);
+    if (!isFinite(value)) continue;
+    var caption = messages[i].name.substring(settingPrefix.length)
+        .replace(/_/g, ' ');
+    rows.push({name: caption, value: value});
+    total += Math.max(0, value);
   }
-  data.addColumn('string', 'Name');
-  data.addColumn('number', 'Value');
-  data.addRows(rows);
-
-  var view = new google.visualization.DataView(data);
-  var getStats = function(dataTable, rowNum) {
-    var sum = 0;
-    for (var i = 0; i < dataTable.getNumberOfRows(); ++i) {
-      sum += dataTable.getValue(i, 1);
-    }
-    var value = dataTable.getValue(rowNum, 1);
-    var percent = value * 100 / ((sum == 0) ? 1 : sum);
-    return value.toString() + ' (' + percent.toFixed(2).toString() + '%)';
-  };
-  view.setColumns(
-      [0, 1, {'calc': getStats, 'type': 'string', 'role': 'annotation'}]);
-
-  var barHeight = 40 * numBars + 10;
-  dest.style.height = barHeight + 20;
-
-  // The options used for drawing google.visualization.barChart graphs.
-  var barChartOptions = {
-    'annotations': {
-      // TODO(jmarantz): Although I kind of prefer the consistency of
-      // always showing labels outside the bar, it does waste a bit of
-      // horizontal space.  However we have no choice at the moment
-      // due to a Charts API bug estimating text sizes in the context
-      // of bars that are not high enough to fit two lines of text.
-      //
-      // Once this bug is fixed (best estimate: Oct 2014) we should
-      // consider setting 'alwaysOutside' to 'false', and then we can
-      // try changing the chartArea width percentage below from 60% to 80%.
-      'alwaysOutside': true,  // Always put the "value(%)" outside the bar.
-      'highContrast': true,
-      'textStyle': {
-        'fontSize': 12,
-        'color': 'black'
-      }
-    },
-    'hAxis': {
-      'direction': 1
-    },
-    'vAxis': {
-      'textPosition': 'out'   // position of left-most vertical axis label.
-    },
-    'legend': {
-      'position': 'none'
-    },
-    'width': 800,
-    'height': barHeight,
-    'chartArea': {
-      'left': 225,
-      'top': 0,
-      'width': '60%',         // Tweak this to avoid clipping outside labels.
-      'height': '80%'
-
-    }
-  };
-  theChart.draw(view, barChartOptions);
+  rows.sort(function(a, b) { return b.value - a.value; });
+  if (!rows.length) {
+    var empty = document.createElement('p');
+    empty.className = 'pagespeed-graphs-empty';
+    empty.textContent = 'No measurements have been recorded for this category yet.';
+    chart.appendChild(empty);
+    return;
+  }
+  var max = Math.max(0, rows[0].value);
+  var ns = 'http://www.w3.org/2000/svg';
+  var width = 760;
+  var rowHeight = 40;
+  var height = Math.max(116, rows.length * rowHeight + 24);
+  var svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'pagespeed-graphs-bars');
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', title + ', ' + rows.length + ' measurements');
+  for (var i = 0; i < rows.length; i++) {
+    var y = 12 + i * rowHeight;
+    var label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', '0'); label.setAttribute('y', y + 13);
+    label.setAttribute('class', 'pagespeed-graphs-bar-label');
+    label.textContent = rows[i].name;
+    svg.appendChild(label);
+    var track = document.createElementNS(ns, 'rect');
+    track.setAttribute('x', '0'); track.setAttribute('y', y + 19);
+    track.setAttribute('width', '570'); track.setAttribute('height', '8');
+    track.setAttribute('rx', '4'); track.setAttribute('class', 'pagespeed-graphs-bar-track');
+    svg.appendChild(track);
+    var bar = document.createElementNS(ns, 'rect');
+    var barWidth = max > 0 ? 570 * Math.max(0, rows[i].value) / max : 0;
+    bar.setAttribute('x', '0'); bar.setAttribute('y', y + 19);
+    bar.setAttribute('width', Math.max(barWidth, rows[i].value > 0 ? 2 : 0));
+    bar.setAttribute('height', '8'); bar.setAttribute('rx', '4');
+    bar.setAttribute('class', 'pagespeed-graphs-bar');
+    var tip = document.createElementNS(ns, 'title');
+    tip.textContent = rows[i].name + ': ' + rows[i].value;
+    bar.appendChild(tip); svg.appendChild(bar);
+    var value = document.createElementNS(ns, 'text');
+    value.setAttribute('x', '590'); value.setAttribute('y', y + 26);
+    value.setAttribute('class', 'pagespeed-graphs-bar-value');
+    var share = total > 0 ? 100 * Math.max(0, rows[i].value) / total : 0;
+    value.textContent = rows[i].value.toLocaleString() + '  ·  ' + share.toFixed(1) + '%';
+    svg.appendChild(value);
+  }
+  chart.appendChild(svg);
 };
 
-
 /**
- * Draw a history chart using Google Charts API.
- * @param {string} prefix The statistics prefix of data for the chart.
- * @param {string} title The title of the chart.
- * @param {string} targetId The id of the target HTML element.
+ * Draw a responsive SVG time-series chart.
+ * @param {string} prefix Statistics prefix.
+ * @param {string} title Chart title.
+ * @param {string} targetId Graph view id.
  */
-pagespeed.Graphs.prototype.drawHistoryChart = function(
-    prefix, title, targetId) {
+pagespeed.Graphs.prototype.drawHistoryChart = function(prefix, title, targetId) {
   var id = 'pagespeed-graphs-' + prefix;
   var settingPrefix = prefix + '_';
-  var theChart = this.initChart(id, title, 'AnnotatedTimeLine', targetId);
-  var dest = document.getElementById(id);
-  var rows = [];
-  var data = new google.visualization.DataTable();
-
-  // The annotated time line for data history.
-  data.addColumn('datetime', 'Time');
-  var first = true;
-  for (var i = 0; i < this.psolMessages_.length; ++i) {
-    var messages = goog.array.clone(this.psolMessages_[i].messages);
-    var row = [];
-    row.push(this.psolMessages_[i].timeReceived);
-    for (var j = 0; j < messages.length; ++j) {
-      if (!pagespeed.Graphs.screenData(settingPrefix, messages[j].name)) {
-        continue;
+  var chart = this.initChart(id, title, targetId);
+  while (chart.firstChild) chart.removeChild(chart.firstChild);
+  var seriesNames = [];
+  var seriesValues = [];
+  for (var i = 0; i < this.psolMessages_.length; i++) {
+    var sample = this.psolMessages_[i];
+    var found = {};
+    for (var j = 0; j < sample.messages.length; j++) {
+      var message = sample.messages[j];
+      if (!pagespeed.Graphs.screenData(settingPrefix, message.name)) continue;
+      var name = message.name.substring(settingPrefix.length);
+      if (seriesNames.indexOf(name) < 0 && seriesNames.length < 8) {
+        seriesNames.push(name);
+        seriesValues.push([]);
+        for (var prior = 0; prior < i; prior++) {
+          seriesValues[seriesValues.length - 1].push(0);
+        }
       }
-      row.push(Number(messages[j].value));
-      if (first) {
-        var caption = messages[j].name.substring(settingPrefix.length);
-        caption = caption.replace(/_/g, ' ');
-        data.addColumn('number', caption);
-      }
+      var index = seriesNames.indexOf(name);
+      if (index >= 0) found[name] = Number(message.value);
     }
-    first = false;
-    rows.push(row);
+    for (var j = 0; j < seriesNames.length; j++) {
+      seriesValues[j].push(found[seriesNames[j]] || 0);
+    }
   }
-  data.addRows(rows);
-  theChart.draw(data, pagespeed.Graphs.ANNOTATED_TIMELINE_OPTIONS_);
-};
-
-
-/**
- * The options used for drawing google.visualization.AnnotatedTimeLine graphs.
- * @private {Object}
- * @const
- */
-pagespeed.Graphs.ANNOTATED_TIMELINE_OPTIONS_ = {
-  'thickness': 1,
-  'displayExactValues': true,
-  'legendPosition': 'newRow'
+  if (!this.psolMessages_.length || !seriesNames.length) {
+    var empty = document.createElement('p');
+    empty.className = 'pagespeed-graphs-empty';
+    empty.textContent = 'Waiting for enough statistics samples to draw a trend.';
+    chart.appendChild(empty);
+    return;
+  }
+  var ns = 'http://www.w3.org/2000/svg';
+  var width = 760, height = 260, left = 66, right = 16, top = 16, bottom = 30;
+  var plotWidth = width - left - right, plotHeight = height - top - bottom;
+  var max = 0;
+  for (var i = 0; i < seriesValues.length; i++) {
+    for (var j = 0; j < seriesValues[i].length; j++) {
+      max = Math.max(max, seriesValues[i][j]);
+    }
+  }
+  max = Math.max(max * 1.12, 1);
+  var svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'pagespeed-graphs-lines');
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', title + ' trends for the last 24 hours');
+  for (var tick = 0; tick <= 4; tick++) {
+    var y = top + plotHeight * tick / 4;
+    var grid = document.createElementNS(ns, 'line');
+    grid.setAttribute('x1', left); grid.setAttribute('x2', width - right);
+    grid.setAttribute('y1', y); grid.setAttribute('y2', y);
+    grid.setAttribute('class', 'pagespeed-graphs-gridline'); svg.appendChild(grid);
+    var label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', left - 9); label.setAttribute('y', y + 4);
+    label.setAttribute('text-anchor', 'end');
+    label.setAttribute('class', 'pagespeed-graphs-axis-label');
+    label.textContent = (max * (1 - tick / 4)).toLocaleString();
+    svg.appendChild(label);
+  }
+  var colors = ['#39765e', '#c18a43', '#4b83a5', '#8a6c9e', '#d06d55', '#478f8b', '#687c9a', '#a37b55'];
+  var legend = document.createElement('div');
+  legend.className = 'pagespeed-graphs-legend';
+  for (var i = 0; i < seriesNames.length; i++) {
+    var path = '';
+    for (var j = 0; j < seriesValues[i].length; j++) {
+      var x = left + (seriesValues[i].length < 2 ? plotWidth / 2 :
+          plotWidth * j / (seriesValues[i].length - 1));
+      var y = top + plotHeight * (1 - seriesValues[i][j] / max);
+      path += (j ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+    }
+    var line = document.createElementNS(ns, 'path');
+    line.setAttribute('d', path); line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', colors[i % colors.length]);
+    line.setAttribute('stroke-width', '2.5'); line.setAttribute('stroke-linecap', 'round');
+    line.setAttribute('stroke-linejoin', 'round');
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    var lineTitle = document.createElementNS(ns, 'title');
+    lineTitle.textContent = seriesNames[i].replace(/_/g, ' ');
+    line.appendChild(lineTitle); svg.appendChild(line);
+    var item = document.createElement('span');
+    item.className = 'pagespeed-graphs-legend-item';
+    item.style.color = colors[i % colors.length];
+    item.textContent = seriesNames[i].replace(/_/g, ' ');
+    legend.appendChild(item);
+  }
+  var firstTime = this.psolMessages_[0].timeReceived;
+  var lastTime = this.psolMessages_[this.psolMessages_.length - 1].timeReceived;
+  var firstLabel = document.createElementNS(ns, 'text');
+  firstLabel.setAttribute('x', left); firstLabel.setAttribute('y', height - 6);
+  firstLabel.setAttribute('class', 'pagespeed-graphs-axis-label');
+  firstLabel.textContent = firstTime.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  svg.appendChild(firstLabel);
+  var lastLabel = document.createElementNS(ns, 'text');
+  lastLabel.setAttribute('x', width - right); lastLabel.setAttribute('y', height - 6);
+  lastLabel.setAttribute('text-anchor', 'end');
+  lastLabel.setAttribute('class', 'pagespeed-graphs-axis-label');
+  lastLabel.textContent = lastTime.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  svg.appendChild(lastLabel);
+  chart.appendChild(svg);
+  chart.appendChild(legend);
 };
 
 

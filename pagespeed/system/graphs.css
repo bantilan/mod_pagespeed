@@ -14,19 +14,157 @@
  * limitations under the License.
  */
 
-/**
- * @fileoverview Styles for pagespeed_admin/graphs.
- *
- * @author xqyin@google.com (XiaoQian Yin)
- */
-
-.pagespeed-graphs-title {
-  font-weight: bold;
-  font-size: large;
-  font-family: sans-serif;
-  padding: 30px 0 10px 0;
+#nav-bar.pagespeed-sub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 14px;
+  padding: 5px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: #f3f6f2;
 }
-.pagespeed-graphs-chart {
-  height: 320px;
-  width: 1100px;
+#nav-bar.pagespeed-sub-tabs a {
+  padding: 9px 12px;
+  border-radius: 6px;
+  color: #607268;
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+}
+#nav-bar.pagespeed-sub-tabs a:hover,
+#nav-bar.pagespeed-sub-tabs a.pagespeed-underline-link {
+  background: #fff;
+  color: #285d49;
+  box-shadow: 0 2px 7px rgba(31, 55, 47, .08);
+}
+.pagespeed-stat-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 12px;
+  padding: 10px 13px;
+  border: 1px solid #dfe7e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #607268;
+  font-size: 11px;
+}
+.pagespeed-stat-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.pagespeed-stat-toolbar input { accent-color: #39765e; }
+
+#cache_applied:not(.pagespeed-hidden-offscreen),
+#cache_type:not(.pagespeed-hidden-offscreen),
+#ipro:not(.pagespeed-hidden-offscreen),
+#image_rewriting:not(.pagespeed-hidden-offscreen),
+#realtime:not(.pagespeed-hidden-offscreen) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+.pagespeed-graphs-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+  animation: pagespeed-graphs-enter .3s ease both;
+}
+.pagespeed-graphs-panel-heading {
+  padding: 15px 17px 11px;
+  border-bottom: 1px solid #edf0ed;
+  background: linear-gradient(120deg, #fff, #f8faf7);
+}
+.pagespeed-graphs-title {
+  margin: 0;
+  color: #294b3e;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.pagespeed-graphs-chart { min-width: 0; padding: 12px 14px 14px; }
+.pagespeed-graphs-bars,
+.pagespeed-graphs-lines {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.pagespeed-graphs-gridline {
+  stroke: #e8eee9;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.pagespeed-graphs-axis-label {
+  fill: #849087;
+  font-family: inherit;
+  font-size: 10px;
+}
+.pagespeed-graphs-bar-label {
+  fill: #50665b;
+  font-family: inherit;
+  font-size: 11px;
+}
+.pagespeed-graphs-bar-value {
+  fill: #294b3e;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 650;
+}
+.pagespeed-graphs-bar-track { fill: #edf2ee; }
+.pagespeed-graphs-bar { fill: #4e876d; }
+.pagespeed-graphs-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  padding: 4px 0 0 48px;
+}
+.pagespeed-graphs-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.pagespeed-graphs-legend-item:before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+.pagespeed-graphs-empty {
+  margin: 0;
+  padding: 24px 12px;
+  color: #78867c;
+  font-size: 11px;
+  text-align: center;
+}
+@keyframes pagespeed-graphs-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 850px) {
+  #cache_applied:not(.pagespeed-hidden-offscreen),
+  #cache_type:not(.pagespeed-hidden-offscreen),
+  #ipro:not(.pagespeed-hidden-offscreen),
+  #image_rewriting:not(.pagespeed-hidden-offscreen),
+  #realtime:not(.pagespeed-hidden-offscreen) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  #nav-bar.pagespeed-sub-tabs { gap: 3px; }
+  #nav-bar.pagespeed-sub-tabs a { padding: 8px; font-size: 10px; }
+  .pagespeed-graphs-chart { padding: 9px 7px 10px; }
+  .pagespeed-graphs-panel-heading { padding: 12px 13px 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pagespeed-graphs-panel { animation: none; }
 }

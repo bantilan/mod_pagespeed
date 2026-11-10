@@ -824,10 +824,6 @@ void AdminSite::GraphsHandler(const RewriteOptions& options, AdminSource source,
       "<div id='image_rewriting'>Loading Charts...</div>"
       "<div id='realtime'>Loading Charts...</div>",
       message_handler_);
-  fetch->Write(
-      "<script type='text/javascript' "
-      "src='https://www.google.com/jsapi'></script>",
-      message_handler_);
   StringPiece graphs_js =
       options.Enabled(RewriteOptions::kDebug) ? JS_graphs_js : JS_graphs_js_opt;
   fetch->Write(StrCat("<script type='text/javascript'>", graphs_js,

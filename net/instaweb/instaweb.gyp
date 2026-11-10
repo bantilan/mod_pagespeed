@@ -250,7 +250,6 @@
         'js_dir': 'system',
         'closure_build_type': 'dbg',
         'extra_closure_flags': [
-          '--externs=<(DEPTH)/third_party/closure/externs/google_visualization_api.js',
           '--entry_point=goog:pagespeed.Graphs',
           '<@(include_closure_library)',
         ],
@@ -263,7 +262,6 @@
       'variables': {
         'js_dir': 'system',
         'extra_closure_flags': [
-          '--externs=<(DEPTH)/third_party/closure/externs/google_visualization_api.js',
           '--entry_point=goog:pagespeed.Graphs',
           '<@(include_closure_library)',
         ],
