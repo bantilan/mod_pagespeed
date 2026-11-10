@@ -186,7 +186,15 @@ pagespeed.Configuration.render_ = function(root, model) {
     var visibleCount = Math.min(4, groupFilters.length);
     for (var j = 0; j < groupFilters.length; j++) {
       var item = document.createElement('li');
-      item.textContent = groupFilters[j].name;
+      var filterName = document.createElement('span');
+      filterName.className = 'pagespeed-config-filter-name';
+      filterName.textContent = groupFilters[j].name;
+      var filterCode = document.createElement('code');
+      filterCode.className = 'pagespeed-config-filter-code';
+      filterCode.textContent = groupFilters[j].code;
+      filterCode.title = 'PageSpeed filter ID';
+      item.appendChild(filterName);
+      item.appendChild(filterCode);
       item.hidden = j >= visibleCount;
       list.appendChild(item);
     }

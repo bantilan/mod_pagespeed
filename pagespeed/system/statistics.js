@@ -305,7 +305,8 @@ pagespeed.Statistics.prototype.update = function() {
     var table = document.createElement('table');
     table.className = 'pagespeed-admin-data-table pagespeed-stats-table';
     var header = table.createTHead().insertRow(0);
-    var tableBody = table.createTBody();
+    var tableBody = document.createElement('tbody');
+    table.appendChild(tableBody);
     var metricHeader = document.createElement('th');
     metricHeader.textContent = 'Metric';
     header.appendChild(metricHeader);

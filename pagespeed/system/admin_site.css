@@ -412,6 +412,10 @@ mod rules
   list-style: none;
 }
 .pagespeed-config-filter-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 6px 8px;
   border: 1px solid rgba(214, 225, 216, .75);
   border-radius: 5px;
@@ -419,6 +423,14 @@ mod rules
   color: #5d6f63;
   font-size: 10px;
   line-height: 1.4;
+}
+.pagespeed-config-filter-name { min-width: 0; }
+.pagespeed-config-filter-code {
+  flex: 0 0 auto;
+  color: #294b3e;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: right;
 }
 .pagespeed-config-filter-more {
   margin: 8px 0 0;
