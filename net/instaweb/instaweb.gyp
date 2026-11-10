@@ -773,6 +773,7 @@
     },
     {
       'target_name': 'instaweb_config_js_data2c',
+      'dependencies': [ 'config_js_dbg', ],
       'variables': {
         'instaweb_data2c_subdir': 'pagespeed/system',
         'instaweb_js_subdir': '<(compiled_js_dir)/system',
