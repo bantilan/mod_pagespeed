@@ -296,6 +296,180 @@ mod rules
   background: #fff;
 }
 .pagespeed-config-panel pre { margin: 0; border: 0; border-radius: 0; }
+.pagespeed-config-page { display: grid; gap: 15px; min-width: 0; }
+.pagespeed-config-source pre {
+  max-height: 70vh;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #526157;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.pagespeed-config-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  border: 1px solid #ceddea;
+  border-radius: 8px;
+  background: linear-gradient(110deg, #f0f6fb, #f8fafc);
+  color: #45637a;
+  font-size: 11px;
+}
+.pagespeed-config-notice-icon {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #4e83aa;
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+}
+.pagespeed-config-notice strong { color: #294c66; font-size: 12px; }
+.pagespeed-config-notice p { margin: 4px 0 0; line-height: 1.5; }
+.pagespeed-config-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 11px;
+}
+.pagespeed-config-summary-card {
+  min-width: 0;
+  padding: 14px 15px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #fff, #f5f8f4);
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-config-summary-label,
+.pagespeed-config-summary-note { display: block; }
+.pagespeed-config-summary-label { color: #718077; font-size: 10px; font-weight: 700; }
+.pagespeed-config-summary-value {
+  display: block;
+  margin-top: 6px;
+  color: #203b34;
+  font-size: 18px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+.pagespeed-config-summary-note { margin-top: 4px; color: #78867c; font-size: 10px; }
+.pagespeed-config-columns {
+  display: grid;
+  grid-template-columns: minmax(250px, .85fr) minmax(0, 1.4fr);
+  align-items: start;
+  gap: 14px;
+}
+.pagespeed-config-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-config-section-heading,
+.pagespeed-config-filter-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pagespeed-config-section-heading { margin-bottom: 13px; }
+.pagespeed-config-section-heading h2 { margin: 0; color: #294b3e; font-size: 15px; }
+.pagespeed-config-section-heading p { margin: 4px 0 0; color: #78867c; font-size: 10px; }
+.pagespeed-config-filter-group {
+  margin-top: 9px;
+  padding: 12px;
+  border: 1px solid #e7ece8;
+  border-radius: 7px;
+  background: #f9fbf9;
+}
+.pagespeed-config-filter-css { background: #f6f9fc; }
+.pagespeed-config-filter-javascript { background: #faf7fc; }
+.pagespeed-config-filter-images { background: #f5f9f4; }
+.pagespeed-config-filter-other { background: #faf9f5; }
+.pagespeed-config-filter-heading strong { color: #314b3e; font-size: 12px; }
+.pagespeed-config-filter-group p { margin: 8px 0 0; color: #65756b; font-size: 10px; line-height: 1.6; }
+.pagespeed-config-enabled {
+  padding: 4px 8px;
+  border-radius: 12px;
+  background: #e8f3e8;
+  color: #47714f;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pagespeed-config-options-card { padding-bottom: 12px; }
+.pagespeed-config-options-toolbar { flex: 0 1 220px; }
+.pagespeed-config-options-toolbar input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d6e0d8;
+  border-radius: 6px;
+  background: #fbfcfa;
+  color: #33483d;
+  font: inherit;
+  font-size: 11px;
+}
+.pagespeed-config-table { min-width: 600px; }
+.pagespeed-config-table th:last-child,
+.pagespeed-config-table td:last-child { width: 42px; text-align: right; }
+.pagespeed-config-option-name { min-width: 150px; color: #304a3e; font-size: 10px; }
+.pagespeed-config-option-name small { display: block; margin-top: 2px; color: #829087; font-size: 9px; }
+.pagespeed-config-table td { font-size: 10px !important; }
+.pagespeed-config-table td:nth-child(2) { color: #344d41 !important; font-weight: 600; overflow-wrap: anywhere; }
+.pagespeed-config-value-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; background: #f1efeb; color: #777267; font-size: 9px; }
+.pagespeed-config-value-badge.is-true { background: #e8f3e8; color: #47714f; }
+.pagespeed-config-copy,
+.pagespeed-config-more,
+.pagespeed-config-export {
+  border: 0;
+  background: transparent;
+  color: #39765e;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pagespeed-config-copy { padding: 5px; }
+.pagespeed-config-copy:hover,
+.pagespeed-config-more:hover { color: #24543f; text-decoration: underline; }
+.pagespeed-config-more { margin: 10px 0 0; padding: 5px 8px; }
+.pagespeed-config-domain { padding: 14px 16px; }
+.pagespeed-config-timestamp {
+  display: inline-block;
+  margin: 2px 0 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: #f0f4ef;
+  color: #496154;
+  font-size: 10px;
+}
+.pagespeed-config-export {
+  padding: 9px 12px;
+  border: 1px solid #d6e0d8;
+  border-radius: 6px;
+  background: #fff;
+  color: #426252;
+  white-space: nowrap;
+}
+.pagespeed-config-export:hover { background: #f5f8f4; }
+.pagespeed-config-empty { color: #748178; font-size: 11px; }
+@media (max-width: 900px) {
+  .pagespeed-config-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pagespeed-config-columns { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .pagespeed-config-summary { grid-template-columns: minmax(0, 1fr); }
+  .pagespeed-config-card { padding: 12px; }
+  .pagespeed-config-section-heading { flex-direction: column; }
+  .pagespeed-config-export { align-self: flex-start; }
+}
 #log {
   display: grid;
   gap: 12px;

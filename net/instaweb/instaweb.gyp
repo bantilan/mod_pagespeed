@@ -245,6 +245,20 @@
     },
 
     {
+      'target_name': 'config_js_dbg',
+      'variables': {
+        'js_dir': 'system',
+        'closure_build_type': 'dbg',
+        'extra_closure_flags': [
+          '--entry_point=goog:pagespeed.Configuration',
+          '<@(include_closure_library)',
+        ],
+      },
+      'sources': [ '<(DEPTH)/pagespeed/system/config.js' ],
+      'includes': [ 'closure.gypi', ],
+    },
+
+    {
       'target_name': 'graphs_js_dbg',
       'variables': {
         'js_dir': 'system',
@@ -757,6 +771,19 @@
         'data2c.gypi',
       ]
     },
+    {
+      'target_name': 'instaweb_config_js_data2c',
+      'variables': {
+        'instaweb_data2c_subdir': 'pagespeed/system',
+        'instaweb_js_subdir': '<(compiled_js_dir)/system',
+        'var_name': 'config_js',
+      },
+      'sources': [
+        '<(compiled_js_dir)/system/config_dbg.js',
+      ],
+      'includes': [ 'data2c.gypi', ]
+    },
+
     {
       'target_name': 'instaweb_graphs_js_data2c',
       'variables': {
@@ -1523,6 +1550,7 @@
         'instaweb_console_css_data2c',
         'instaweb_console_js_data2c',
         'instaweb_console_js_opt_data2c',
+        'instaweb_config_js_data2c',
         'instaweb_core.gyp:instaweb_rewriter_html',
         'instaweb_critical_css_beacon_data2c',
         'instaweb_critical_css_beacon_opt_data2c',

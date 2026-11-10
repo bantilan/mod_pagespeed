@@ -63,6 +63,16 @@ closure_compiler_gen(
 )
 
 closure_compiler_gen(
+    name = "config_dbg",
+    entry_points = [
+        "goog:pagespeed.Configuration",
+    ],
+    js_dir = "system",
+    js_src = "pagespeed/system/config.js",
+    opt = False,
+)
+
+closure_compiler_gen(
     name = "graphs_opt",
     entry_points = [
         "goog:pagespeed.Graphs",
@@ -117,6 +127,7 @@ data2c_gen2_admin_js(
     srcs = [
         "caches",
         "console",
+        "config",
         "graphs",
         "messages",
         "statistics",
@@ -195,6 +206,7 @@ cc_library(
         ":js_data2c_generated_caches_opt",
         ":js_data2c_generated_console",
         ":js_data2c_generated_console_opt",
+        ":js_data2c_generated_config",
         ":js_data2c_generated_graphs",
         ":js_data2c_generated_graphs_opt",
         ":js_data2c_generated_messages",

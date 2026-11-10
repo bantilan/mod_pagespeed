@@ -60,6 +60,7 @@ namespace net_instaweb {
 // Generated from JS, CSS, and HTML source via net/instaweb/js/data_to_c.cc.
 extern const char* CSS_admin_site_css;
 extern const char* CSS_caches_css;
+extern const char* JS_config_js;
 extern const char* CSS_console_css;
 extern const char* CSS_graphs_css;
 extern const char* CSS_statistics_css;
@@ -1161,12 +1162,20 @@ void AdminSite::PrintConfig(
   AdminHtml admin_html("config", "", source, timer_, fetch, message_handler_);
   WriteAdminPageHeading(fetch, message_handler_, "ACTIVE SETTINGS",
                         "Configuration",
-                        "Read the effective PageSpeed options for this "
+                        "View the effective PageSpeed options for this "
                         "server instance.");
-  fetch->Write("<div class='pagespeed-config-panel'>", message_handler_);
+  fetch->Write(
+      "<div class='pagespeed-config-page'>"
+      "<div id='pagespeed-config-root'></div>"
+      "<div id='pagespeed-config-source' class='pagespeed-config-source'>",
+      message_handler_);
   HtmlKeywords::WritePre(global_system_rewrite_options->OptionsToString(), "",
                          fetch, message_handler_);
-  fetch->Write("</div>", message_handler_);
+  fetch->Write(
+      "</div></div><script type='text/javascript'>",
+      message_handler_);
+  fetch->Write(JS_config_js, message_handler_);
+  fetch->Write("pagespeed.Configuration.Start();</script>\n", message_handler_);
 }
 
 void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
