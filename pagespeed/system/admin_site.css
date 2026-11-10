@@ -395,6 +395,33 @@ mod rules
 .pagespeed-config-filter-other { background: #faf9f5; }
 .pagespeed-config-filter-heading strong { color: #314b3e; font-size: 12px; }
 .pagespeed-config-filter-group p { margin: 8px 0 0; color: #65756b; font-size: 10px; line-height: 1.6; }
+.pagespeed-config-view-all {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid #d6e0d8;
+  border-radius: 6px;
+  background: #fff;
+  color: #39765e;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pagespeed-config-view-all:hover { background: #f5f8f4; }
+.pagespeed-config-full {
+  max-height: 360px;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #e1e8e2;
+  border-radius: 6px;
+  background: #fbfcfa;
+  color: #526157;
+  font: 10px/1.55 monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pagespeed-config-full[hidden] { display: none; }
 .pagespeed-config-enabled {
   padding: 4px 8px;
   border-radius: 12px;

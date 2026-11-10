@@ -35,7 +35,10 @@ pagespeed.Configuration.Start = function() {
 
 /** @param {string} text @return {!Object} Parsed active settings. @private */
 pagespeed.Configuration.parse_ = function(text) {
-  var model = {version: 'Not reported', filters: [], options: [], invalidation: ''};
+  var model = {
+    version: 'Not reported', filters: [], options: [], invalidation: '',
+    raw: text
+  };
   var section = '';
   var lines = text.split('\n');
   for (var i = 0; i < lines.length; i++) {
@@ -154,6 +157,12 @@ pagespeed.Configuration.render_ = function(root, model) {
   filters.innerHTML = '<div class="pagespeed-config-section-heading"><div>' +
       '<h2>Active filters</h2><p>PageSpeed filters currently enabled.</p>' +
       '</div></div>';
+  var filterHeading = filters.querySelector('.pagespeed-config-section-heading');
+  var viewAll = document.createElement('button');
+  viewAll.type = 'button';
+  viewAll.className = 'pagespeed-config-view-all';
+  viewAll.textContent = 'View full configuration';
+  viewAll.setAttribute('aria-expanded', 'false');
   var groups = ['CSS', 'JavaScript', 'Images', 'Other'];
   for (var i = 0; i < groups.length; i++) {
     var groupFilters = [];
@@ -185,6 +194,19 @@ pagespeed.Configuration.render_ = function(root, model) {
     empty.textContent = 'No active filters were listed.';
     filters.appendChild(empty);
   }
+  var fullConfig = document.createElement('pre');
+  fullConfig.className = 'pagespeed-config-full';
+  fullConfig.hidden = true;
+  fullConfig.textContent = model.raw;
+  viewAll.addEventListener('click', function() {
+    var showing = !fullConfig.hidden;
+    fullConfig.hidden = showing;
+    viewAll.textContent = showing ? 'View full configuration' :
+                                    'Hide full configuration';
+    viewAll.setAttribute('aria-expanded', showing ? 'false' : 'true');
+  });
+  filterHeading.appendChild(viewAll);
+  filters.appendChild(fullConfig);
   columns.appendChild(filters);
 
   var optionsCard = document.createElement('section');
