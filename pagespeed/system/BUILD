@@ -32,7 +32,6 @@ closure_compiler_gen(
     ],
     externs = [
         "pagespeed/system/js_externs.js",
-        "third_party/closure/externs/google_visualization_api.js",
     ],
     js_dir = "system",
     js_src = "pagespeed/system/console.js",
@@ -47,7 +46,6 @@ closure_compiler_gen(
     ],
     externs = [
         "pagespeed/system/js_externs.js",
-        "third_party/closure/externs/google_visualization_api.js",
     ],
     js_dir = "system",
     js_src = "pagespeed/system/console.js",

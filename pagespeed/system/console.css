@@ -14,48 +14,221 @@
  * limitations under the License.
  */
 
-/**
- * @fileoverview Styles for the mod_pagespeed console.
- *
- * @author sarahdw@google.com (Sarah Dapul-Weberman)
- * @author bvb@google.com (Ben VanBerkum)
- * @author joseantonio@google.com (Jose Antonio Martinez)
- */
+/** @fileoverview Styles for the mod_pagespeed console. */
 
-/*------------------------------------------------------------------
-@global Type
-------------------------------------------------------------------*/
-body,body input,body button,body td {
-  font-family: sans-serif;
-  color: #222;
-  font-size:13px;
-  -webkit-tap-highlight-color: rgba(0,0,0,0);
+.pagespeed-console {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
 }
-strong, b {
-  font-weight:bold;
+.pagespeed-console-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
-
-/*------------------------------------------------------------------
-mod rules
-------------------------------------------------------------------*/
-
+.pagespeed-console-summary-card {
+  min-width: 0;
+  padding: 15px 17px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #fff, #f5f8f4);
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-console-summary-label {
+  display: block;
+  color: #718077;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.pagespeed-console-summary-value {
+  display: block;
+  margin-top: 7px;
+  color: #203b34;
+  font-size: 21px;
+  font-weight: 750;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+.pagespeed-console-summary-note {
+  display: block;
+  margin-top: 4px;
+  color: #748178;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.pagespeed-console-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 15px;
+  border: 1px solid #dfe7e1;
+  border-radius: 7px;
+  background: #fff;
+}
+.pagespeed-console-toolbar-copy h2 {
+  margin: 0 0 3px;
+  color: #203b34;
+  font-size: 16px;
+}
+.pagespeed-console-toolbar-copy p {
+  margin: 0;
+  color: #748178;
+  font-size: 11px;
+}
+.pagespeed-console-search {
+  width: min(100%, 300px);
+  padding: 9px 11px;
+  border: 1px solid #d6e0d8;
+  border-radius: 6px;
+  background: #fbfcfa;
+  color: #33483d;
+  font: inherit;
+  font-size: 12px;
+}
+.pagespeed-console-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
 .pagespeed-widgets {
-  background-color: #FFFFFF;
-  border: 1px solid #CCCCCC;
-  box-shadow: 0 15px 10px -10px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 40px rgba(0, 0, 0, 0.1) inset;
-  float: left;
-  margin: 20px 0 0 20px;
-  min-width: 500px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+  animation: pagespeed-console-enter .35s ease both;
+}
+.pagespeed-console-grid .pagespeed-widgets:nth-child(2n) {
+  animation-delay: .04s;
 }
 .pagespeed-widgets-topbar {
-  background-color: #F2F2F2;
-  border-bottom:1px solid #E5E5E5;
-  height: 35px;
-  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 76px;
+  padding: 15px 17px 11px;
+  border-bottom: 1px solid #edf0ed;
+  background: linear-gradient(120deg, #fff, #f8faf7);
 }
+.pagespeed-widget-heading { min-width: 0; }
 .pagespeed-widgets-topbar .pagespeed-title {
-  font-weight: bold;
-  padding: 10px 0 4px 20px;
-  width: 85%;
-  float: left;
+  display: block;
+  color: #294b3e;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.pagespeed-console-doc {
+  display: inline-block;
+  margin-top: 5px;
+  color: #78867c;
+  font-size: 10px;
+  font-weight: 600;
+}
+.pagespeed-console-doc:visited { color: #78867c; }
+.pagespeed-widget-current {
+  flex: 0 0 auto;
+  color: #173b35;
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -.04em;
+  white-space: nowrap;
+}
+.pagespeed-widget-trend {
+  display: block;
+  margin-top: 3px;
+  color: #748178;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+}
+.pagespeed-widget-trend.is-improving { color: #39765e; }
+.pagespeed-widget-trend.is-rising { color: #a36b27; }
+.pagespeed-graph {
+  min-width: 0;
+  padding: 8px 12px 10px;
+}
+.pagespeed-console-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.pagespeed-console-gridline {
+  stroke: #e8eee9;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.pagespeed-console-axis-label {
+  fill: #849087;
+  font-family: inherit;
+  font-size: 10px;
+}
+.pagespeed-console-area { fill: url(#pagespeed-console-gradient); }
+.pagespeed-console-line {
+  fill: none;
+  stroke: #39765e;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+.pagespeed-console-point {
+  fill: #fff;
+  stroke: #39765e;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.pagespeed-console-status {
+  min-height: 18px;
+  color: #748178;
+  font-size: 11px;
+}
+.pagespeed-console-status[data-state='error'] {
+  padding: 13px 15px;
+  border: 1px solid #e7c7bb;
+  border-radius: 7px;
+  background: #fffaf8;
+  color: #a54e38;
+}
+.pagespeed-console-unavailable {
+  padding: 20px;
+  border: 1px solid #e7c7bb;
+  border-radius: 8px;
+  background: #fffaf8;
+  color: #69463e;
+}
+.pagespeed-console-unavailable h2 {
+  margin: 0 0 8px;
+  color: #8d4936;
+  font-size: 17px;
+}
+.pagespeed-console-unavailable p { margin: 0 0 10px; }
+.pagespeed-console-unavailable ul { margin: 0 0 12px 20px; }
+@keyframes pagespeed-console-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 900px) {
+  .pagespeed-console-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pagespeed-console-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .pagespeed-console-toolbar { align-items: stretch; flex-direction: column; }
+  .pagespeed-console-search { width: 100%; }
+  .pagespeed-console-summary-card { padding: 12px; }
+  .pagespeed-console-summary-value { font-size: 18px; }
+  .pagespeed-widgets-topbar { padding: 13px 14px 10px; }
+  .pagespeed-widget-current { font-size: 17px; }
+  .pagespeed-graph { padding: 5px 6px 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pagespeed-widgets { animation: none; }
 }

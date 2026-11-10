@@ -330,10 +330,23 @@ void AdminSite::ConsoleHandler(const SystemRewriteOptions& global_options,
                         "Live PageSpeed diagnostics and operational status.");
   if (statistics_enabled && logging_enabled && log_dir_set) {
     fetch->Write(
-        "<div class='console_div' id='suggestions'>\n"
-        "  <div class='console_div' id='pagespeed-graphs-container'>"
-        "</div>\n</div>\n"
-        "<script src='https://www.google.com/jsapi'></script>\n"
+        "<div class='pagespeed-console' id='suggestions'>\n"
+        "  <div class='pagespeed-console-status' id='pagespeed-console-status'"
+        " role='status'>Loading recent diagnostics...</div>\n"
+        "  <div class='pagespeed-console-summary'"
+        " id='pagespeed-console-summary'></div>\n"
+        "  <div class='pagespeed-console-toolbar'>\n"
+        "    <div class='pagespeed-console-toolbar-copy'>\n"
+        "      <h2>Operational signals</h2>\n"
+        "      <p>Failure and cache trends from the last 24 hours.</p>\n"
+        "    </div>\n"
+        "    <input class='pagespeed-console-search'"
+        " id='pagespeed-console-search' type='search'"
+        " placeholder='Filter signals...' aria-label='Filter signals'>\n"
+        "  </div>\n"
+        "  <div class='pagespeed-console-grid'"
+        " id='pagespeed-graphs-container'></div>\n"
+        "</div>\n"
         "<script>var pagespeedStatisticsUrl = '';</script>\n"
         "<script>",
         handler);
@@ -344,14 +357,14 @@ void AdminSite::ConsoleHandler(const SystemRewriteOptions& global_options,
     //
     // TODO(jmarantz): Change the JS to remove pagespeedStatisticsUrl.
     fetch->Write(console_js, handler);
-    fetch->Write("google.setOnLoadCallback(pagespeed.startConsole);", handler);
+    fetch->Write("pagespeed.startConsole();", handler);
     fetch->Write("</script>\n", handler);
   } else {
     fetch->Write(
-        "<p>\n"
-        "  Failed to load PageSpeed Console because:\n"
-        "</p>\n"
-        "<ul>\n",
+        "<section class='pagespeed-console-unavailable'>\n"
+        "  <h2>Console needs a little setup</h2>\n"
+        "  <p>PageSpeed cannot load the operational console because:</p>\n"
+        "  <ul>\n",
         handler);
     if (!statistics_enabled) {
       fetch->Write("  <li>Statistics is not enabled.</li>\n", handler);
@@ -368,11 +381,12 @@ void AdminSite::ConsoleHandler(const SystemRewriteOptions& global_options,
     fetch->Write(
         "</ul>\n"
         "<p>\n"
-        "  In order to use the console you must configure these\n"
-        "  options. See the <a href='https://developers.google.com/"
+        "  Configure these options to enable the console. See the\n"
+        "  <a href='https://developers.google.com/"
         "speed/pagespeed/module/console'>console documentation</a>\n"
         "  for more details.\n"
-        "</p>\n",
+        "</p>\n"
+        "</section>\n",
         handler);
   }
 }

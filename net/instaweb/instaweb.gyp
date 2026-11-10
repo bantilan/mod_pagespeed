@@ -165,14 +165,12 @@
         'closure_build_type': 'dbg',
         'extra_closure_flags': [
           '--externs=<(DEPTH)/pagespeed/system/js_externs.js',
-          '--externs=<(DEPTH)/third_party/closure/externs/google_visualization_api.js',
           '--entry_point=goog:pagespeed.Console',
           '--entry_point=goog:pagespeed.statistics',
           '<@(include_closure_library)',
         ],
       },
       'sources': [ '<(DEPTH)/pagespeed/system/console.js' ],
-      'js_includes': [ '<(DEPTH)/pagespeed/system/console_start.js' ],
       'includes': [ 'closure.gypi', ],
     },
     {
@@ -181,14 +179,12 @@
         'js_dir': 'system',
         'extra_closure_flags': [
           '--externs=<(DEPTH)/pagespeed/system/js_externs.js',
-          '--externs=<(DEPTH)/third_party/closure/externs/google_visualization_api.js',
           '--entry_point=goog:pagespeed.Console',
           '--entry_point=goog:pagespeed.statistics',
           '<@(include_closure_library)',
         ],
       },
       'sources': [ '<(DEPTH)/pagespeed/system/console.js' ],
-      'js_includes': [ '<(DEPTH)/pagespeed/system/console_start.js' ],
       'includes': [ 'closure.gypi', ],
     },
 

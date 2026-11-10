@@ -22,11 +22,9 @@
  *
  * Note that for unit testing purposes, the initialization code here is not
  * actually run. admin_site.cc injects the call to
- * google.setOnLoadCallback(pagespeed.startConsole); to actually run the code
- * here.
+ * pagespeed.startConsole() to run the code here.
  *
- * PRECONDITIONS: pagespeedStatisticsUrl must be set in JavaScript and
- * <script src='https://www.google.com/jsapi'></script> must be loaded in HTML.
+ * PRECONDITION: pagespeedStatisticsUrl must be set in JavaScript.
  *
  * @author sligocki@google.com (Shawn Ligocki)
  * @author sarahdw@google.com (Sarah Dapul-Weberman)
@@ -41,10 +39,6 @@ goog.provide('pagespeed.statistics');
 
 goog.require('goog.structs.Set');
 
-// Google Charts API.
-// Requires <script src='https://www.google.com/jsapi'></script> loaded in HTML.
-google.load('visualization', '1.0', {'packages': ['corechart']});
-
 
 /**
  * Report error.
@@ -54,7 +48,11 @@ pagespeed.error = function(error_message) {
   if (window.console) {
     console.error(error_message);
   }
-  // TODO(sligocki): Show error message in DOM somewhere as well.
+  var status = document.getElementById('pagespeed-console-status');
+  if (status) {
+    status.textContent = error_message;
+    status.setAttribute('data-state', 'error');
+  }
 };
 
 
@@ -94,52 +92,7 @@ pagespeed.Console = function() {
    */
   this.timestamps_ = null;
 
-  /**
-   * The options used for drawing google.visualization.LineChart graphs.
-   * @type {Object}
-   * @private
-   * @const
-   */
-  this.lineChartOptions_ = {
-    'width': 900,
-    'height': 255,
-    'colors': ['#4ECDC4', '#556270', '#C7F464'],
-    'legend': {
-      'position': 'bottom'
-    },
-    'hAxis': {
-      // This looks awkward when all timestamps are in the last day.
-      // TODO(sligocki): Use a different format which looks better for range.
-      'format': 'MMM d, y hh:mma',
-      'gridlines': {
-        'color': '#F2F2F2'
-      },
-      'baselineColor': '#E5E5E5'
-    },
-    'vAxis': {
-      'format': '#.###%',
-      'minValue': 0,
-      // TODO(sligocki): Should we lock all graphs to be 0-100%? Currently
-      // the max value auto-scales leading to graphs with max values around
-      // 0.05%, etc. These don't really seem notable, it seems like it would
-      // be better not to draw too much attention to these.
-      //'maxValue': 1,  // 100%
-      'viewWindowMode': 'explicit',
-      'viewWindow': {
-        'min': 0
-      },
-      'gridlines': {
-        'color': '#F2F2F2'
-      },
-      'baselineColor': '#E5E5E5'
-    },
-    'chartArea': {
-      'left': 60,
-      'top': 20,
-      'width': 800
-    },
-    'pointSize': 2
-  };
+
 };
 
 
@@ -346,8 +299,7 @@ pagespeed.Console.prototype.addGraph = function(title, urlFragment, stat) {
   graph.overallPercent = null;
   graph.priority = null;
   // Created once data is loaded.
-  graph.dataTable = null;
-  graph.lineChart = null;
+  graph.values = null;
 
   this.graphs_.push(graph);
   this.varsNeeded_.addAll(stat.varsNeeded);
@@ -468,14 +420,15 @@ pagespeed.Console.prototype.drawGraphsFromJsonData = function(data) {
             return fn;
           }(this.variables_)));
     }
-    this.graphs_[i].overallPercent = statTimeSeries[statTimeSeries.length - 1];
+    this.graphs_[i].values = statTimeSeries;
+    this.graphs_[i].timestamps = this.timestamps_;
+    this.graphs_[i].overallPercent = statTimeSeries.length ?
+        statTimeSeries[statTimeSeries.length - 1] : 0;
     // TODO(sligocki): This just sets the priority equal to the overall
     // long-run stat average. But we may want to prioritize different
     // issues different amounts.
     this.graphs_[i].priority = this.graphs_[i].overallPercent;
-    this.graphs_[i].dataTable =
-        this.buildDataTable(this.graphs_[i].title,
-                            this.timestamps_, statTimeSeries);
+
   }
 
   // Sort by priority (highest priority first).
@@ -483,6 +436,15 @@ pagespeed.Console.prototype.drawGraphsFromJsonData = function(data) {
 
   for (var i = 0; i < this.graphs_.length; i++) {
     this.drawGraph(this.graphs_[i]);
+  }
+  this.renderSummary_();
+  this.installSearch_();
+  var status = document.getElementById('pagespeed-console-status');
+  if (status) {
+    status.textContent = this.timestamps_.length ?
+        'Updated just now - ' + this.timestamps_.length + ' samples across 24 hours' :
+        'No samples are available for the selected period.';
+    status.removeAttribute('data-state');
   }
 };
 
@@ -506,64 +468,136 @@ pagespeed.Console.prototype.checkDataValidity = function(
 
 
 /**
- * Build the google.visualization.DataTable for given data.
- *
- * @param {string} title  Label for values.
- * @param {Array.<number>} timestamps      x-coords of the graph.
- * @param {Array.<number>} statTimeSeries  y-coords of the graph.
- * @return {Object}  The data table.
- */
-pagespeed.Console.prototype.buildDataTable = function(
-    title, timestamps, statTimeSeries) {
-  // Build data table.
-  var dataTable = this.createDataTable(title);
-  for (var i = 0; i < timestamps.length; i++) {
-    dataTable.addRow([new Date(timestamps[i]), statTimeSeries[i]]);
-  }
-  if (dataTable.getNumberOfRows() == 0) {
-    pagespeed.error('Data failed to load for graph ' + title);
-  }
-
-  return dataTable;
-};
-
-
-/**
- * createDataTable creates a new google.visualization.DataTable
- * and returns it. Each DataTable has two columns: a timestamp
- * (represented as a number, time elapsed in s) and the value at that time,
- * also a number. This DataTable is meant for a line graph DataView.
- * @param {string} title  The name of the statistic being measured.
- * @return {Object}  The data table.
- */
-pagespeed.Console.prototype.createDataTable = function(title) {
-  var dataTable = new google.visualization.DataTable();
-  dataTable.addColumn('datetime', 'Time');
-  dataTable.addColumn('number', title);
-  return dataTable;
-};
-
-
-/**
- * Add and draw a graph which has already had its dataTable set.
- * TODO(sligocki): Allow updating graphs, not just adding new ones.
- *
- * @param {Object} graph  The graph to add.
+ * Draw an accessible responsive SVG chart for a graph.
+ * @param {Object} graph Graph specification and its sampled values.
  */
 pagespeed.Console.prototype.drawGraph = function(graph) {
-  graph.lineChart = new google.visualization.LineChart(
-      pagespeed.createGraphDiv(graph.title, graph.overallPercent, graph.docUrl,
-                               graph.num));
-
-  // Draw graph.
-  graph.lineChart.draw(graph.dataTable, this.lineChartOptions_);
-
-  /* TODO(sligocki): Add auto-update functionality.
-  if (this.updatePaused_) {
-    this.updatePaused_ = false;
-    this.startAutoUpdate();
+  var chart = pagespeed.createGraphDiv(graph);
+  var values = graph.values || [];
+  var timestamps = graph.timestamps || [];
+  var ns = 'http://www.w3.org/2000/svg';
+  var width = 760, height = 220, left = 48, right = 14, top = 12, bottom = 28;
+  var plotWidth = width - left - right, plotHeight = height - top - bottom;
+  var max = 0;
+  for (var i = 0; i < values.length; i++) max = Math.max(max, values[i]);
+  max = Math.max(max * 1.15, 0.01);
+  var svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'pagespeed-console-chart');
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', graph.title + ' over the last 24 hours');
+  var defs = document.createElementNS(ns, 'defs');
+  var gradient = document.createElementNS(ns, 'linearGradient');
+  gradient.setAttribute('id', 'pagespeed-console-gradient-' + graph.num);
+  gradient.setAttribute('x1', '0'); gradient.setAttribute('x2', '0');
+  gradient.setAttribute('y1', '0'); gradient.setAttribute('y2', '1');
+  var stop1 = document.createElementNS(ns, 'stop');
+  stop1.setAttribute('offset', '0%'); stop1.setAttribute('stop-color', '#39765e');
+  stop1.setAttribute('stop-opacity', '.22');
+  var stop2 = document.createElementNS(ns, 'stop');
+  stop2.setAttribute('offset', '100%'); stop2.setAttribute('stop-color', '#39765e');
+  stop2.setAttribute('stop-opacity', '0');
+  gradient.appendChild(stop1); gradient.appendChild(stop2); defs.appendChild(gradient);
+  svg.appendChild(defs);
+  for (var tick = 0; tick <= 4; tick++) {
+    var y = top + plotHeight * tick / 4;
+    var grid = document.createElementNS(ns, 'line');
+    grid.setAttribute('x1', left); grid.setAttribute('x2', width - right);
+    grid.setAttribute('y1', y); grid.setAttribute('y2', y);
+    grid.setAttribute('class', 'pagespeed-console-gridline'); svg.appendChild(grid);
+    var label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', left - 8); label.setAttribute('y', y + 4);
+    label.setAttribute('text-anchor', 'end');
+    label.setAttribute('class', 'pagespeed-console-axis-label');
+    label.textContent = (100 * max * (1 - tick / 4)).toFixed(1) + '%';
+    svg.appendChild(label);
   }
-  */
+  var linePath = '';
+  for (var i = 0; i < values.length; i++) {
+    var x = left + (values.length < 2 ? plotWidth / 2 :
+        plotWidth * i / (values.length - 1));
+    var pointY = top + plotHeight * (1 - values[i] / max);
+    linePath += (i ? ' L ' : 'M ') + x.toFixed(2) + ' ' + pointY.toFixed(2);
+  }
+  if (values.length) {
+    var area = document.createElementNS(ns, 'path');
+    area.setAttribute('d', linePath + ' L ' + (left + plotWidth) + ' ' +
+        (top + plotHeight) + ' L ' + left + ' ' + (top + plotHeight) + ' Z');
+    area.setAttribute('class', 'pagespeed-console-area');
+    area.setAttribute('fill', 'url(#pagespeed-console-gradient-' + graph.num + ')');
+    svg.appendChild(area);
+    var line = document.createElementNS(ns, 'path');
+    line.setAttribute('d', linePath); line.setAttribute('class', 'pagespeed-console-line');
+    svg.appendChild(line);
+    var stride = Math.max(1, Math.floor(values.length / 12));
+    for (var i = 0; i < values.length; i += stride) {
+      var cx = left + (values.length < 2 ? plotWidth / 2 :
+          plotWidth * i / (values.length - 1));
+      var cy = top + plotHeight * (1 - values[i] / max);
+      var circle = document.createElementNS(ns, 'circle');
+      circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
+      circle.setAttribute('r', '3'); circle.setAttribute('class', 'pagespeed-console-point');
+      var title = document.createElementNS(ns, 'title');
+      title.textContent = new Date(timestamps[i]).toLocaleString() + ': ' +
+          (100 * values[i]).toFixed(2) + '%';
+      circle.appendChild(title); svg.appendChild(circle);
+    }
+  }
+  var start = document.createElementNS(ns, 'text');
+  start.setAttribute('x', left); start.setAttribute('y', height - 5);
+  start.setAttribute('class', 'pagespeed-console-axis-label');
+  start.textContent = timestamps.length ? new Date(timestamps[0]).toLocaleTimeString([],
+      {hour: 'numeric', minute: '2-digit'}) : '';
+  svg.appendChild(start);
+  var end = document.createElementNS(ns, 'text');
+  end.setAttribute('x', width - right); end.setAttribute('y', height - 5);
+  end.setAttribute('text-anchor', 'end'); end.setAttribute('class', 'pagespeed-console-axis-label');
+  end.textContent = timestamps.length ? new Date(timestamps[timestamps.length - 1]).toLocaleTimeString([],
+      {hour: 'numeric', minute: '2-digit'}) : '';
+  svg.appendChild(end);
+  chart.appendChild(svg);
+};
+
+/** Populate the four at-a-glance console metrics. */
+pagespeed.Console.prototype.renderSummary_ = function() {
+  var container = document.getElementById('pagespeed-console-summary');
+  if (!container) return;
+  while (container.firstChild) container.removeChild(container.firstChild);
+  var peak = this.graphs_.length ? this.graphs_[0] : null;
+  var latest = this.timestamps_.length ?
+      new Date(this.timestamps_[this.timestamps_.length - 1]).toLocaleString() : 'No samples';
+  var items = [
+    ['Signals tracked', String(this.graphs_.length), 'Operational health indicators'],
+    ['Highest current rate', peak ? (100 * peak.overallPercent).toFixed(2) + '%' : 'n/a', peak ? peak.title : 'No data'],
+    ['Time window', '24 hours', this.timestamps_.length + ' recorded samples'],
+    ['Latest sample', latest, 'Most recent statistics snapshot']
+  ];
+  for (var i = 0; i < items.length; i++) {
+    var card = document.createElement('div');
+    card.className = 'pagespeed-console-summary-card';
+    var label = document.createElement('span'); label.className = 'pagespeed-console-summary-label';
+    label.textContent = items[i][0];
+    var value = document.createElement('strong'); value.className = 'pagespeed-console-summary-value';
+    value.textContent = items[i][1];
+    var note = document.createElement('span'); note.className = 'pagespeed-console-summary-note';
+    note.textContent = items[i][2];
+    card.appendChild(label); card.appendChild(value); card.appendChild(note);
+    container.appendChild(card);
+  }
+};
+
+/** Add client-side filtering for the plotted indicators. */
+pagespeed.Console.prototype.installSearch_ = function() {
+  var input = document.getElementById('pagespeed-console-search');
+  if (!input || input.getAttribute('data-ready')) return;
+  input.setAttribute('data-ready', 'true');
+  input.addEventListener('input', function() {
+    var query = input.value.toLowerCase();
+    var cards = document.querySelectorAll('#pagespeed-graphs-container .pagespeed-widgets');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].style.display = cards[i].textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+    }
+  });
 };
 
 // Methods for creating HTML content
@@ -579,53 +613,48 @@ pagespeed.Console.prototype.drawGraph = function(graph) {
  * @param {number} graphNum  Unique number for this graph.
  * @return {Element}  The div in which to draw the graph.
  */
-pagespeed.createGraphDiv = function(title, percent, docUrl, graphNum) {
+pagespeed.createGraphDiv = function(graphSpec) {
   var wholeDiv = document.createElement('div');
   wholeDiv.setAttribute('class', 'pagespeed-widgets');
-
-  wholeDiv.appendChild(pagespeed.createGraphTitleBar(title, percent, docUrl,
-                                                     graphNum));
-
+  wholeDiv.appendChild(pagespeed.createGraphTitleBar(graphSpec));
   var graph = document.createElement('div');
   graph.setAttribute('class', 'pagespeed-graph');
   wholeDiv.appendChild(graph);
-
   var container = document.getElementById('pagespeed-graphs-container');
-  container.appendChild(wholeDiv);
-
+  if (container) container.appendChild(wholeDiv);
   return graph;
 };
 
-
-/**
- * Creates the title and dropdown menu of each graph.
- *
- * @param {string} title     The title of the graph.
- * @param {number} percent   overall percent for summary.
- * @param {string} docUrl    Documentation URL.
- * @param {number} graphNum  Unique number for this graph.
- * @return {Element}  The full title bar div.
- */
-pagespeed.createGraphTitleBar = function(
-    title, percent, docUrl, graphNum) {
+/** Creates the title, documentation link, and current metric value. */
+pagespeed.createGraphTitleBar = function(graph) {
   var topBar = document.createElement('div');
   topBar.setAttribute('class', 'pagespeed-widgets-topbar');
-
-  var titleSpan = document.createElement('span');
-  titleSpan.setAttribute('class', 'pagespeed-title');
-  titleSpan.setAttribute('id', 'pagespeed-title' + graphNum);
-
-  titleSpan.appendChild(document.createTextNode(
-      title + ': ' + (100 * percent).toFixed(2) + '% ('));
-  var a = document.createElement('a');
-  a.setAttribute('href', docUrl);
-  a.appendChild(document.createTextNode('doc'));
-  titleSpan.appendChild(a);
-  titleSpan.appendChild(document.createTextNode(')'));
-
-  topBar.appendChild(titleSpan);
-
-  // TODO(sligocki): Add other things here, like drop-down option menu.
-
+  var heading = document.createElement('div');
+  heading.setAttribute('class', 'pagespeed-widget-heading');
+  var title = document.createElement('span');
+  title.setAttribute('class', 'pagespeed-title');
+  title.textContent = graph.title;
+  heading.appendChild(title);
+  var link = document.createElement('a');
+  link.setAttribute('class', 'pagespeed-console-doc');
+  link.setAttribute('href', graph.docUrl);
+  link.setAttribute('target', '_blank');
+  link.setAttribute('rel', 'noopener');
+  link.textContent = 'View documentation';
+  heading.appendChild(link);
+  var valueWrap = document.createElement('div');
+  var value = document.createElement('strong');
+  value.setAttribute('class', 'pagespeed-widget-current');
+  value.textContent = (100 * graph.overallPercent).toFixed(2) + '%';
+  valueWrap.appendChild(value);
+  var trend = document.createElement('span');
+  trend.setAttribute('class', 'pagespeed-widget-trend');
+  var first = graph.values && graph.values.length ? graph.values[0] : graph.overallPercent;
+  var delta = graph.overallPercent - first;
+  trend.textContent = (delta <= 0 ? '↓ ' : '↑ ') + Math.abs(delta * 100).toFixed(2) +
+      ' pp over 24h';
+  trend.className += delta <= 0 ? ' is-improving' : ' is-rising';
+  valueWrap.appendChild(trend);
+  topBar.appendChild(heading); topBar.appendChild(valueWrap);
   return topBar;
 };
