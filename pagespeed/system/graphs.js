@@ -144,10 +144,13 @@ pagespeed.Graphs = function(opt_xhr) {
       '<label>Auto refresh <input type="checkbox" ' +
       'id="auto-refresh" ' + (this.autoRefresh_ ? 'checked' : '') +
       '></label>';
-  document.body.insertBefore(
-      uiTable,
-      document.getElementById(pagespeed.Graphs.DisplayDiv.CACHE_APPLIED));
-  document.body.insertBefore(navElement, document.getElementById('ui-div'));
+  // AdminHtml wraps page content in a layout container, so these controls
+  // must be inserted beside the chart elements rather than directly in body.
+  var firstChart = document.getElementById(
+      pagespeed.Graphs.DisplayDiv.CACHE_APPLIED);
+  var chartContainer = firstChart.parentNode;
+  chartContainer.insertBefore(uiTable, firstChart);
+  chartContainer.insertBefore(navElement, uiTable);
 };
 
 
