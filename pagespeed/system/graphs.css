@@ -16,36 +16,64 @@
 
 #nav-bar.pagespeed-sub-tabs {
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
-  gap: 7px;
-  margin: 0 0 14px;
-  padding: 5px;
-  border: 1px solid #dfe7e1;
-  border-radius: 8px;
-  background: #f3f6f2;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 #nav-bar.pagespeed-sub-tabs a {
-  padding: 9px 12px;
-  border-radius: 6px;
-  color: #607268;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #637268;
   font-size: 11px;
   font-weight: 650;
   text-decoration: none;
+  transition: background .15s ease, color .15s ease;
 }
 #nav-bar.pagespeed-sub-tabs a:hover,
 #nav-bar.pagespeed-sub-tabs a.pagespeed-underline-link {
+  background: #39765e;
+  color: #fff;
+  text-decoration: none;
+}
+#nav-bar.pagespeed-sub-tabs a:focus-visible {
+  outline: 2px solid #39765e;
+  outline-offset: 2px;
+}
+.pagespeed-graphs-workspace {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 12px 14px 14px;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
   background: #fff;
-  color: #285d49;
-  box-shadow: 0 2px 7px rgba(31, 55, 47, .08);
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-graphs-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+  padding: 0 0 11px;
+  border-bottom: 1px solid #edf0ed;
 }
 .pagespeed-stat-toolbar {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
-  margin: 0 0 12px;
-  padding: 10px 13px;
-  border: 1px solid #dfe7e1;
-  border-radius: 7px;
-  background: #fff;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: #607268;
   font-size: 11px;
 }
@@ -160,8 +188,11 @@
   }
 }
 @media (max-width: 560px) {
+  .pagespeed-graphs-workspace { padding: 10px; }
+  .pagespeed-graphs-toolbar { align-items: flex-start; flex-direction: column; }
   #nav-bar.pagespeed-sub-tabs { gap: 3px; }
   #nav-bar.pagespeed-sub-tabs a { padding: 8px; font-size: 10px; }
+  .pagespeed-stat-toolbar { padding: 4px 8px; }
   .pagespeed-graphs-chart { padding: 9px 7px 10px; }
   .pagespeed-graphs-panel-heading { padding: 12px 13px 9px; }
 }
