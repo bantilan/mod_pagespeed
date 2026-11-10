@@ -307,6 +307,12 @@ mod rules
 }
 .pagespeed-config-panel pre { margin: 0; border: 0; border-radius: 0; }
 .pagespeed-config-page { display: grid; gap: 16px; min-width: 0; }
+#pagespeed-config-root {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
 .pagespeed-config-source pre {
   max-height: 70vh;
   overflow: auto;
