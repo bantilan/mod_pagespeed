@@ -218,7 +218,7 @@
 .pagespeed-stat-group-heading p { margin: 3px 0 0; color: #78867c; font-size: 10px; }
 .pagespeed-stats-table { min-width: 760px; }
 .pagespeed-stats-table th { white-space: nowrap; }
-.pagespeed-stats-name { color: #304a3e; font-family: monospace; font-size: 11px; }
+.pagespeed-stats-name { color: #304a3e; font-family: inherit; font-size: 11px; }
 .pagespeed-stats-value,
 .pagespeed-stats-number-of-changes { white-space: nowrap; text-align: right; }
 .pagespeed-stats-description { color: #718077; font-size: 10px; }

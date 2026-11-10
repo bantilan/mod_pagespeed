@@ -181,12 +181,39 @@ pagespeed.Configuration.render_ = function(root, model) {
     badge.className = 'pagespeed-config-enabled';
     badge.textContent = 'Enabled';
     heading.appendChild(title); heading.appendChild(badge);
-    var list = document.createElement('p');
+    var list = document.createElement('ul');
+    list.className = 'pagespeed-config-filter-list';
+    var visibleCount = Math.min(4, groupFilters.length);
     for (var j = 0; j < groupFilters.length; j++) {
-      if (j) list.appendChild(document.createTextNode(', '));
-      list.appendChild(document.createTextNode(groupFilters[j].name));
+      var item = document.createElement('li');
+      item.textContent = groupFilters[j].name;
+      item.hidden = j >= visibleCount;
+      list.appendChild(item);
     }
-    group.appendChild(heading); group.appendChild(list); filters.appendChild(group);
+    group.appendChild(heading);
+    group.appendChild(list);
+    if (groupFilters.length > visibleCount) {
+      var more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'pagespeed-config-filter-more';
+      more.textContent = 'Show ' + (groupFilters.length - visibleCount) +
+          ' more';
+      more.setAttribute('aria-expanded', 'false');
+      more.addEventListener('click', function(items, button, count, limit) {
+        return function() {
+          var expanded = button.getAttribute('aria-expanded') == 'true';
+          for (var k = 0; k < items.length; k++) {
+            if (k >= limit) items[k].hidden = expanded;
+          }
+          button.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          button.textContent = expanded ? 'Show ' + count + ' more' :
+                                          'Show less';
+        };
+      }(list.children, more, groupFilters.length - visibleCount,
+        visibleCount));
+      group.appendChild(more);
+    }
+    filters.appendChild(group);
   }
   if (!model.filters.length) {
     var empty = document.createElement('p');
