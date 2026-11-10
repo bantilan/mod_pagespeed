@@ -15,6 +15,15 @@
  */
 
 /* Cache view tabs */
+.pagespeed-cache-workspace {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 12px 14px 14px;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
 .pagespeed-sub-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -49,17 +58,17 @@
   outline-offset: 2px;
 }
 
-/* Cache views share the admin cards and table language. */
+/* The selected view uses the shared workspace card rather than its own card. */
 #show_metadata,
 #cache_struct,
 #physical_cache,
 #purge_cache {
-  margin: 0 0 16px;
-  padding: clamp(15px, 2.2vw, 23px);
-  border: 1px solid #dfe7e1;
-  border-radius: 10px;
-  background: linear-gradient(145deg, #fff, #fbfcfa);
-  box-shadow: 0 4px 16px rgba(31, 55, 47, .045);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 #show_metadata:empty { display: none; }
 .pagespeed-cache-section-heading { margin: 0 0 16px; }
@@ -186,6 +195,7 @@
 .pagespeed-purge-controls button + button { margin-left: 6px; }
 
 @media (max-width: 640px) {
+  .pagespeed-cache-workspace { padding: 10px; }
   .pagespeed-cache-lookup { grid-template-columns: minmax(0, 1fr); }
   .pagespeed-cache-lookup-actions { grid-column: auto; flex-wrap: wrap; }
   .pagespeed-sub-tabs a { flex: 1 1 42%; text-align: center; }

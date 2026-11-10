@@ -81,7 +81,15 @@ pagespeed.Caches = function(opt_xhr) {
       'Purge set</a>';
   var metadataElement = document.getElementById(
       pagespeed.Caches.DisplayDiv.METADATA_CACHE);
-  metadataElement.parentNode.insertBefore(modeElement, metadataElement);
+  var workspace = document.createElement('section');
+  workspace.className = 'pagespeed-cache-workspace';
+  metadataElement.parentNode.insertBefore(workspace, metadataElement);
+  workspace.appendChild(modeElement);
+  for (var mode in pagespeed.Caches.DisplayDiv) {
+    var displayElement = document.getElementById(
+        pagespeed.Caches.DisplayDiv[mode]);
+    if (displayElement) workspace.appendChild(displayElement);
+  }
   // TODO(xqyin): Maybe use closure tab pane UI element instead.
 
   // Create a div to display the result of showing metadata cache entry.
