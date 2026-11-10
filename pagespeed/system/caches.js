@@ -79,17 +79,15 @@ pagespeed.Caches = function(opt_xhr) {
       pagespeed.Caches.DisplayMode.PURGE_CACHE +
       '" href="javascript:void(0);">' +
       'Purge set</a>';
-  document.body.insertBefore(
-      modeElement,
-      document.getElementById(pagespeed.Caches.DisplayDiv.METADATA_CACHE));
+  var metadataElement = document.getElementById(
+      pagespeed.Caches.DisplayDiv.METADATA_CACHE);
+  metadataElement.parentNode.insertBefore(modeElement, metadataElement);
   // TODO(xqyin): Maybe use closure tab pane UI element instead.
 
   // Create a div to display the result of showing metadata cache entry.
   var metadataResult = document.createElement('pre');
   metadataResult.id = pagespeed.Caches.ElementId.METADATA_RESULT;
   metadataResult.className = 'pagespeed-caches-result';
-  var metadataElement = document.getElementById(
-      pagespeed.Caches.DisplayDiv.METADATA_CACHE);
   metadataElement.appendChild(metadataResult);
 
   // Create a div to display the result of cache purging.
