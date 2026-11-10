@@ -1316,17 +1316,18 @@ GoogleString ServerContext::ShowCacheForm(StringPiece user_agent) {
     ua_default =
         StrCat("value=\"", HtmlKeywords::Escape(user_agent, &buf), "\" ");
   }
-  // The styling on this form could use some love, but the 110/103 sizing
-  // is to make those input fields decently wide to fit large URLs and UAs
-  // and to roughly line up.
   GoogleString out = StrCat(
-      "<form>\n",
-      "  URL: <input id=metadata_text type=text name=url size=110 /><br>\n"
-      "  User-Agent: <input id=user_agent type=text size=103 name=user_agent ",
-      ua_default, "/><br> \n",
-      "  <input id=metadata_submit type=submit "
-      "   value='Show Metadata Cache Entry' />"
-      "  <input id=metadata_clear type=reset value='Clear' />",
+      "<form class='pagespeed-cache-lookup'>\n",
+      "  <label for='metadata_text'>Resource URL</label>"
+      "  <input id='metadata_text' type='url' name='url' "
+      "placeholder='https://example.com/page' autocomplete='url' />\n",
+      "  <label for='user_agent'>User-Agent</label>"
+      "  <input id='user_agent' type='text' name='user_agent' ",
+      ua_default, "/>\n",
+      "  <div class='pagespeed-cache-lookup-actions'>"
+      "<button id='metadata_submit' type='button'>Inspect entry</button>"
+      "<button id='metadata_clear' type='reset' class='secondary'>Clear</button>"
+      "</div>",
       "</form>\n");
   return out;
 }

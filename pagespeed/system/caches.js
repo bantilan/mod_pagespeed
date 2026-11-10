@@ -66,19 +66,19 @@ pagespeed.Caches = function(opt_xhr) {
       '<a id="' +
       pagespeed.Caches.DisplayMode.METADATA_CACHE +
       '" href="javascript:void(0);">' +
-      'Show Metadata Cache</a>' +
+      'Metadata entry</a>' +
       '<a id="' +
       pagespeed.Caches.DisplayMode.CACHE_STRUCTURE +
       '" href="javascript:void(0);">' +
-      'Show Cache Structure</a>' +
+      'Cache structure</a>' +
       '<a id="' +
       pagespeed.Caches.DisplayMode.PHYSICAL_CACHE +
       '" href="javascript:void(0);">' +
-      'Physical Caches</a>' +
+      'Backends</a>' +
       '<a id="' +
       pagespeed.Caches.DisplayMode.PURGE_CACHE +
       '" href="javascript:void(0);">' +
-      'Purge Cache</a>';
+      'Purge set</a>';
   document.body.insertBefore(
       modeElement,
       document.getElementById(pagespeed.Caches.DisplayDiv.METADATA_CACHE));

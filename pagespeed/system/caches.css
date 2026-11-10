@@ -14,46 +14,172 @@
  * limitations under the License.
  */
 
-/**
- * @fileoverview Styles for pagespeed_admin/cache.
- *
- * @author xqyin@google.com (XiaoQian Yin)
- */
+/* Cache view tabs */
+.pagespeed-sub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 16px;
+  padding: 8px;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+  background: #f5f8f5;
+}
+.pagespeed-sub-tabs a {
+  padding: 9px 13px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #5e7166;
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.pagespeed-sub-tabs a:hover,
+.pagespeed-sub-tabs a.pagespeed-underline-link {
+  border-color: #d7e4da;
+  background: #fff;
+  color: #245b43;
+  box-shadow: 0 2px 7px rgba(31, 55, 47, .06);
+}
 
-/*------------------------------------------------------------------
-@global Type
-------------------------------------------------------------------*/
-h3 {
-  font-weight: bold;
-  font-size: 15px;
-  margin: 1em 0 0 0;
+/* Cache views share the admin cards and table language. */
+#show_metadata,
+#cache_struct,
+#physical_cache,
+#purge_cache {
+  margin: 0 0 16px;
+  padding: clamp(15px, 2.2vw, 23px);
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #fff, #fbfcfa);
+  box-shadow: 0 4px 16px rgba(31, 55, 47, .045);
 }
-table, th, td {
-  padding: 2px;
+#show_metadata:empty { display: none; }
+.pagespeed-cache-section-heading { margin: 0 0 16px; }
+.pagespeed-cache-section-heading h2 {
+  margin: 0 0 5px;
+  color: #294b3e;
+  font-size: 16px;
 }
-thead {
-  font-size: 14px;
-  font-style: normal;
-  font-weight: bold;
+.pagespeed-cache-section-heading p {
+  margin: 0;
+  color: #78867c;
+  font-size: 11px;
+  line-height: 1.5;
 }
-/*------------------------------------------------------------------
-mod rules
-------------------------------------------------------------------*/
-.pagespeed-caches-result {
-  padding: 0 0 0 5px;
+
+/* URL and user-agent lookup */
+.pagespeed-cache-lookup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px 14px;
 }
-.pagespeed-caches-purge-table {
-  padding-top: 5px;
+.pagespeed-cache-lookup label {
+  color: #52675a;
+  font-size: 10px;
+  font-weight: 700;
 }
+.pagespeed-cache-lookup input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid #d7e1d9;
+  border-radius: 7px;
+  background: #fbfcfa;
+  color: #344b3e;
+  font: inherit;
+  font-size: 12px;
+}
+.pagespeed-cache-lookup input:focus {
+  border-color: #78a58a;
+  outline: 3px solid rgba(96, 151, 115, .14);
+}
+.pagespeed-cache-lookup-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin-top: 3px;
+}
+.pagespeed-cache-lookup-actions button,
+.pagespeed-purge-controls button {
+  padding: 9px 13px;
+  border: 1px solid #347457;
+  border-radius: 7px;
+  background: #347457;
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pagespeed-cache-lookup-actions button:hover,
+.pagespeed-purge-controls button:hover { background: #245b43; }
+.pagespeed-cache-lookup-actions button.secondary {
+  border-color: #d7e1d9;
+  background: #fff;
+  color: #52675a;
+}
+.pagespeed-cache-lookup-actions button.secondary:hover { background: #f2f6f2; }
+
+/* Cache structure and backend data */
+.pagespeed-caches-structure td:first-child { width: 175px; font-weight: 700; }
+.pagespeed-caches-structure td:nth-child(2) { width: 70px; }
+.pagespeed-caches-structure input[type='checkbox'] { accent-color: #39765e; }
+.pagespeed-caches-structure code {
+  color: #40594a;
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#physical_cache pre {
+  max-height: 520px;
+  margin: 0;
+  padding: 15px;
+  overflow: auto;
+  border: 1px solid #e1e8e2;
+  border-radius: 8px;
+  background: #f6f8f5;
+  color: #43594c;
+  font: 11px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+/* Purge status and controls */
+.pagespeed-caches-result { padding: 8px 0 0; color: #52675a; font-size: 11px; }
 .pagespeed-caches-purge-global {
-  padding-top: 5px;
+  padding: 11px 13px;
+  border: 1px solid #e5e8d9;
+  border-radius: 7px;
+  background: #fbfaf2;
+  color: #71663f;
+  font-size: 11px;
+  line-height: 1.5;
 }
-.pagespeed-caches-purge-url {
-  font-family: monospace;
+.pagespeed-caches-purge-table { padding-top: 7px; }
+.pagespeed-caches-purge-url { color: #40594a; font-family: monospace; font-size: 10px; }
+.pagespeed-caches-date-column { width: 250px; }
+.pagespeed-purge-controls {
+  margin: 0 0 14px;
+  padding: 13px;
+  border: 1px solid #e3e9e4;
+  border-radius: 8px;
+  background: #f8faf7;
 }
-.pagespeed-caches-url-column {
-  width: 700px;
+.pagespeed-purge-controls input[type='text'] {
+  padding: 9px 10px;
+  border: 1px solid #d7e1d9;
+  border-radius: 7px;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
 }
-.pagespeed-caches-date-column {
-  width: 250px;
+.pagespeed-purge-controls button + button { margin-left: 6px; }
+
+@media (max-width: 640px) {
+  .pagespeed-cache-lookup { grid-template-columns: minmax(0, 1fr); }
+  .pagespeed-cache-lookup-actions { grid-column: auto; flex-wrap: wrap; }
+  .pagespeed-sub-tabs a { flex: 1 1 42%; text-align: center; }
+  .pagespeed-purge-controls button + button { margin: 8px 0 0; }
 }

@@ -1091,6 +1091,13 @@ void AdminSite::PrintCaches(
     fetch->Write("<div id='show_metadata'>", message_handler_);
     // Present a small form to enter a URL.
     if (source == kPageSpeedAdmin) {
+      fetch->Write(
+          "<div class='pagespeed-cache-section-heading'>"
+          "<h2>Metadata lookup</h2>"
+          "<p>Inspect the cached PageSpeed metadata for a URL and "
+          "User-Agent.</p>"
+          "</div>",
+          message_handler_);
       const char* user_agent =
           fetch->request_headers()->Lookup1(HttpAttributes::kUserAgent);
       fetch->Write(ServerContext::ShowCacheForm(user_agent), message_handler_);
@@ -1108,7 +1115,13 @@ void AdminSite::PrintCaches(
       // for info about the cache.
       flags |= SystemCaches::kIncludeMemcached;
       flags |= SystemCaches::kIncludeRedis;
-      fetch->Write("<div id='cache_struct'>", message_handler_);
+      fetch->Write(
+          "<div id='cache_struct'>"
+          "<div class='pagespeed-cache-section-heading'>"
+          "<h2>Cache structure</h2>"
+          "<p>Configured storage layers and how PageSpeed composes them.</p>"
+          "</div>",
+          message_handler_);
       fetch->Write(kTableStart, message_handler_);
       CacheInterface* fsmdc = filesystem_metadata_cache;
       fetch->Write(
@@ -1124,7 +1137,13 @@ void AdminSite::PrintCaches(
       fetch->Write(kTableEnd, message_handler_);
       fetch->Write("</div>", message_handler_);
 
-      fetch->Write("<div id='physical_cache'>", message_handler_);
+      fetch->Write(
+          "<div id='physical_cache'>"
+          "<div class='pagespeed-cache-section-heading'>"
+          "<h2>Backend statistics</h2>"
+          "<p>Live size and activity reported by configured cache backends.</p>"
+          "</div>",
+          message_handler_);
       GoogleString backend_stats;
       system_caches->PrintCacheStats(
           static_cast<SystemCaches::StatFlags>(flags), &backend_stats);
@@ -1136,7 +1155,10 @@ void AdminSite::PrintCaches(
       fetch->Write("<div id='purge_cache'>", message_handler_);
       // Filled in by JS in caches.js: updatePurgeSet().
       fetch->Write(
-          "<h3>Purge Set</h3>"
+          "<div class='pagespeed-cache-section-heading'>"
+          "<h2>Purge set</h2>"
+          "<p>Review invalidations and purge a URL or the full PageSpeed cache.</p>"
+          "</div>"
           "<div id='purge_global'"
           " class='pagespeed-caches-purge-global'></div>"
           "<div id='purge_table'"
