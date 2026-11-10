@@ -14,41 +14,252 @@
  * limitations under the License.
  */
 
-/**
- * @fileoverview Styles for pagespeed_admin/statistics.
- *
- * @author xqyin@google.com (XiaoQian Yin)
- */
-
-/*------------------------------------------------------------------
-@global Type
-------------------------------------------------------------------*/
-table, th, td {
-  padding: 2px;
+.pagespeed-statistics-page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
 }
-
-thead {
-  font-family: sans-serif;
-  font-size: 18px;
-  font-style: normal;
-  font-weight: bold;
+.pagespeed-stat-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 11px;
 }
-
-/*------------------------------------------------------------------
-mod rules
-------------------------------------------------------------------*/
-.pagespeed-stats-name {
-  text-align: left;
+.pagespeed-stat-metric {
+  min-width: 0;
+  padding: 14px 15px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #fff, #f5f8f4);
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
 }
-.pagespeed-stats-value {
-  text-align: right;
+.pagespeed-stat-metric-label,
+.pagespeed-stat-metric-note { display: block; }
+.pagespeed-stat-metric-label {
+  color: #617268;
+  font-size: 11px;
+  font-weight: 700;
 }
-.pagespeed-stats-number-of-changes {
+.pagespeed-stat-metric-value {
+  display: block;
+  margin-top: 6px;
+  color: #203b34;
+  font-size: 23px;
+  font-weight: 750;
+  letter-spacing: -.04em;
+  overflow-wrap: anywhere;
+}
+.pagespeed-stat-metric-note {
+  margin-top: 4px;
+  color: #78867c;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.pagespeed-stat-metric-green { background: linear-gradient(145deg, #f4faf4, #eaf4e9); }
+.pagespeed-stat-metric-red { background: linear-gradient(145deg, #fff8f6, #faeeeb); }
+.pagespeed-stat-metric-blue { background: linear-gradient(145deg, #f4f8fc, #eaf1f8); }
+.pagespeed-stat-metric-gold,
+.pagespeed-stat-metric-amber { background: linear-gradient(145deg, #fffaf0, #f9f2e1); }
+.pagespeed-stat-metric-red .pagespeed-stat-metric-value { color: #a64f43; }
+.pagespeed-stat-metric-blue .pagespeed-stat-metric-value { color: #426f91; }
+.pagespeed-stat-metric-gold .pagespeed-stat-metric-value,
+.pagespeed-stat-metric-amber .pagespeed-stat-metric-value { color: #a5782e; }
+.pagespeed-stat-overview {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+  gap: 14px;
+}
+.pagespeed-stat-card,
+.pagespeed-stat-table-panel {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid #dfe7e1;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-stat-card h2 {
+  margin: 0 0 14px;
+  color: #294b3e;
+  font-size: 15px;
+  font-weight: 700;
+}
+.pagespeed-stat-cache-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(20px, 5vw, 50px);
+  min-height: 185px;
+}
+.pagespeed-stat-donut {
+  display: grid;
+  width: 158px;
+  height: 158px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8eee9;
+  position: relative;
+}
+.pagespeed-stat-donut:before {
+  position: absolute;
+  width: 98px;
+  height: 98px;
+  border-radius: 50%;
+  background: #fff;
+  content: '';
+}
+.pagespeed-stat-donut-center {
+  z-index: 1;
+  display: flex;
+  width: 92px;
+  flex-direction: column;
+  align-items: center;
+  color: #748178;
+  font-size: 10px;
   text-align: center;
 }
-.pagespeed-stats-first-column {
-  width: 600px;
+.pagespeed-stat-donut-center strong {
+  color: #203b34;
+  font-size: 22px;
+  line-height: 1.1;
 }
-.pagespeed-stats-third-column {
-  width: 200px;
+.pagespeed-stat-cache-legend { display: grid; flex: 1; gap: 13px; min-width: 0; }
+.pagespeed-stat-legend-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: #56675e;
+  font-size: 11px;
+}
+.pagespeed-stat-legend-row i { width: 9px; height: 9px; border-radius: 2px; }
+.pagespeed-stat-legend-row strong { color: #263e34; }
+.pagespeed-stat-optimization { display: grid; gap: 17px; padding: 5px 0; }
+.pagespeed-stat-activity-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(100px, 2fr) 30px;
+  align-items: center;
+  gap: 12px;
+  color: #56675e;
+  font-size: 11px;
+}
+.pagespeed-stat-activity-row strong { color: #263e34; text-align: right; }
+.pagespeed-stat-activity-track {
+  display: block;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #edf1ee;
+}
+.pagespeed-stat-activity-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #70a8d6, #39765e);
+  transition: width .25s ease;
+}
+.pagespeed-stat-table-panel { padding: 12px 14px 14px; }
+.pagespeed-stat-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 0 0 11px;
+  border: 0;
+  border-bottom: 1px solid #edf0ed;
+  border-radius: 0;
+  background: transparent;
+}
+.pagespeed-stat-category-tabs { display: flex; flex: 1 1 540px; flex-wrap: wrap; gap: 4px; }
+.pagespeed-stat-category-tabs button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #637268;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.pagespeed-stat-category-tabs button:hover,
+.pagespeed-stat-category-tabs button.is-active {
+  background: #39765e;
+  color: #fff;
+}
+.pagespeed-stat-toolbar input[type='search'] {
+  min-width: 200px;
+  flex: 0 1 250px;
+  padding: 8px 10px;
+  border: 1px solid #d6e0d8;
+  border-radius: 6px;
+  background: #fbfcfa;
+  color: #33483d;
+  font: inherit;
+  font-size: 11px;
+}
+.pagespeed-stat-toggle { display: inline-flex; align-items: center; gap: 5px; color: #748178; font-size: 10px; white-space: nowrap; }
+.pagespeed-stat-toggle input { accent-color: #39765e; }
+.pagespeed-show-number { margin: 0 0 8px; color: #748178; font-size: 10px; }
+.pagespeed-statistics-content {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: normal;
+}
+.pagespeed-stat-group { margin: 0 0 18px; }
+.pagespeed-stat-group:last-child { margin-bottom: 0; }
+.pagespeed-stat-group-heading { margin: 0 0 8px; }
+.pagespeed-stat-group-heading h2 { margin: 0; color: #294b3e; font-size: 13px; }
+.pagespeed-stat-group-heading p { margin: 3px 0 0; color: #78867c; font-size: 10px; }
+.pagespeed-stats-table { min-width: 760px; }
+.pagespeed-stats-table th { white-space: nowrap; }
+.pagespeed-stats-name { color: #304a3e; font-family: monospace; font-size: 11px; }
+.pagespeed-stats-value,
+.pagespeed-stats-number-of-changes { white-space: nowrap; text-align: right; }
+.pagespeed-stats-description { color: #718077; font-size: 10px; }
+.pagespeed-stat-subsystem {
+  display: inline-block;
+  padding: 3px 7px;
+  border-radius: 12px;
+  background: #edf4ee;
+  color: #3d6b51;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pagespeed-stat-subsystem-images { background: #edf5e9; color: #4e7650; }
+.pagespeed-stat-subsystem-fonts { background: #f3eef6; color: #756183; }
+.pagespeed-stat-subsystem-css { background: #eef3fa; color: #4d6f97; }
+.pagespeed-stat-subsystem-javascript { background: #f7f1e4; color: #927032; }
+.pagespeed-stat-subsystem-network { background: #edf5f4; color: #3f7770; }
+.pagespeed-stat-subsystem-rewriting { background: #f3eef6; color: #756183; }
+.pagespeed-stat-empty {
+  margin: 10px 0 0;
+  padding: 18px;
+  border: 1px dashed #c8d5cb;
+  border-radius: 7px;
+  background: #fbfcfa;
+  color: #748178;
+  font-size: 11px;
+  text-align: center;
+}
+@media (max-width: 1050px) {
+  .pagespeed-stat-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .pagespeed-stat-overview { grid-template-columns: minmax(0, 1fr); }
+  .pagespeed-stat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .pagespeed-stat-summary { grid-template-columns: minmax(0, 1fr); }
+  .pagespeed-stat-cache-content { gap: 15px; }
+  .pagespeed-stat-donut { width: 128px; height: 128px; }
+  .pagespeed-stat-donut:before { width: 80px; height: 80px; }
+  .pagespeed-stat-activity-row { grid-template-columns: minmax(85px, 1fr) minmax(70px, 1.3fr) 25px; gap: 7px; font-size: 10px; }
+  .pagespeed-stat-table-panel { padding: 10px; }
 }

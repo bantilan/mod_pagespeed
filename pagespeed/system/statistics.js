@@ -88,6 +88,12 @@ pagespeed.Statistics = function(opt_xhr) {
    * @private {!Object}
    */
   this.timesOfChange_ = {'statsName': 0};
+  for (var i = 0; i < this.psolMessages_.length; i++) {
+    var initial = this.psolMessages_[i];
+    var initialValue = Number(initial.value) || 0;
+    this.lastValue_[initial.name] = initialValue;
+    this.timesOfChange_[initial.name] = initialValue ? 1 : 0;
+  }
 
   /**
    * We provide filtering functionality for users to search for certain
@@ -96,6 +102,9 @@ pagespeed.Statistics = function(opt_xhr) {
    * @private {string}
    */
   this.filter_ = '';
+
+  /** @private {string} */
+  this.activeCategory_ = 'all';
 
   /**
    * The option of auto-refresh. If true, the page will automatically refresh
@@ -120,33 +129,66 @@ pagespeed.Statistics = function(opt_xhr) {
    */
   this.firstRefreshStarted_ = false;
 
+  var statElement = document.getElementById('stat');
   var wrapper = document.createElement('div');
-  wrapper.style.overflow = 'hidden';
-  wrapper.style.clear = 'both';
+  wrapper.className = 'pagespeed-statistics-page';
+  var summary = document.createElement('div');
+  summary.className = 'pagespeed-stat-summary';
+  summary.id = 'pagespeed-stat-summary';
+  wrapper.appendChild(summary);
 
-  // The UI table of auto-refresh and filtering.
-  var uiTable = document.createElement('div');
-  uiTable.id = 'ui-div';
-  uiTable.className = 'pagespeed-stat-toolbar';
-  uiTable.innerHTML =
-      '<label>Auto refresh <input type="checkbox" id="auto-refresh"></label>' +
-      '<label class="pagespeed-stat-filter">Filter <input id="text-filter" ' +
-      'type="search" placeholder="Search metrics"></label>' +
-      '<label>Sort by activity <input type="checkbox" id="sort-freq">' +
-      '</label>';
-  wrapper.appendChild(uiTable);
+  var overview = document.createElement('div');
+  overview.className = 'pagespeed-stat-overview';
+  overview.innerHTML =
+      '<section class="pagespeed-stat-card">' +
+      '<h2>Cache activity</h2>' +
+      '<div class="pagespeed-stat-cache-content">' +
+      '<div class="pagespeed-stat-donut" id="pagespeed-stat-donut">' +
+      '<div class="pagespeed-stat-donut-center" id="pagespeed-stat-donut-center"></div>' +
+      '</div><div class="pagespeed-stat-cache-legend" id="pagespeed-stat-cache-legend"></div>' +
+      '</div></section>' +
+      '<section class="pagespeed-stat-card">' +
+      '<h2>Optimization activity</h2>' +
+      '<div class="pagespeed-stat-optimization" id="pagespeed-stat-optimization"></div>' +
+      '</section>';
+  wrapper.appendChild(overview);
 
+  var tablePanel = document.createElement('section');
+  tablePanel.className = 'pagespeed-stat-table-panel';
+  var toolbar = document.createElement('div');
+  toolbar.className = 'pagespeed-stat-toolbar';
+  toolbar.innerHTML =
+      '<div class="pagespeed-stat-category-tabs" id="pagespeed-stat-category-tabs" role="tablist">' +
+      '<button type="button" role="tab" aria-selected="false" data-category="all" class="is-active">All counters</button>' +
+      '<button type="button" role="tab" aria-selected="false" data-category="cache">Cache</button>' +
+      '<button type="button" role="tab" aria-selected="false" data-category="css">CSS</button>' +
+      '<button type="button" role="tab" aria-selected="false" data-category="images">Images</button>' +
+      '<button type="button" role="tab" aria-selected="false" data-category="fonts">Fonts</button>' +
+      '<button type="button" role="tab" aria-selected="false" data-category="other">Other</button></div>' +
+      '<input id="text-filter" type="search" placeholder="Search counters..." aria-label="Search counters">' +
+      '<label class="pagespeed-stat-toggle">Auto refresh <input type="checkbox" id="auto-refresh"></label>' +
+      '<label class="pagespeed-stat-toggle">Sort by activity <input type="checkbox" id="sort-freq"></label>';
+  tablePanel.appendChild(toolbar);
   var numElement = document.createElement('div');
   numElement.id = 'num';
   numElement.className = 'pagespeed-show-number';
-  wrapper.appendChild(numElement);
-
-  document.body.insertBefore(wrapper, document.getElementById('stat'));
+  tablePanel.appendChild(numElement);
+  wrapper.appendChild(tablePanel);
+  var statParent = statElement.parentNode;
+  statParent.insertBefore(wrapper, statElement);
+  statElement.className = 'pagespeed-statistics-content';
+  statElement.textContent = '';
+  tablePanel.appendChild(statElement);
 
   goog.events.listen(document.getElementById('sort-freq'), 'change',
                      goog.bind(this.toggleSorting, this));
-
-  this.updateMessageCount();
+  var categories = document.querySelectorAll(
+      '#pagespeed-stat-category-tabs [data-category]');
+  for (var i = 0; i < categories.length; i++) {
+    goog.events.listen(categories[i], 'click', goog.bind(
+        this.setCategory_, this, categories[i].getAttribute('data-category')));
+  }
+  this.update();
 };
 
 
@@ -187,8 +229,8 @@ pagespeed.Statistics.prototype.updateMessageCount = function(opt_num) {
   // is not specified.
   var total = (opt_num != undefined) ? opt_num : this.psolMessages_.length;
   document.getElementById('num').textContent =
-      'The number of statistics: ' + total.toString() + '/' +
-      this.numUnfilteredMessages_;
+      'Showing ' + total.toLocaleString() + ' of ' +
+      this.numUnfilteredMessages_.toLocaleString() + ' counters';
 };
 
 
@@ -201,6 +243,7 @@ pagespeed.Statistics.prototype.error = function() {
   this.updateMessageCount();
   document.getElementById('stat').textContent =
       pagespeed.Statistics.REFRESH_ERROR_;
+  this.renderSummary_();
 };
 
 
@@ -217,16 +260,18 @@ pagespeed.Statistics.prototype.update = function() {
   }
 
   var messages = goog.array.clone(this.psolMessages_);
-  if (this.filter_) {
-    for (var i = messages.length - 1; i >= 0; --i) {
-      if (!messages[i].name ||
-          !goog.string.caseInsensitiveContains(messages[i].name,
-                                               this.filter_)) {
-        messages.splice(i, 1);
-      }
+  for (var i = messages.length - 1; i >= 0; --i) {
+    if ((this.filter_ && (!messages[i].name ||
+        !goog.string.caseInsensitiveContains(messages[i].name,
+                                             this.filter_))) ||
+        !pagespeed.Statistics.matchesCategory_(
+            messages[i].name, this.activeCategory_)) {
+      messages.splice(i, 1);
     }
   }
   this.updateMessageCount(messages.length);
+  this.updateCategoryTabs_();
+  this.renderSummary_();
 
   /** @type {!Object<string, !Array<!pagespeed.StatsNode>>} */
   var groups = {};
@@ -260,6 +305,7 @@ pagespeed.Statistics.prototype.update = function() {
     var table = document.createElement('table');
     table.className = 'pagespeed-admin-data-table pagespeed-stats-table';
     var header = table.createTHead().insertRow(0);
+    var tableBody = table.createTBody();
     var metricHeader = document.createElement('th');
     metricHeader.textContent = 'Metric';
     header.appendChild(metricHeader);
@@ -272,8 +318,14 @@ pagespeed.Statistics.prototype.update = function() {
         'Changes observed during auto-refresh; the count grows while ' +
         'auto-refresh is enabled.';
     header.appendChild(changesHeader);
+    var subsystemHeader = document.createElement('th');
+    subsystemHeader.textContent = 'Subsystem';
+    header.insertBefore(subsystemHeader, changesHeader);
+    var descriptionHeader = document.createElement('th');
+    descriptionHeader.textContent = 'Description';
+    header.insertBefore(descriptionHeader, changesHeader);
     for (var j = 0; j < items.length; ++j) {
-      var row = table.insertRow(-1);
+      var row = tableBody.insertRow(-1);
       var cell = row.insertCell(0);
       cell.textContent = items[j].name;
       cell.className = 'pagespeed-stats-name';
@@ -281,6 +333,17 @@ pagespeed.Statistics.prototype.update = function() {
       cell.textContent = items[j].value;
       cell.className = 'pagespeed-stats-value';
       cell = row.insertCell(2);
+      var groupId = pagespeed.Statistics.groupForName_(items[j].name);
+      var groupTitle = pagespeed.Statistics.groupTitleForId_(groupId);
+      var badge = document.createElement('span');
+      badge.className = 'pagespeed-stat-subsystem pagespeed-stat-subsystem-' +
+          groupId;
+      badge.textContent = groupTitle;
+      cell.appendChild(badge);
+      cell = row.insertCell(3);
+      cell.textContent = pagespeed.Statistics.descriptionForName_(items[j].name);
+      cell.className = 'pagespeed-stats-description';
+      cell = row.insertCell(4);
       cell.textContent = this.timesOfChange_[items[j].name].toString();
       cell.className = 'pagespeed-stats-number-of-changes';
     }
@@ -300,6 +363,137 @@ pagespeed.Statistics.prototype.update = function() {
 };
 
 
+/** Update the small live summary cards and cache activity chart. */
+pagespeed.Statistics.prototype.renderSummary_ = function() {
+  var values = {};
+  for (var i = 0; i < this.psolMessages_.length; i++) {
+    values[this.psolMessages_[i].name] = Number(this.psolMessages_[i].value) || 0;
+  }
+  var metricSpecs = [
+    ['Cache hits', 'cache_hits', 'Cache results served from memory', 'green'],
+    ['Cache misses', 'cache_misses', 'Requests requiring a cache lookup', 'red'],
+    ['Backend hits', 'cache_backend_hits', 'Successful backend cache reads', 'blue'],
+    ['Backend misses', 'cache_backend_misses', 'Backend cache lookups without an entry', 'gold'],
+    ['Cache time', 'cache_time_us', 'Cumulative cache time', 'amber']
+  ];
+  var summary = document.getElementById('pagespeed-stat-summary');
+  while (summary.firstChild) summary.removeChild(summary.firstChild);
+  for (var i = 0; i < metricSpecs.length; i++) {
+    var card = document.createElement('article');
+    card.className = 'pagespeed-stat-metric pagespeed-stat-metric-' +
+        metricSpecs[i][3];
+    var label = document.createElement('span');
+    label.className = 'pagespeed-stat-metric-label';
+    label.textContent = metricSpecs[i][0];
+    var value = document.createElement('strong');
+    value.className = 'pagespeed-stat-metric-value';
+    value.textContent = metricSpecs[i][1] == 'cache_time_us' ?
+        ((values[metricSpecs[i][1]] || 0) / 1000).toFixed(1) + ' ms' :
+        (values[metricSpecs[i][1]] || 0).toLocaleString();
+    var note = document.createElement('span');
+    note.className = 'pagespeed-stat-metric-note';
+    note.textContent = metricSpecs[i][2];
+    card.appendChild(label); card.appendChild(value); card.appendChild(note);
+    summary.appendChild(card);
+  }
+  this.renderCacheActivity_(values);
+  this.renderOptimizationActivity_(values);
+};
+
+
+/** Draw a cache hits/misses ring and its legend. */
+pagespeed.Statistics.prototype.renderCacheActivity_ = function(values) {
+  var hits = values['cache_hits'] || 0;
+  var misses = values['cache_misses'] || 0;
+  var total = hits + misses;
+  var share = total ? 100 * hits / total : 0;
+  var donut = document.getElementById('pagespeed-stat-donut');
+  donut.style.background = total ?
+      'conic-gradient(#4e876d 0 ' + share + '%, #d77665 ' + share + '% 100%)' :
+      '#e8eee9';
+  document.getElementById('pagespeed-stat-donut-center').innerHTML =
+      '<strong>' + total.toLocaleString() + '</strong><span>Total requests</span>';
+  var legend = document.getElementById('pagespeed-stat-cache-legend');
+  while (legend.firstChild) legend.removeChild(legend.firstChild);
+  var entries = [['Hits', hits, '#4e876d'], ['Misses', misses, '#d77665']];
+  for (var i = 0; i < entries.length; i++) {
+    var item = document.createElement('div');
+    item.className = 'pagespeed-stat-legend-row';
+    var swatch = document.createElement('i');
+    swatch.style.background = entries[i][2];
+    var label = document.createElement('span');
+    label.textContent = entries[i][0] + ' (' +
+        (total ? (100 * entries[i][1] / total).toFixed(1) : '0.0') + '%)';
+    var number = document.createElement('strong');
+    number.textContent = entries[i][1].toLocaleString();
+    item.appendChild(swatch); item.appendChild(label); item.appendChild(number);
+    legend.appendChild(item);
+  }
+};
+
+
+/** Draw compact horizontal bars for representative optimization counters. */
+pagespeed.Statistics.prototype.renderOptimizationActivity_ = function(values) {
+  var specs = [
+    ['CSS filter uses', 'css_filter_uses'],
+    ['Image rewrites', 'image_rewrites'],
+    ['Analytics rewrites', 'google_analytics_rewritten_count'],
+    ['Critical-image beacons', 'critical_images_beacon_filter_script_added_count']
+  ];
+  var max = 0;
+  for (var i = 0; i < specs.length; i++) {
+    max = Math.max(max, values[specs[i][1]] || 0);
+  }
+  var container = document.getElementById('pagespeed-stat-optimization');
+  while (container.firstChild) container.removeChild(container.firstChild);
+  for (var i = 0; i < specs.length; i++) {
+    var value = values[specs[i][1]] || 0;
+    var row = document.createElement('div');
+    row.className = 'pagespeed-stat-activity-row';
+    var label = document.createElement('span');
+    label.textContent = specs[i][0];
+    var track = document.createElement('span');
+    track.className = 'pagespeed-stat-activity-track';
+    var bar = document.createElement('i');
+    bar.style.width = (max ? 100 * value / max : 0) + '%';
+    track.appendChild(bar);
+    var number = document.createElement('strong');
+    number.textContent = value.toLocaleString();
+    row.appendChild(label); row.appendChild(track); row.appendChild(number);
+    container.appendChild(row);
+  }
+};
+
+
+/** Refresh category counts and selected state. */
+pagespeed.Statistics.prototype.updateCategoryTabs_ = function() {
+  var counts = {all: this.psolMessages_.length, cache: 0, css: 0,
+                images: 0, fonts: 0, other: 0};
+  for (var i = 0; i < this.psolMessages_.length; i++) {
+    var category = pagespeed.Statistics.categoryForName_(
+        this.psolMessages_[i].name);
+    counts[category]++;
+  }
+  var buttons = document.querySelectorAll(
+      '#pagespeed-stat-category-tabs [data-category]');
+  for (var i = 0; i < buttons.length; i++) {
+    var category = buttons[i].getAttribute('data-category');
+    var label = category == 'all' ? 'All counters' :
+        category.charAt(0).toUpperCase() + category.substring(1);
+    buttons[i].textContent = label + ' (' + counts[category] + ')';
+    buttons[i].className = category == this.activeCategory_ ? 'is-active' : '';
+    buttons[i].setAttribute('aria-selected',
+                            category == this.activeCategory_ ? 'true' : 'false');
+  }
+};
+
+
+pagespeed.Statistics.prototype.setCategory_ = function(category) {
+  this.activeCategory_ = category;
+  this.update();
+};
+
+
 /**
  * @param {string} name Statistic name.
  * @return {string} The functional group for a statistic name.
@@ -308,6 +502,7 @@ pagespeed.Statistics.prototype.update = function() {
 pagespeed.Statistics.groupForName_ = function(name) {
   var normalized = name.toLowerCase();
   if (/^(image|webp|avif)_/.test(normalized)) return 'images';
+  if (/font/.test(normalized)) return 'fonts';
   if (/^(css|style|stylesheet)_/.test(normalized)) return 'css';
   if (/^(javascript|js)_/.test(normalized)) return 'javascript';
   if (/(cache|purge|metadata|property_cache|ipro)/.test(normalized)) {
@@ -323,10 +518,68 @@ pagespeed.Statistics.groupForName_ = function(name) {
 };
 
 
+/** @param {string} name Statistic name. @return {string} Filter category. */
+pagespeed.Statistics.categoryForName_ = function(name) {
+  var normalized = name.toLowerCase();
+  if (/font/.test(normalized)) return 'fonts';
+  var group = pagespeed.Statistics.groupForName_(name);
+  if (group == 'cache') return 'cache';
+  if (group == 'css') return 'css';
+  if (group == 'images') return 'images';
+  return 'other';
+};
+
+
+/** @param {string} name Statistic name. @param {string} category Category. */
+pagespeed.Statistics.matchesCategory_ = function(name, category) {
+  return category == 'all' ||
+      pagespeed.Statistics.categoryForName_(name) == category;
+};
+
+
+/** @param {string} id Group id. @return {string} Display label. */
+pagespeed.Statistics.groupTitleForId_ = function(id) {
+  for (var i = 0; i < pagespeed.Statistics.GROUPS_.length; i++) {
+    if (pagespeed.Statistics.GROUPS_[i].id == id) {
+      return pagespeed.Statistics.GROUPS_[i].title;
+    }
+  }
+  return 'Other';
+};
+
+
+/** @param {string} name Statistic name. @return {string} Description. */
+pagespeed.Statistics.descriptionForName_ = function(name) {
+  var descriptions = {
+    cache_time_us: 'Cumulative time spent in cache operations (microseconds).',
+    cache_hits: 'Number of requests served from the PageSpeed cache.',
+    cache_misses: 'Number of requests that missed the PageSpeed cache.',
+    cache_backend_hits: 'Number of successful backend cache reads.',
+    cache_backend_misses: 'Number of backend cache lookups without an entry.',
+    cache_fallbacks: 'Number of times processing fell back to the origin.',
+    cache_expirations: 'Number of expired entries encountered in the cache.',
+    cache_inserts: 'Number of items inserted into the cache.',
+    cache_deletes: 'Number of items deleted from the cache.',
+    css_filter_uses: 'Number of requests that used a CSS rewrite filter.',
+    css_filter_blocks_rewritten: 'Number of CSS blocks successfully rewritten.',
+    image_rewrites: 'Number of image resources successfully rewritten.',
+    image_rewrite_total_bytes_saved: 'Cumulative bytes saved by image rewrites.',
+    javascript_blocks_minified: 'Number of JavaScript blocks minified.',
+    javascript_total_bytes_saved: 'Cumulative bytes saved by JavaScript rewrites.',
+    critical_images_beacon_filter_script_added_count:
+        'Critical-image beacon scripts added to pages.'
+  };
+  if (descriptions[name]) return descriptions[name];
+  return 'PageSpeed counter tracking ' + name.replace(/_/g, ' ') + '.';
+};
+
+
 /** @private {!Array<!{id: string, title: string, description: string}>} */
 pagespeed.Statistics.GROUPS_ = [
   {id: 'images', title: 'Image Optimization',
     description: 'Image rewrites, format conversions, and byte savings.'},
+  {id: 'fonts', title: 'Font Optimization',
+    description: 'Font resource detection, rewriting, and delivery.'},
   {id: 'css', title: 'CSS Optimization',
     description: 'Stylesheet combination, rewriting, and minification.'},
   {id: 'javascript', title: 'JavaScript Optimization',
@@ -515,7 +768,7 @@ pagespeed.Statistics.Start = function() {
     var statisticsObj = new pagespeed.Statistics();
     var filterElement = document.getElementById('text-filter');
     goog.events.listen(
-        filterElement, 'keyup', goog.bind(statisticsObj.setFilter,
+        filterElement, 'input', goog.bind(statisticsObj.setFilter,
                                           statisticsObj, filterElement));
     goog.events.listen(document.getElementById('auto-refresh'), 'change',
                        goog.bind(statisticsObj.toggleAutorefresh,
