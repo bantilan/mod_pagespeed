@@ -570,6 +570,223 @@ mod rules
 .pagespeed-admin-body #pagespeed-histograms > hr { display: none; }
 .pagespeed-admin-body #pagespeed-histograms > div { margin-bottom: 20px; }
 .pagespeed-admin-body #pagespeed-histograms > div:last-child { margin-bottom: 0; }
+.pagespeed-histogram-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.pagespeed-histogram-metric {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #fff, #f5f8f4);
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-histogram-metric-label {
+  display: block;
+  color: #718077;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.pagespeed-histogram-metric-value {
+  display: block;
+  margin-top: 6px;
+  color: #203b34;
+  font-size: 21px;
+  font-weight: 750;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+.pagespeed-histogram-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 10px;
+}
+.pagespeed-histogram-toolbar h2 { margin: 0 0 3px; font-size: 17px; }
+.pagespeed-histogram-toolbar p { margin: 0; color: #748178; font-size: 12px; }
+.pagespeed-histogram-search {
+  width: min(100%, 310px);
+  padding: 9px 12px;
+  border: 1px solid #d6e0d8;
+  border-radius: 6px;
+  background: #fff;
+  color: #33483d;
+  font: inherit;
+  font-size: 12px;
+}
+.pagespeed-histogram-actions {
+  display: flex;
+  flex: 0 1 420px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pagespeed-histogram-export {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border: 1px solid #cbd9ce;
+  border-radius: 6px;
+  background: #eef4ef;
+  color: #315b48;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pagespeed-histogram-export:hover { background: #e1ece3; }
+.pagespeed-histogram-table-card {
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-histogram-table-card table { min-width: 850px; }
+.pagespeed-histogram-table-card th,
+.pagespeed-histogram-table-card td { white-space: nowrap; }
+.pagespeed-histogram-table-card td:first-child { white-space: normal; }
+.pagespeed-histogram-table-card th:not(:first-child),
+.pagespeed-histogram-table-card td:not(:first-child) { text-align: right; }
+.pagespeed-histogram-detail {
+  padding: 18px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31, 55, 47, .045);
+}
+.pagespeed-histogram-detail-heading {
+  margin: 0 0 14px;
+  color: #203b34;
+  font-size: 17px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.pagespeed-histogram-detail-heading small {
+  display: block;
+  margin-top: 4px;
+  color: #748178;
+  font-size: 11px;
+  font-weight: 400;
+}
+.pagespeed-histogram-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.pagespeed-histogram-bucket-panel,
+.pagespeed-histogram-share-panel,
+.pagespeed-histogram-insights {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e3eae4;
+  border-radius: 7px;
+  background: #fbfcfa;
+}
+.pagespeed-histogram-panel-title {
+  margin: 0 0 11px;
+  color: #294b3e;
+  font-size: 14px;
+  font-weight: 700;
+}
+.pagespeed-histogram-bucket-panel .pagespeed-admin-table-wrap {
+  border-radius: 5px;
+}
+.pagespeed-histogram-bucket-panel table { min-width: 520px; }
+.pagespeed-histogram-buckets td:last-child > div {
+  max-width: 150px;
+  border-radius: 3px;
+  background: #39765e !important;
+}
+.pagespeed-histogram-side { display: grid; gap: 12px; }
+.pagespeed-histogram-share-layout {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+.pagespeed-histogram-donut {
+  display: grid;
+  width: 132px;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid #e2e9e3;
+  border-radius: 50%;
+  background: conic-gradient(#39765e 0 100%);
+}
+.pagespeed-histogram-donut-center {
+  display: grid;
+  width: 66%;
+  aspect-ratio: 1;
+  place-content: center;
+  border-radius: 50%;
+  background: #fff;
+  color: #203b34;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 750;
+}
+.pagespeed-histogram-donut-center small {
+  color: #748178;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.pagespeed-histogram-legend,
+.pagespeed-histogram-insight-list { display: grid; gap: 8px; }
+.pagespeed-histogram-legend-item {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  color: #526157;
+  font-size: 10px;
+}
+.pagespeed-histogram-legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.pagespeed-histogram-legend-range { overflow-wrap: anywhere; }
+.pagespeed-histogram-insight {
+  padding: 9px 10px;
+  border-radius: 5px;
+  background: #f0f4ef;
+  color: #526157;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.pagespeed-histogram-insight strong { display: block; color: #294b3e; }
+.pagespeed-histogram-empty {
+  padding: 28px;
+  border: 1px dashed #c8d5cb;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .72);
+  color: #718077;
+  text-align: center;
+}
+@media (max-width: 900px) {
+  .pagespeed-histogram-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pagespeed-histogram-detail-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .pagespeed-histogram-summary { gap: 8px; }
+  .pagespeed-histogram-metric { padding: 12px; }
+  .pagespeed-histogram-metric-value { font-size: 18px; }
+  .pagespeed-histogram-toolbar { align-items: stretch; flex-direction: column; }
+  .pagespeed-histogram-actions { flex: 1 1 auto; justify-content: stretch; }
+  .pagespeed-histogram-search { flex: 1 1 auto; width: 100%; min-width: 0; }
+  .pagespeed-histogram-detail { padding: 12px; }
+  .pagespeed-histogram-side { grid-template-columns: minmax(0, 1fr); }
+  .pagespeed-histogram-share-layout { grid-template-columns: 112px minmax(0, 1fr); gap: 10px; }
+  .pagespeed-histogram-donut { width: 112px; }
+}
 .pagespeed-dashboard-heading {
   display: flex;
   align-items: flex-start;
