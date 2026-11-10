@@ -295,12 +295,10 @@ pagespeed.Caches.prototype.sendPurgeSetRequest = function() {
 
 
 /**
- * Send the cache purging URL to the sever.
- * @param {Event} event The DOM event that activated this.
+ * Send a metadata lookup request to the server.
  */
-pagespeed.Caches.prototype.sendMetadataRequest = function(event) {
+pagespeed.Caches.prototype.sendMetadataRequest = function() {
   if (!this.xhr_.isActive()) {
-    event.preventDefault();
     var urlId = pagespeed.Caches.ElementId.METADATA_TEXT;
     var userAgentId = pagespeed.Caches.ElementId.USER_AGENT;
     var url =
