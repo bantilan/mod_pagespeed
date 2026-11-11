@@ -23,6 +23,7 @@
 #include "pagespeed/automatic/proxy_interface.h"
 
 #include "net/instaweb/http/public/async_fetch.h"
+#include "net/instaweb/rewriter/public/mock_critical_images_finder.h"
 #include "net/instaweb/http/public/http_cache.h"
 #include "net/instaweb/http/public/logging_proto_impl.h"
 #include "net/instaweb/http/public/mock_callback.h"
@@ -3638,6 +3639,264 @@ TEST_F(ProxyInterfaceOriginPropertyPageTest, PostWithDelayCache) {
                        false /*log_flush*/, &headers);
   mock_scheduler()->AdvanceTimeUs(200);
   WaitForFetch(true);
+}
+
+class HtmlPageCacheTest : public ProxyInterfaceTestBase {
+ protected:
+  void SetUp() override {
+    ProxyInterfaceTestBase::SetUp();
+    RewriteOptions* opts = server_context()->global_options();
+    opts->ClearSignatureForTesting();
+    opts->set_html_cache(true);
+    opts->set_html_cache_ttl_sec(2);
+    opts->set_show_cache_timestamp(true);
+    opts->set_critical_images_beacon_enabled(false);
+    opts->set_in_place_rewriting_enabled(false);
+    server_context()->ComputeSignature(opts);
+    SetResponseWithDefaultHeaders(
+        "http://www.example.com/html-cache.html", kContentTypeHtml,
+        "<html><head></head><body>cached page</body></html>", 100);
+  }
+
+  GoogleString Fetch(const RequestHeaders& request) {
+    GoogleString body;
+    ResponseHeaders headers;
+    FetchFromProxy("http://www.example.com/html-cache.html", request, true,
+                   &body, &headers);
+    return body;
+  }
+
+  GoogleString Fetch() {
+    RequestHeaders request;
+    request.set_method(RequestHeaders::kGet);
+    return Fetch(request);
+  }
+
+  void ExpectStatus(const GoogleString& html, const char* status) {
+    EXPECT_NE(GoogleString::npos, html.find(StrCat("PageSpeed Cache: ", status)));
+    EXPECT_TRUE(StringPiece(html).ends_with("-->"));
+    EXPECT_LT(html.rfind("</html>"), html.rfind("<!-- PageSpeed Cache: "));
+  }
+};
+
+TEST_F(HtmlPageCacheTest, MissHitPreservesCreationAndDynamicAge) {
+  GoogleString first = Fetch();
+  ExpectStatus(first, "MISS");
+  factory()->mock_timer()->AdvanceMs(1000);
+  GoogleString second = Fetch();
+  ExpectStatus(second, "HIT");
+  EXPECT_NE(GoogleString::npos, second.find("Age: 1s"));
+  size_t begin = first.find(" | Created:");
+  size_t end = first.find(" | Age:", begin);
+  EXPECT_EQ(first.substr(begin, end - begin),
+            second.substr(second.find(" | Created:"), end - begin));
+  EXPECT_EQ(GoogleString::npos,
+            second.substr(0, second.find("<!-- PageSpeed Cache: ")).find(
+                "PageSpeed Cache:"));
+}
+
+TEST_F(HtmlPageCacheTest, ExpirationRegeneratesWithNewCreationTime) {
+  GoogleString first = Fetch();
+  ExpectStatus(first, "MISS");
+  factory()->mock_timer()->AdvanceMs(3000);
+  GoogleString regenerated = Fetch();
+  ExpectStatus(regenerated, "MISS");
+  EXPECT_NE(first, regenerated);
+  ExpectStatus(Fetch(), "HIT");
+}
+
+TEST_F(HtmlPageCacheTest, GlobalInvalidationRegenerates) {
+  ExpectStatus(Fetch(), "MISS");
+  ExpectStatus(Fetch(), "HIT");
+  factory()->mock_timer()->AdvanceMs(1);
+  EXPECT_TRUE(server_context()->global_options()->
+      UpdateCacheInvalidationTimestampMs(factory()->mock_timer()->NowMs()));
+  factory()->mock_timer()->AdvanceMs(1);
+  ExpectStatus(Fetch(), "MISS");
+  ExpectStatus(Fetch(), "HIT");
+}
+
+TEST_F(HtmlPageCacheTest, UserAgentAndAcceptVariantsAreIsolated) {
+  RequestHeaders avif, webp, original;
+  avif.set_method(RequestHeaders::kGet);
+  avif.Add("User-Agent", "Mozilla/5.0 Chrome/123.0.0.0 Safari/537.36");
+  avif.Add("Accept", "text/html,image/avif,image/webp");
+  webp.CopyFrom(avif);
+  webp.Replace("User-Agent", "Mozilla/5.0 Firefox/92.0");
+  webp.Replace("Accept", "text/html,image/webp");
+  original.CopyFrom(webp);
+  original.Replace("User-Agent", "Mozilla/5.0 MSIE 9.0");
+  original.Replace("Accept", "text/html");
+  ExpectStatus(Fetch(avif), "MISS");
+  ExpectStatus(Fetch(webp), "MISS");
+  ExpectStatus(Fetch(original), "MISS");
+  ExpectStatus(Fetch(avif), "HIT");
+  ExpectStatus(Fetch(webp), "HIT");
+  ExpectStatus(Fetch(original), "HIT");
+  // Even a browser with the same UA but a different Accept must not cross-hit.
+  RequestHeaders no_avif;
+  no_avif.CopyFrom(avif);
+  no_avif.Replace("Accept", "text/html,image/webp");
+  ExpectStatus(Fetch(no_avif), "MISS");
+  ExpectStatus(Fetch(avif), "HIT");
+}
+
+TEST_F(HtmlPageCacheTest, PrivateRequestsBypassWithoutPollutingPublicEntry) {
+  ExpectStatus(Fetch(), "MISS");
+  const char* names[] = {"Cookie", "Authorization", "Cache-Control", "Range"};
+  for (const char* name : names) {
+    RequestHeaders request;
+    request.set_method(RequestHeaders::kGet);
+    request.Add(name, StringCaseEqual(name, "Cache-Control") ? "no-cache" : "test");
+    ExpectStatus(Fetch(request), "BYPASS");
+  }
+  ExpectStatus(Fetch(), "HIT");
+}
+
+TEST_F(HtmlPageCacheTest, PrivateAndNoStoreResponsesBypass) {
+  const char* controls[] = {"private, max-age=100", "no-store", "no-cache"};
+  for (const char* control : controls) {
+    ResponseHeaders origin;
+    DefaultResponseHeaders(kContentTypeHtml, 100, &origin);
+    origin.Replace("Cache-Control", control);
+    origin.ComputeCaching();
+    http_cache()->Delete("http://www.example.com/html-cache.html",
+                         rewrite_driver_->CacheFragment());
+    SetFetchResponse("http://www.example.com/html-cache.html", origin,
+                     "<html><body>private</body></html>");
+    ExpectStatus(Fetch(), "BYPASS");
+  }
+}
+
+TEST_F(HtmlPageCacheTest, SetCookieResponsesBypass) {
+  ResponseHeaders origin;
+  DefaultResponseHeaders(kContentTypeHtml, 100, &origin);
+  origin.Add("Set-Cookie", "session=private");
+  SetFetchResponse("http://www.example.com/html-cache.html", origin,
+                   "<html><body>session</body></html>");
+  ExpectStatus(Fetch(), "BYPASS");
+  ExpectStatus(Fetch(), "BYPASS");
+}
+
+TEST_F(HtmlPageCacheTest, ChangedOriginValidatorRegenerates) {
+  ExpectStatus(Fetch(), "MISS");
+  ResponseHeaders origin;
+  DefaultResponseHeaders(kContentTypeHtml, 100, &origin);
+  origin.Add("ETag", "\"changed\"");
+  http_cache()->Delete("http://www.example.com/html-cache.html",
+                       rewrite_driver_->CacheFragment());
+  SetFetchResponse("http://www.example.com/html-cache.html", origin,
+                   "<html><body>replacement</body></html>");
+  GoogleString changed = Fetch();
+  ExpectStatus(changed, "MISS");
+  EXPECT_NE(GoogleString::npos, changed.find("replacement"));
+  ExpectStatus(Fetch(), "HIT");
+}
+
+TEST_F(HtmlPageCacheTest, DisabledByDefaultAndExplicitlyDisabled) {
+  RewriteOptions defaults(server_context()->thread_system());
+  EXPECT_FALSE(defaults.html_cache());
+  EXPECT_FALSE(defaults.show_cache_timestamp());
+  EXPECT_EQ(300, defaults.html_cache_ttl_sec());
+  RewriteOptions* opts = server_context()->global_options();
+  opts->ClearSignatureForTesting();
+  opts->set_html_cache(false);
+  opts->set_show_cache_timestamp(false);
+  server_context()->ComputeSignature(opts);
+  EXPECT_EQ(GoogleString::npos, Fetch().find("PageSpeed Cache:"));
+}
+
+TEST_F(HtmlPageCacheTest, ShowWithoutCacheReportsBypass) {
+  RewriteOptions* opts = server_context()->global_options();
+  opts->ClearSignatureForTesting();
+  opts->set_html_cache(false);
+  server_context()->ComputeSignature(opts);
+  ExpectStatus(Fetch(), "BYPASS");
+  ExpectStatus(Fetch(), "BYPASS");
+}
+
+class HtmlCacheBeaconFinder : public MockCriticalImagesFinder {
+ public:
+  explicit HtmlCacheBeaconFinder(Statistics* stats)
+      : MockCriticalImagesFinder(stats), ready(false), due(false), generation(1) {}
+  void UpdateCriticalImagesSetInDriver(RewriteDriver* driver) override {
+    MockCriticalImagesFinder::UpdateCriticalImagesSetInDriver(driver);
+    CriticalKeys* support = driver->critical_images_info()->proto.
+        mutable_html_critical_image_support();
+    support->set_valid_beacons_received(ready ? 3 : 0);
+    support->set_next_beacon_timestamp_ms(5000000000000LL);
+    support->add_key_evidence()->set_key(IntegerToString(generation));
+  }
+  bool ShouldBeacon(RewriteDriver* driver) override {
+    UpdateCriticalImagesSetInDriver(driver);
+    return due;
+  }
+  bool ready;
+  bool due;
+  int generation;
+};
+
+TEST_F(HtmlPageCacheTest, SuccessfulBeaconEvidenceRequiredAndNewEvidenceInvalidates) {
+  factory()->set_use_beacon_results_in_filters(true);
+  server_context()->set_enable_property_cache(true);
+  server_context()->set_dom_cohort(SetupCohort(
+      page_property_cache(), RewriteDriver::kDomCohort));
+  HtmlCacheBeaconFinder* finder = new HtmlCacheBeaconFinder(statistics());
+  server_context()->set_critical_images_finder(finder);
+  RewriteOptions* opts = server_context()->global_options();
+  opts->ClearSignatureForTesting();
+  opts->set_critical_images_beacon_enabled(true);
+  opts->EnableFilter(RewriteOptions::kInlineImages);
+  server_context()->ComputeSignature(opts);
+  ExpectStatus(Fetch(), "BYPASS");
+  ExpectStatus(Fetch(), "BYPASS");
+  finder->ready = true;
+  ExpectStatus(Fetch(), "MISS");
+  ExpectStatus(Fetch(), "HIT");
+  ++finder->generation;  // A successful new LCP/critical-image beacon.
+  ExpectStatus(Fetch(), "MISS");
+  ExpectStatus(Fetch(), "HIT");
+  finder->due = true;  // Sampling must run instead of replaying cached HTML.
+  ExpectStatus(Fetch(), "BYPASS");
+}
+
+TEST_F(HtmlPageCacheTest, OriginExpirationWinsOverConfiguredTtl) {
+  RewriteOptions* opts = server_context()->global_options();
+  opts->ClearSignatureForTesting();
+  opts->set_html_cache_ttl_sec(300);
+  server_context()->ComputeSignature(opts);
+  SetResponseWithDefaultHeaders("http://www.example.com/html-cache.html",
+      kContentTypeHtml, "<html><body>short lifetime</body></html>", 1);
+  ExpectStatus(Fetch(), "MISS");
+  factory()->mock_timer()->AdvanceMs(2000);
+  // A fresh origin fetch can renew its own Date. The old HTML must still not
+  // hit after the origin's one-second lifetime, despite our 300-second cap.
+  EXPECT_EQ(GoogleString::npos, Fetch().find("PageSpeed Cache: HIT"));
+}
+
+TEST_F(HtmlPageCacheTest, BackendCompressionKeepsPerRequestDiagnostics) {
+  RewriteOptions* opts = server_context()->global_options();
+  opts->ClearSignatureForTesting();
+  opts->set_http_cache_compression_level(9);
+  server_context()->ComputeSignature(opts);
+  ExpectStatus(Fetch(), "MISS");
+  ExpectStatus(Fetch(), "HIT");
+}
+
+TEST_F(HtmlPageCacheTest, NonHtmlAnd304HaveNoComment) {
+  SetResponseWithDefaultHeaders("http://www.example.com/style.css",
+      kContentTypeCss, "body { color: red; }", 100);
+  GoogleString body;
+  ResponseHeaders headers;
+  FetchFromProxy("http://www.example.com/style.css", true, &body, &headers);
+  EXPECT_EQ(GoogleString::npos, body.find("PageSpeed Cache:"));
+  ResponseHeaders not_modified;
+  DefaultResponseHeaders(kContentTypeHtml, 100, &not_modified);
+  not_modified.SetStatusAndReason(HttpStatus::kNotModified);
+  SetFetchResponse("http://www.example.com/not-modified.html", not_modified, "");
+  FetchFromProxy("http://www.example.com/not-modified.html", true, &body, &headers);
+  EXPECT_TRUE(body.empty());
+  EXPECT_EQ(HttpStatus::kNotModified, headers.status_code());
 }
 
 }  // namespace net_instaweb

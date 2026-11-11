@@ -262,6 +262,9 @@ class RewriteOptions {
   static const char kAwaitPcacheLookup[];
   static const char kBeaconReinstrumentTimeSec[];
   static const char kBeaconUrl[];
+  static const char kHtmlCache[];
+  static const char kHtmlCacheTtlSec[];
+  static const char kShowCacheTimestamp[];
   static const char kCacheFragment[];
   static const char kCacheSmallImagesUnrewritten[];
   static const char kClientDomainRewrite[];
@@ -1652,6 +1655,12 @@ class RewriteOptions {
   int64 max_html_cache_time_ms() const {
     return max_html_cache_time_ms_.value();
   }
+  bool html_cache() const { return html_cache_.value(); }
+  int64 html_cache_ttl_sec() const { return html_cache_ttl_sec_.value(); }
+  bool show_cache_timestamp() const { return show_cache_timestamp_.value(); }
+  void set_html_cache(bool x) { set_option(x, &html_cache_); }
+  void set_html_cache_ttl_sec(int64 x) { set_option(x, &html_cache_ttl_sec_); }
+  void set_show_cache_timestamp(bool x) { set_option(x, &show_cache_timestamp_); }
   void set_max_html_cache_time_ms(int64 x) {
     set_option(x, &max_html_cache_time_ms_);
   }
@@ -3710,6 +3719,9 @@ class RewriteOptions {
   Option<int64> progressive_jpeg_min_bytes_;
   // The max Cache-Control TTL for HTML.
   Option<int64> max_html_cache_time_ms_;
+  Option<bool> html_cache_;
+  Option<int64> html_cache_ttl_sec_;
+  Option<bool> show_cache_timestamp_;
   // The maximum number of bytes of HTML that we parse, before redirecting to
   // ?ModPagespeed=off.
   Option<int64> max_html_parse_bytes_;

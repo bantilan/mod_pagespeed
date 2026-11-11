@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <ctime>
 #include <memory>
 
 #include "base/logging.h"
@@ -29,6 +30,8 @@
 #include "net/instaweb/http/public/request_context.h"
 #include "net/instaweb/public/global_constants.h"
 #include "net/instaweb/rewriter/config/rewrite_options_manager.h"
+#include "net/instaweb/rewriter/public/critical_finder_support_util.h"
+#include "net/instaweb/rewriter/public/critical_images_finder.h"
 #include "net/instaweb/rewriter/public/domain_rewrite_filter.h"
 #include "net/instaweb/rewriter/public/experiment_matcher.h"
 #include "net/instaweb/rewriter/public/experiment_util.h"
@@ -39,13 +42,17 @@
 #include "net/instaweb/util/public/fallback_property_page.h"
 #include "pagespeed/kernel/base/abstract_mutex.h"
 #include "pagespeed/kernel/base/basictypes.h"
+#include "pagespeed/kernel/base/cache_interface.h"
 #include "pagespeed/kernel/base/callback.h"
 #include "pagespeed/kernel/base/function.h"
 #include "pagespeed/kernel/base/ref_counted_ptr.h"
 #include "pagespeed/kernel/base/request_trace.h"
+#include "pagespeed/kernel/base/sha1_signature.h"
+#include "pagespeed/kernel/base/shared_string.h"
 #include "pagespeed/kernel/base/stl_util.h"
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/base/timer.h"
+#include "pagespeed/kernel/base/writer.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/google_url.h"
 #include "pagespeed/kernel/http/http_names.h"
@@ -57,6 +64,226 @@
 #include "pagespeed/opt/logging/request_timing_info.h"
 
 namespace net_instaweb {
+
+// Caches only completed, optimized entity bodies, before transport compression.
+// Origin headers are still checked on every request. The origin is never
+// bypassed: this cache avoids HTML parsing/rewriting, not origin authorization.
+class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
+ public:
+  HtmlPageCacheWriter(RewriteDriver* driver, AsyncFetch* output,
+                      const GoogleString& url, ResponseHeaders* origin)
+      : driver_(driver), output_(output), url_(url),
+        cache_(driver->server_context()->metadata_cache()),
+        timer_(driver->server_context()->timer()),
+        show_(driver->options()->show_cache_timestamp()), eligible_(false),
+        hit_(false), good_(true), created_ms_(0), expires_ms_(0),
+        ttl_ms_(0), origin_expiry_ms_(0), completion_(nullptr) {
+    const RewriteOptions* options = driver->options();
+    const RequestHeaders* request = driver->request_headers();
+    show_ = show_ && request->method() == RequestHeaders::kGet &&
+            origin->status_code() == HttpStatus::kOK;
+    const char* forbidden[] = {"Cookie", "Cookie2", "Authorization",
+        "Proxy-Authorization", "Cache-Control", "Pragma", "Range",
+        "If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since",
+        "If-Range"};
+    if (!options->html_cache() || options->html_cache_ttl_sec() <= 0 ||
+        options->html_cache_ttl_sec() > 31536000 ||
+        request->method() != RequestHeaders::kGet ||
+        origin->status_code() != HttpStatus::kOK ||
+        origin->Has("Set-Cookie") || origin->Has("Set-Cookie2") ||
+        origin->HasValue("Vary", "*") || options->running_experiment() ||
+        options->Enabled(RewriteOptions::kPrioritizeCriticalCss)) {
+      return;
+    }
+    for (const char* name : forbidden) {
+      if (request->Has(name)) return;
+    }
+    // All request headers participate in the key, including UA, Accept,
+    // client hints and language. Thus it is safe to accept named Vary fields.
+    ResponseHeaders policy(origin->http_options());
+    policy.CopyFrom(*origin);
+    policy.RemoveAll("Vary");
+    policy.ComputeCaching();
+    if (!policy.IsProxyCacheable(request->GetProperties(),
+                                ResponseHeaders::kRespectVaryOnResources,
+                                ResponseHeaders::kHasValidator)) return;
+    origin_expiry_ms_ = policy.CacheExpirationTimeMs();
+    if (origin_expiry_ms_ <= timer_->NowMs()) return;
+    ttl_ms_ = options->html_cache_ttl_sec() * Timer::kSecondMs;
+    identity_ = StrCat(url, "\n", driver->CacheFragment(), "\n",
+                       options->signature(), "\n", request->ToString(), "\n");
+    StrAppend(&identity_, "origin-ttl:",
+              Integer64ToString(policy.cache_ttl_ms()), "\n");
+    // Validators, policy and security headers invalidate an old body, but a
+    // freshly generated Date/Age must not turn every request into a new key.
+    for (int i = 0; i < origin->NumAttributes(); ++i) {
+      const GoogleString& name = origin->Name(i);
+      if (!StringCaseEqual(name, "Date") && !StringCaseEqual(name, "Age") &&
+          !StringCaseEqual(name, "Expires") &&
+          !StringCaseEqual(name, "Content-Length") &&
+          !StringCaseEqual(name, "Vary") &&
+          !(StringCaseEqual(name, "Etag") &&
+            StringCaseStartsWith(origin->Value(i), "W/\"PSA-")) &&
+          !StringCaseEqual(name, "Connection") &&
+          !StringCaseEqual(name, "Keep-Alive")) {
+        StrAppend(&identity_, name, ":", origin->Value(i), "\n");
+      }
+    }
+    eligible_ = true;
+  }
+
+  bool hit() const { return hit_; }
+
+  void Lookup(Function* completion) {
+    completion_ = completion;
+    if (eligible_ && driver_->is_critical_images_beacon_enabled()) {
+      CriticalImagesFinder* finder =
+          driver_->server_context()->critical_images_finder();
+      bool due = finder->ShouldBeacon(driver_);
+      const CriticalImagesInfo* info = driver_->critical_images_info();
+      if (info == nullptr || due ||
+          info->proto.html_critical_image_support().valid_beacons_received() <
+              kHighFreqBeaconCount) {
+        eligible_ = false;
+      } else {
+        // Cache only the rewrite AFTER successful beacon learning. New image
+        // evidence (including LCP) makes the old HTML variant unreachable.
+        beacon_identity_ = info->proto.SerializeAsString();
+        StrAppend(&identity_, "\nbeacon:", beacon_identity_);
+      }
+    }
+    if (!eligible_) {
+      CompleteLookup();
+      return;
+    }
+    SHA1Signature signature(SHA1Signature::ComputeSizeFromNumberOfBytes(20));
+    key_ = StrCat("optimized-html-v1:",
+                  signature.Sign("pagespeed-optimized-html-v1", identity_));
+    identity_.clear();
+    cache_->Get(key_, this);
+  }
+
+  bool Write(const StringPiece& bytes, MessageHandler* handler) override {
+    if (eligible_ && !hit_) {
+      if (body_.size() + bytes.size() <= kMaxBodyBytes) {
+        body_.append(bytes.data(), bytes.size());
+      } else {
+        eligible_ = false;
+        body_.clear();
+      }
+    }
+    good_ = output_->Write(bytes, handler) && good_;
+    return good_;
+  }
+
+  bool Flush(MessageHandler* handler) override {
+    if (eligible_ && !hit_) {
+      const CriticalImagesInfo* info = driver_->critical_images_info();
+      // Do not publish a rewrite that missed its resource deadline or whose
+      // beacon evidence changed while filters were running.
+      if (driver_->num_detached_rewrites() != 0 ||
+          (!beacon_identity_.empty() &&
+           (info == nullptr ||
+            info->proto.SerializeAsString() != beacon_identity_))) {
+        eligible_ = false;
+        body_.clear();
+      }
+    }
+    good_ = output_->Flush(handler) && good_;
+    return good_;
+  }
+
+  bool Finish(bool success, MessageHandler* handler) {
+    if (!success || !good_) return false;
+    if (hit_) {
+      good_ = output_->Write(body_, handler);
+    } else if (eligible_ && !body_.empty()) {
+      // Never freeze a sampled beacon nonce into a cached document, including
+      // the boundary case where sampling becomes due during this rewrite.
+      if (body_.find("pagespeed.CriticalImages.Run(") != GoogleString::npos ||
+          body_.find("CriticalCssBeacon") != GoogleString::npos) {
+        eligible_ = false;
+      } else {
+        int64 now = timer_->NowMs();
+        expires_ms_ = std::min(origin_expiry_ms_, now + ttl_ms_);
+        if (expires_ms_ > now) {
+          created_ms_ = now;
+          SharedString value(StrCat(Integer64ToString(now), "\n",
+              Integer64ToString(expires_ms_), "\n", body_));
+          cache_->Put(key_, value);
+        }
+      }
+    }
+    if (show_ && good_) {
+      GoogleString comment;
+      if (created_ms_ == 0) {
+        comment = "<!-- PageSpeed Cache: BYPASS | Created: N/A | Age: N/A -->";
+      } else {
+        time_t created = created_ms_ / Timer::kSecondMs;
+        struct tm utc;
+        gmtime_r(&created, &utc);
+        comment = StringPrintf(
+            "<!-- PageSpeed Cache: %s | Created: %04d-%02d-%02d %02d:%02d:%02d UTC | Age: %llds -->",
+            hit_ ? "HIT" : "MISS", utc.tm_year + 1900, utc.tm_mon + 1,
+            utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec,
+            static_cast<long long>(std::max<int64>(0, timer_->NowMs() -
+                                                   created_ms_) / 1000));
+      }
+      good_ = output_->Write(comment, handler);
+    }
+    return good_;
+  }
+
+ protected:
+  bool ValidateCandidate(const GoogleString& key,
+                         CacheInterface::KeyState state) override {
+    if (state != CacheInterface::kAvailable) return false;
+    StringPiece value = this->value().Value();
+    size_t first = value.find('\n');
+    if (first == StringPiece::npos || first > 20) return false;
+    size_t second = value.find('\n', first + 1);
+    if (second == StringPiece::npos || second - first > 21) return false;
+    int64 created, expiry;
+    if (!StringToInt64(value.substr(0, first), &created) ||
+        !StringToInt64(value.substr(first + 1, second - first - 1), &expiry))
+      return false;
+    int64 now = timer_->NowMs();
+    if (created <= 0 || created > now || expiry <= now || expiry <= created ||
+        expiry - created > ttl_ms_ || origin_expiry_ms_ <= now ||
+        value.size() - second - 1 > kMaxBodyBytes ||
+        !driver_->options()->IsUrlCacheValid(url_, created, true)) return false;
+    created_ms_ = created;
+    expires_ms_ = expiry;
+    value.substr(second + 1).CopyToString(&body_);
+    return !body_.empty();
+  }
+
+  void Done(CacheInterface::KeyState state) override {
+    hit_ = state == CacheInterface::kAvailable;
+    if (!hit_) {
+      created_ms_ = 0;
+      body_.clear();
+    }
+    CompleteLookup();
+  }
+
+ private:
+  void CompleteLookup() {
+    Function* completion = completion_;
+    completion_ = nullptr;
+    completion->CallRun();
+  }
+
+  static const size_t kMaxBodyBytes = 1024 * 1024;
+  RewriteDriver* driver_;  // Valid through Lookup; never used by Finish.
+  AsyncFetch* output_;
+  GoogleString url_, key_, identity_, body_, beacon_identity_;
+  CacheInterface* cache_;
+  Timer* timer_;
+  bool show_, eligible_, hit_, good_;
+  int64 created_ms_, expires_ms_, ttl_ms_, origin_expiry_ms_;
+  Function* completion_;
+};
 
 const char ProxyFetch::kCollectorConnectProxyFetchFinish[] =
     "CollectorConnectProxyFetchFinish";
@@ -478,9 +705,13 @@ ProxyFetch::ProxyFetch(
       url_(url),
       server_context_(server_context),
       timer_(timer),
+      html_output_(async_fetch),
       cross_domain_(cross_domain),
       claims_html_(false),
       started_parse_(false),
+      driver_parse_started_(false),
+      html_cache_lookup_started_(false),
+      html_cache_lookup_complete_(false),
       parse_text_called_(false),
       done_called_(false),
       property_cache_callback_(property_cache_callback),
@@ -549,7 +780,16 @@ bool ProxyFetch::StartParse() {
 
   // Start parsing.
   // TODO(sligocki): Allow calling StartParse with GoogleUrl.
-  if (!driver_->StartParse(url_)) {
+  if (Options()->html_cache() || Options()->show_cache_timestamp()) {
+    html_page_cache_.reset(new HtmlPageCacheWriter(
+        driver_, html_output_, url_, response_headers()));
+    driver_->SetWriter(html_page_cache_.get());
+    // Delay starting filters until the optional cache lookup has completed.
+    // A hit never parses HTML or initializes beacon/filter state.
+    return true;
+  }
+  driver_parse_started_ = driver_->StartParse(url_);
+  if (!driver_parse_started_) {
     // We don't expect this to ever fail.
     LOG(ERROR) << "StartParse failed for URL: " << url_;
     return false;
@@ -712,6 +952,18 @@ void ProxyFetch::SetupForHtml() {
 
       // HTML sizes are likely to be altered by HTML rewriting.
       response_headers()->RemoveAll(HttpAttributes::kContentLength);
+      if (options->html_cache() || options->show_cache_timestamp()) {
+        // Per-request diagnostics and browser variants must never be frozen
+        // by a browser/CDN. This does not affect internal cache eligibility,
+        // which was determined from the original headers in StartParse.
+        response_headers()->SetDateAndCaching(
+            response_headers()->date_ms(), 0, ", private, no-store");
+        response_headers()->RemoveAll("Content-MD5");
+        response_headers()->RemoveAll("Digest");
+        response_headers()->RemoveAll("Content-Digest");
+        response_headers()->RemoveAll("Repr-Digest");
+        response_headers()->ComputeCaching();
+      }
 
       // TODO(sligocki): See mod_instaweb.cc line 528, which strips Expires and
       // Content-MD5.  Perhaps we should do that here as well.
@@ -798,7 +1050,8 @@ void ProxyFetch::ScheduleQueueExecutionIfNeeded() {
   // We're waiting for any property-cache lookups and previous flushes to
   // complete, so no need to queue it here.  The queuing will happen when
   // the PropertyCache lookup is complete or from FlushDone.
-  if (waiting_for_flush_to_finish_ || (property_cache_callback_ != nullptr)) {
+  if (waiting_for_flush_to_finish_ || (property_cache_callback_ != nullptr) ||
+      (html_cache_lookup_started_ && !html_cache_lookup_complete_)) {
     return;
   }
 
@@ -995,6 +1248,23 @@ void ProxyFetch::FlushDone() {
 }
 
 void ProxyFetch::ExecuteQueued() {
+  if (html_page_cache_.get() != nullptr && !html_cache_lookup_started_) {
+    {
+      ScopedMutex lock(mutex_.get());
+      queue_run_job_created_ = false;
+      html_cache_lookup_started_ = true;
+    }
+    html_page_cache_->Lookup(
+        MakeFunction(this, &ProxyFetch::HtmlCacheLookupComplete));
+    return;
+  }
+  bool html_cache_hit = html_page_cache_.get() != nullptr &&
+                        html_page_cache_->hit();
+  if (html_page_cache_.get() != nullptr && !html_cache_hit &&
+      !driver_parse_started_) {
+    driver_parse_started_ = driver_->StartParse(url_);
+    CHECK(driver_parse_started_);  // URL was validated by CreateNewProxyFetch.
+  }
   bool do_flush = false;
   bool do_finish = false;
   bool done_result = false;
@@ -1067,10 +1337,17 @@ void ProxyFetch::ExecuteQueued() {
   // Collect all text received from the fetcher
   for (int i = 0, n = v.size(); i < n; ++i) {
     GoogleString* str = v[i];
-    driver_->ParseText(*str);
+    if (!html_cache_hit) driver_->ParseText(*str);
     delete str;
   }
-  if (do_flush) {
+  if (html_cache_hit) {
+    if (do_flush) {
+      FlushDone();
+    } else if (do_finish) {
+      CancelIdleAlarm();
+      Finish(done_result);
+    }
+  } else if (do_flush) {
     if (force_flush) {
       driver_->RequestFlush();
     }
@@ -1125,7 +1402,7 @@ void ProxyFetch::Finish(bool success) {
   }
 
   if (driver_ != nullptr) {
-    if (started_parse_) {
+    if (driver_parse_started_) {
       driver_->FinishParseAsync(
           MakeFunction(this, &ProxyFetch::CompleteFinishParse, success));
       return;
@@ -1142,6 +1419,9 @@ void ProxyFetch::Finish(bool success) {
   // cleanup the factory.
   factory_->RegisterFinishedFetch(this);
 
+  if (html_page_cache_.get() != nullptr) {
+    success = html_page_cache_->Finish(success, factory_->message_handler());
+  }
   SharedAsyncFetch::HandleDone(success);
   done_called_ = true;
 
@@ -1157,6 +1437,12 @@ void ProxyFetch::CompleteFinishParse(bool success) {
   driver_ = nullptr;
   // Have to call directly -- sequence is gone with driver.
   Finish(success);
+}
+
+void ProxyFetch::HtmlCacheLookupComplete() {
+  ScopedMutex lock(mutex_.get());
+  html_cache_lookup_complete_ = true;
+  ScheduleQueueExecutionIfNeeded();
 }
 
 void ProxyFetch::CancelIdleAlarm() {

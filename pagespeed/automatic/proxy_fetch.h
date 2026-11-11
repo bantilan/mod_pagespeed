@@ -57,6 +57,7 @@ class QueuedAlarm;
 class ServerContext;
 class RewriteDriver;
 class RewriteOptions;
+class HtmlPageCacheWriter;
 class Timer;
 
 // Factory for creating and starting ProxyFetches. Must outlive all
@@ -380,6 +381,7 @@ class ProxyFetch : public SharedAsyncFetch {
   // Sets up driver_, registering the writer and start parsing url.
   // Returns whether we started parsing successfully or not.
   bool StartParse();
+  void HtmlCacheLookupComplete();
 
   // Start the fetch which includes preparing the request.
   void StartFetch();
@@ -427,6 +429,7 @@ class ProxyFetch : public SharedAsyncFetch {
   Timer* timer_;
 
   std::unique_ptr<CacheUrlAsyncFetcher> cache_fetcher_;
+  AsyncFetch* html_output_;
 
   // True if we're handling a cross-domain request in proxy mode, which
   // should do some additional checking.
@@ -438,6 +441,10 @@ class ProxyFetch : public SharedAsyncFetch {
   // Has a call to StartParse succeeded? We'll only do this if we actually
   // decide it is HTML.
   bool started_parse_;
+  bool driver_parse_started_;
+  bool html_cache_lookup_started_;
+  bool html_cache_lookup_complete_;
+  std::unique_ptr<HtmlPageCacheWriter> html_page_cache_;
 
   // Has a call to RewriteDriver::ParseText been made yet.
   bool parse_text_called_;

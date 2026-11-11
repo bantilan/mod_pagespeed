@@ -73,6 +73,9 @@ const char RewriteOptions::kAwaitPcacheLookup[] = "AwaitPcacheLookup";
 const char RewriteOptions::kBeaconReinstrumentTimeSec[] =
     "BeaconReinstrumentTimeSec";
 const char RewriteOptions::kBeaconUrl[] = "BeaconUrl";
+const char RewriteOptions::kHtmlCache[] = "HtmlCache";
+const char RewriteOptions::kHtmlCacheTtlSec[] = "HtmlCacheTtlSec";
+const char RewriteOptions::kShowCacheTimestamp[] = "ShowCacheTimestamp";
 const char RewriteOptions::kCacheFragment[] = "CacheFragment";
 const char RewriteOptions::kCacheSmallImagesUnrewritten[] =
     "CacheSmallImagesUnrewritten";
@@ -1476,6 +1479,14 @@ void RewriteOptions::AddProperties() {
       "Stops the prioritize_critical_css filter from invoking its JavaScript "
       "that applies all the 'hidden' CSS at onload. Intended for testing.",
       false);
+  AddBaseProperty(false, &RewriteOptions::html_cache_, "fhc", kHtmlCache,
+                  kDirectoryScope, "Cache eligible optimized HTML bodies.", true);
+  AddBaseProperty(static_cast<int64>(300), &RewriteOptions::html_cache_ttl_sec_,
+                  "fhct", kHtmlCacheTtlSec, kDirectoryScope,
+                  "Maximum HTML cache lifetime in seconds; origin policy wins.", true);
+  AddBaseProperty(false, &RewriteOptions::show_cache_timestamp_, "fhcs",
+                  kShowCacheTimestamp, kDirectoryScope,
+                  "Append per-request HTML cache diagnostics after rewriting.", true);
   AddBaseProperty(kDefaultBeaconReinstrumentTimeSec,
                   &RewriteOptions::beacon_reinstrument_time_sec_, "brts",
                   kBeaconReinstrumentTimeSec, kDirectoryScope,

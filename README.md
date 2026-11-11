@@ -23,6 +23,8 @@ Primary objective of this fork:
 - AVIF image conversion support (`convert_to_avif`) for modern image delivery.
 - LCP-oriented image prioritization filter to improve discoverability and fetch
   priority for above-the-fold/LCP candidates.
+- Optional HTML rewrite-output caching with AVIF/WebP/original browser-variant
+  isolation, beacon-aware invalidation, and per-request cache diagnostics.
 - Updated Google Analytics insertion support:
   - Supports modern Google tag IDs (`GT-...`) and GA4 measurement IDs (`G-...`)
     via `gtag.js`.
@@ -59,6 +61,79 @@ curl -s http://localhost/ | grep -i avif
 curl -I -H 'Accept: image/avif,image/webp,*/*' \
   'http://localhost/path/to/image.jpg.pagespeed.ic....avif'
 ```
+
+### Optional HTML Cache (Nginx)
+
+Cache completed, optimized HTML in PageSpeed's existing metadata cache to skip
+HTML parsing and filter processing on subsequent hits. This is a rewrite-output
+cache: the origin/static handler is still checked on every request for status,
+authorization, cache policy, and validators. Both caching and diagnostics are
+disabled by default.
+
+```nginx
+pagespeed HtmlCache on;               # Default: off
+pagespeed HtmlCacheTtlSec 300;         # Default: 300 seconds; maximum lifetime
+pagespeed ShowCacheTimestamp on;      # Default: off; optional diagnostics
+```
+
+Only successful GET responses with usable public cache freshness are eligible.
+The configured TTL cannot extend the origin's cache lifetime. For an explicitly
+public static blog, for example, the existing Nginx location can declare:
+
+```nginx
+location /blog/ {
+    expires 5m;
+}
+```
+
+Do not force public caching on personalized pages. Cookies, authorization,
+request cache-control directives, private/no-store/no-cache responses, and
+Set-Cookie responses bypass the HTML cache. Bodies larger than 1 MiB are not
+stored.
+
+User-Agent, Accept, client hints, and other original request headers participate
+in the cache key, keeping AVIF, WebP-only, and original-format HTML separate.
+Existing image detection and conversion behavior is preserved; no `<picture>`
+elements or wrappers are introduced.
+
+When critical-image beaconing is active, storage waits for three valid beacons.
+New successful critical-image/LCP evidence selects a fresh HTML entry. Sampled
+beacon/PerformanceObserver responses and rewrites with unfinished resource work
+are not stored, so an early rewrite or sampled beacon nonce is not frozen into
+cached HTML.
+
+With diagnostics enabled, a comment is appended as the final response content,
+after asynchronous rewriting and any closing `</html>` tag:
+
+```html
+<!-- PageSpeed Cache: HIT | Created: 2026-11-12 05:30:00 UTC | Age: 120s -->
+```
+
+Creation time is preserved across hits; status and age are generated per request,
+not stored in the cached HTML. `MISS` indicates a new cache publication attempt;
+`BYPASS` reports `Created: N/A | Age: N/A` when no entry is used or stored.
+Comments are never added to non-HTML, HEAD, or 304 responses. Normal Nginx
+compression applies to the final body and comment.
+
+For browser/CDN safety, HTML handled with either option enabled is delivered with
+`Cache-Control: private, no-store`; do not override that policy downstream. The
+internal HTML cache uses the original origin cache policy independently.
+
+After rebuilding the complete PSOL and ngx_pagespeed module with matching
+headers, check the configuration and make repeated requests with identical
+headers:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+for attempt in 1 2 3; do
+  curl -sS --compressed http://localhost/blog/ | grep -o '<!-- PageSpeed Cache:.*-->'
+  sleep 1
+done
+```
+
+Expect `MISS` followed by `HIT` once the response is eligible and beacon/resource
+learning has settled. See [HTML cache documentation](doc/html_cache.md) for
+invalidation, limitations, and integration-test commands.
 
 mod_pagespeed releases are available as [precompiled linux packages](https://modpagespeed.com/doc/download) or as [source](https://modpagespeed.com/doc/build_mod_pagespeed_from_source). (See [Release Notes](https://modpagespeed.com/doc/release_notes) for information about bugs fixed)
 
