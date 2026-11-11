@@ -85,6 +85,51 @@ TEST_F(DevicePropertiesTest, WebpUserAgentIdentificationNoAccept) {
   EXPECT_TRUE(device_properties_.SupportsWebpLosslessAlpha());
 }
 
+TEST_F(DevicePropertiesTest, AvifAcceptNegotiationAndConservativeUserAgents) {
+  RequestHeaders headers;
+  headers.Add(HttpAttributes::kAccept,
+              "text/html,image/webp;q=0.8,image/avif;q=0.9,*/*;q=0.5");
+  device_properties_.ParseRequestHeaders(headers);
+
+  device_properties_.SetUserAgent("Mozilla/5.0 Chrome/84.0.0.0 Safari/537.36");
+  EXPECT_FALSE(device_properties_.SupportsAvifRewrittenUrls());
+  EXPECT_TRUE(device_properties_.SupportsWebpRewrittenUrls());
+
+  device_properties_.SetUserAgent("Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36");
+  EXPECT_TRUE(device_properties_.SupportsAvifRewrittenUrls());
+  EXPECT_TRUE(device_properties_.SupportsWebpRewrittenUrls());
+
+  RequestHeaders no_avif_headers;
+  no_avif_headers.Add(HttpAttributes::kAccept, "image/avif;q=0,image/webp");
+  DeviceProperties no_avif(&user_agent_matcher_);
+  no_avif.ParseRequestHeaders(no_avif_headers);
+  no_avif.SetUserAgent("Mozilla/5.0 UnknownBrowser/1.0");
+  EXPECT_FALSE(no_avif.SupportsAvifRewrittenUrls());
+  EXPECT_TRUE(no_avif.SupportsWebpRewrittenUrls());
+
+  DeviceProperties explicitly_disabled(&user_agent_matcher_);
+  explicitly_disabled.ParseRequestHeaders(no_avif_headers);
+  explicitly_disabled.SetUserAgent(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36");
+  EXPECT_FALSE(explicitly_disabled.SupportsAvifRewrittenUrls());
+
+  RequestHeaders no_accept_headers;
+  DeviceProperties user_agent_only(&user_agent_matcher_);
+  user_agent_only.ParseRequestHeaders(no_accept_headers);
+  user_agent_only.SetUserAgent(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36");
+  EXPECT_TRUE(user_agent_only.SupportsAvifRewrittenUrls());
+
+  RequestHeaders invalid_quality_headers;
+  invalid_quality_headers.Add(HttpAttributes::kAccept,
+                              "image/avif;q=1.1,image/webp;q=0.8");
+  DeviceProperties invalid_quality(&user_agent_matcher_);
+  invalid_quality.ParseRequestHeaders(invalid_quality_headers);
+  invalid_quality.SetUserAgent("Mozilla/5.0 UnknownBrowser/1.0");
+  EXPECT_FALSE(invalid_quality.SupportsAvifRewrittenUrls());
+  EXPECT_TRUE(invalid_quality.SupportsWebpRewrittenUrls());
+}
+
 // See https://github.com/apache/incubator-pagespeed-mod/issues/978
 //
 // Microsoft (v-evgena@microsoft.com and tobint@microsoft.com)

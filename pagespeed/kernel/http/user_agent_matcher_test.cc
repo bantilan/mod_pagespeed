@@ -604,6 +604,99 @@ TEST_F(UserAgentMatcherTest, SupportsAvifRewrittenUrls) {
   EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(kSafari16));
 }
 
+TEST_F(UserAgentMatcherTest, AvifBrowserVersionBoundaries) {
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/84.0.0.0 Safari/537.36"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/85.0.0.0 Safari/537.36"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/84.0.0.0 Android 10 Mobile Safari/537.36"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/85.0.0.0 Android 10 Mobile Safari/537.36"));
+
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Firefox/92.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Firefox/93.0"));
+
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) Version/16.3 Safari/605.1"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) Version/16.4 Safari/605.1"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 15_8 like Mac OS X) Version/15.8 "
+      "Mobile/15E148 Safari/604.1"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) Version/16.0 "
+      "Mobile/15E148 Safari/604.1"));
+
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36 SamsungBrowser/13.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36 SamsungBrowser/14.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Opera Mini/50.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/120.0 "
+      "Safari/537.36 Edge/18.19041"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 4.4.4) Version/4.0 Safari/537.36"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Mobile; rv:3.0) Gecko/3.0 Firefox/3.0 KaiOS/3.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 QQBrowser/14.9 Chrome/120.0.0.0 Safari/537.36"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36 EdgA/120.0.0.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/121.0.0.0 Safari/537.36 EdgA/121.0.0.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 "
+      "Mobile Safari/537.36 SamsungBrowser/13.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 "
+      "Mobile Safari/537.36 SamsungBrowser/14.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36 OPR/70.0.0.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36 OPR/71.0.0.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 10) UCBrowser/15.4.0.0 Chrome/120.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 10) UCBrowser/15.5.0.0 Chrome/120.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 BaiduBrowser/13.51 Chrome/120.0.0.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 BaiduBrowser/13.52 Chrome/120.0.0.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Windows NT 10.0; Trident/7.0; rv:11.0) like Gecko"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 15_8 like Mac OS X) EdgiOS/120.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) EdgiOS/120.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Opera/9.80 (Android; Opera Mobi/12.1; U; en)"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Opera/9.80 (Android; Opera Mobi/80.0; U; en)"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Mobile; rv:3.0) Gecko/3.0 Firefox/3.0 KaiOS/2.5"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; U; Android 2.1) Version/4.0 Mobile Safari/530.17"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; U; Android 4.4.4) Version/4.0 Mobile Safari/537.36"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Mobile; rv:3.0) Gecko/3.0 Firefox/3.0 KaiOS/3.0"));
+  EXPECT_FALSE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Version/4.0 Chrome/84.0.0.0 Mobile Safari/537.36 wv"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsAvifRewrittenUrls(
+      "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Version/4.0 Chrome/85.0.0.0 Mobile Safari/537.36 wv"));
+}
+
 TEST_F(UserAgentMatcherTest, DoesntSupportAvifRewrittenUrls) {
   const char kChrome84[] =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

@@ -109,6 +109,8 @@ class UserAgentMatcher {
 
   // Returns true if the user agent is known to support AVIF decoding.
   bool SupportsAvifRewrittenUrls(const StringPiece& user_agent) const;
+  // Returns true for known unsupported and partial AVIF implementations.
+  bool IsKnownAvifUnsupported(const StringPiece& user_agent) const;
 
   // IE9 does not implement <link rel=dns-prefetch ...>. Instead it does DNS
   // preresolution when it sees <link rel=prefetch ...>. This method returns
@@ -149,7 +151,6 @@ class UserAgentMatcher {
   FastWildcardGroup legacy_webp_;
   FastWildcardGroup supports_webp_lossless_alpha_;
   FastWildcardGroup supports_webp_animated_;
-  FastWildcardGroup supports_avif_rewritten_urls_;
   FastWildcardGroup supports_dns_prefetch_;
   FastWildcardGroup mobile_user_agents_;
   FastWildcardGroup tablet_user_agents_;

@@ -221,6 +221,21 @@ void InstawebContext::Finish() {
 void InstawebContext::PopulateHeaders(request_rec* request) {
   if (!populated_headers_) {
     ApacheRequestToResponseHeaders(*request, response_headers_.get(), nullptr);
+    if (content_type_.IsHtmlLike() &&
+        rewrite_driver_->options()->Enabled(RewriteOptions::kConvertToAvif) &&
+        !response_headers_->HasValue(HttpAttributes::kVary,
+                                     HttpAttributes::kUserAgent)) {
+      // HTML can contain AVIF URLs based on browser capability even when its
+      // initial Accept header does not advertise image/avif.
+      response_headers_->Add(HttpAttributes::kVary,
+                             HttpAttributes::kUserAgent);
+    }
+    if (content_type_.IsHtmlLike() &&
+        rewrite_driver_->options()->Enabled(RewriteOptions::kConvertToAvif) &&
+        !response_headers_->HasValue(HttpAttributes::kVary,
+                                     HttpAttributes::kAccept)) {
+      response_headers_->Add(HttpAttributes::kVary, HttpAttributes::kAccept);
+    }
     populated_headers_ = true;
   }
 }

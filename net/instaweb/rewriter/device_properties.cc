@@ -19,6 +19,8 @@
 
 #include "net/instaweb/rewriter/public/device_properties.h"
 
+#include <cstdlib>
+
 #include "base/logging.h"
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/string_util.h"
@@ -30,6 +32,86 @@
 
 namespace net_instaweb {
 
+namespace {
+
+StringPiece TrimHttpWhitespace(StringPiece value) {
+  while (!value.empty() && (value[0] == ' ' || value[0] == '\t')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         (value[value.size() - 1] == ' ' || value[value.size() - 1] == '\t')) {
+    value.remove_suffix(1);
+  }
+  return value;
+}
+
+bool ParseQualityParameter(StringPiece parameter, double* quality) {
+  size_t equals = parameter.find('=');
+  if (equals == StringPiece::npos ||
+      !StringCaseEqual(TrimHttpWhitespace(parameter.substr(0, equals)), "q")) {
+    return false;
+  }
+  GoogleString quality_string =
+      TrimHttpWhitespace(parameter.substr(equals + 1)).as_string();
+  char* end = nullptr;
+  *quality = strtod(quality_string.c_str(), &end);
+  if (end == quality_string.c_str() || *end != '\0' || *quality < 0 ||
+      *quality > 1 || *quality != *quality) {
+    *quality = 0;
+  }
+  return true;
+}
+
+bool AcceptsImageFormat(const RequestHeaders& headers, StringPiece mime_type) {
+  ConstStringStarVector values;
+  headers.Lookup(HttpAttributes::kAccept, &values);
+  for (int i = 0; i < values.size(); ++i) {
+    StringPieceVector entries;
+    SplitStringPieceToVector(*values[i], ",", &entries, true);
+    for (int j = 0; j < entries.size(); ++j) {
+      StringPieceVector parts;
+      SplitStringPieceToVector(entries[j], ";", &parts, true);
+      if (parts.empty() ||
+          !StringCaseEqual(TrimHttpWhitespace(parts[0]), mime_type)) {
+        continue;
+      }
+      double quality = 1.0;
+      for (int k = 1; k < parts.size(); ++k) {
+        ParseQualityParameter(parts[k], &quality);
+      }
+      if (quality > 0) return true;
+    }
+  }
+  return false;
+}
+
+bool ExplicitlyRejectsImageFormat(const RequestHeaders& headers,
+                                  StringPiece mime_type) {
+  ConstStringStarVector values;
+  headers.Lookup(HttpAttributes::kAccept, &values);
+  for (int i = 0; i < values.size(); ++i) {
+    StringPieceVector entries;
+    SplitStringPieceToVector(*values[i], ",", &entries, true);
+    for (int j = 0; j < entries.size(); ++j) {
+      StringPieceVector parts;
+      SplitStringPieceToVector(entries[j], ";", &parts, true);
+      if (parts.empty() ||
+          !StringCaseEqual(TrimHttpWhitespace(parts[0]), mime_type)) {
+        continue;
+      }
+      for (int k = 1; k < parts.size(); ++k) {
+        double quality = 1.0;
+        if (ParseQualityParameter(parts[k], &quality) && quality == 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 DeviceProperties::DeviceProperties(UserAgentMatcher* matcher)
     : ua_matcher_(matcher),
       supports_critical_css_(kNotSet),
@@ -39,6 +121,7 @@ DeviceProperties::DeviceProperties(UserAgentMatcher* matcher)
       requests_save_data_(kNotSet),
       accepts_webp_(kNotSet),
       accepts_avif_(kNotSet),
+      avif_explicitly_rejected_(false),
       supports_webp_rewritten_urls_(kNotSet),
       supports_avif_rewritten_urls_(kNotSet),
       supports_webp_lossless_alpha_(kNotSet),
@@ -74,14 +157,14 @@ void DeviceProperties::SetUserAgent(const StringPiece& user_agent_string) {
 void DeviceProperties::ParseRequestHeaders(
     const RequestHeaders& request_headers) {
   DCHECK_EQ(kNotSet, accepts_webp_) << "Double call to ParseRequestHeaders";
-  accepts_webp_ = request_headers.HasValue(HttpAttributes::kAccept,
-                                           kContentTypeWebp.mime_type())
-                      ? kTrue
-                      : kFalse;
-  accepts_avif_ = request_headers.HasValue(HttpAttributes::kAccept,
-                                           kContentTypeAvif.mime_type())
-                      ? kTrue
-                      : kFalse;
+  accepts_webp_ = AcceptsImageFormat(request_headers,
+                                    kContentTypeWebp.mime_type())
+                      ? kTrue : kFalse;
+  accepts_avif_ = AcceptsImageFormat(request_headers,
+                                    kContentTypeAvif.mime_type())
+                      ? kTrue : kFalse;
+  avif_explicitly_rejected_ = ExplicitlyRejectsImageFormat(
+      request_headers, kContentTypeAvif.mime_type());
   accepts_gzip_ = request_headers.HasValue(HttpAttributes::kAcceptEncoding,
                                            HttpAttributes::kGzip)
                       ? kTrue
@@ -182,8 +265,10 @@ bool DeviceProperties::SupportsWebpRewrittenUrls() const {
 
 bool DeviceProperties::SupportsAvifRewrittenUrls() const {
   if (supports_avif_rewritten_urls_ == kNotSet) {
-    if ((accepts_avif_ == kTrue) ||
-        ua_matcher_->SupportsAvifRewrittenUrls(user_agent_)) {
+    if (!avif_explicitly_rejected_ &&
+        !ua_matcher_->IsKnownAvifUnsupported(user_agent_) &&
+        ((accepts_avif_ == kTrue) ||
+         ua_matcher_->SupportsAvifRewrittenUrls(user_agent_))) {
       supports_avif_rewritten_urls_ = kTrue;
     } else {
       supports_avif_rewritten_urls_ = kFalse;

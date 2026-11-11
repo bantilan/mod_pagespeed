@@ -407,6 +407,11 @@ TEST_F(ImageUrlEncoderTest, CacheKey) {
   context.set_libwebp_level(ResourceContext::LIBWEBP_LOSSY_ONLY);
   EXPECT_EQ("w.avif",
             ImageUrlEncoder::CacheKeyFromResourceContext(context));
+  context.set_supports_avif(false);
+  EXPECT_EQ("w",
+            ImageUrlEncoder::CacheKeyFromResourceContext(context));
+  context.set_libwebp_level(ResourceContext::LIBWEBP_NONE);
+  EXPECT_EQ(".", ImageUrlEncoder::CacheKeyFromResourceContext(context));
 }
 
 TEST_F(ImageUrlEncoderTest, DifferentWebpLevels) {

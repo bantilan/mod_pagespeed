@@ -19,6 +19,7 @@
 
 #include "pagespeed/kernel/http/user_agent_matcher.h"
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <utility>
@@ -190,44 +191,50 @@ const char* kWebpAnimatedBlockedlist[] = {
     "*Firefox/64.*",
 };
 
-// AVIF support by browser family (approx):
-// Chrome/Chromium 85+, Edge 85+, Opera 71+, Firefox 93+, Safari 16+.
-const char* kAvifRewrittenUrlAllowlist[] = {
-    "*Chrome/*", "*CriOS/*", "*Edg/*", "*EdgA/*", "*EdgiOS/*", "*OPR/*",
-    "*Firefox/*", "*Version/*Safari/*",
-};
+bool ContainsToken(const StringPiece& ua, const char* token) {
+  return ua.find(token) != StringPiece::npos;
+}
 
-const char* kAvifRewrittenUrlBlockedlist[] = {
-    // Chrome/CriOS below 85.
-    "*Chrome/?.*",  "*Chrome/1?.*", "*Chrome/2?.*", "*Chrome/3?.*",
-    "*Chrome/4?.*", "*Chrome/5?.*", "*Chrome/6?.*", "*Chrome/7?.*",
-    "*Chrome/80.*", "*Chrome/81.*", "*Chrome/82.*", "*Chrome/83.*",
-    "*Chrome/84.*", "*CriOS/?.*",   "*CriOS/1?.*",  "*CriOS/2?.*",
-    "*CriOS/3?.*",  "*CriOS/4?.*",  "*CriOS/5?.*",  "*CriOS/6?.*",
-    "*CriOS/7?.*",  "*CriOS/80.*",  "*CriOS/81.*",  "*CriOS/82.*",
-    "*CriOS/83.*",  "*CriOS/84.*",
-    // Edge below 85.
-    "*Edg/?.*", "*Edg/1?.*", "*Edg/2?.*", "*Edg/3?.*", "*Edg/4?.*",
-    "*Edg/5?.*", "*Edg/6?.*", "*Edg/7?.*", "*Edg/80.*", "*Edg/81.*",
-    "*Edg/82.*", "*Edg/83.*", "*Edg/84.*", "*EdgA/?.*", "*EdgA/1?.*",
-    "*EdgA/2?.*", "*EdgA/3?.*", "*EdgA/4?.*", "*EdgA/5?.*", "*EdgA/6?.*",
-    "*EdgA/7?.*", "*EdgA/80.*", "*EdgA/81.*", "*EdgA/82.*", "*EdgA/83.*",
-    "*EdgA/84.*", "*EdgiOS/?.*", "*EdgiOS/1?.*", "*EdgiOS/2?.*",
-    "*EdgiOS/3?.*", "*EdgiOS/4?.*", "*EdgiOS/5?.*", "*EdgiOS/6?.*",
-    "*EdgiOS/7?.*", "*EdgiOS/80.*", "*EdgiOS/81.*", "*EdgiOS/82.*",
-    "*EdgiOS/83.*", "*EdgiOS/84.*",
-    // Opera below 71.
-    "*OPR/?.*", "*OPR/1?.*", "*OPR/2?.*", "*OPR/3?.*", "*OPR/4?.*",
-    "*OPR/5?.*", "*OPR/6?.*", "*OPR/70.*",
-    // Firefox below 93.
-    "*Firefox/?.*", "*Firefox/1?.*", "*Firefox/2?.*", "*Firefox/3?.*",
-    "*Firefox/4?.*", "*Firefox/5?.*", "*Firefox/6?.*", "*Firefox/7?.*",
-    "*Firefox/8?.*", "*Firefox/90.*", "*Firefox/91.*", "*Firefox/92.*",
-    // Safari below 16.4.
-    "*Version/?.*Safari/*", "*Version/1?.*Safari/*",
-    "*Version/16.0*Safari/*", "*Version/16.1*Safari/*",
-    "*Version/16.2*Safari/*", "*Version/16.3*Safari/*",
-};
+bool ParseVersionAfter(const StringPiece& ua, const char* token, int* major,
+                      int* minor) {
+  StringPiece version = ua;
+  size_t pos = version.find(token);
+  if (pos == StringPiece::npos) return false;
+  version.remove_prefix(pos + strlen(token));
+  if (version.empty() || version[0] < '0' || version[0] > '9') return false;
+  *major = 0;
+  *minor = 0;
+  while (!version.empty() && version[0] >= '0' && version[0] <= '9') {
+    *major = *major * 10 + version[0] - '0';
+    version.remove_prefix(1);
+  }
+  if (!version.empty() && (version[0] == '.' || version[0] == '_')) {
+    version.remove_prefix(1);
+    while (!version.empty() && version[0] >= '0' && version[0] <= '9') {
+      *minor = *minor * 10 + version[0] - '0';
+      version.remove_prefix(1);
+    }
+  }
+  return true;
+}
+
+bool VersionAtLeast(int major, int minor, int required_major,
+                    int required_minor) {
+  return major > required_major ||
+         (major == required_major && minor >= required_minor);
+}
+
+bool IOSVersionAtLeast16(const StringPiece& ua) {
+  int major, minor;
+  return (ParseVersionAfter(ua, "iPhone OS ", &major, &minor) ||
+          ParseVersionAfter(ua, "CPU OS ", &major, &minor)) &&
+         VersionAtLeast(major, minor, 16, 0);
+}
+
+bool IsIOSUserAgent(const StringPiece& ua) {
+  return ContainsToken(ua, "iPhone") || ContainsToken(ua, "iPad") ||
+         ContainsToken(ua, "iPod") || ContainsToken(ua, "CPU OS ");
+}
 
 const char* kInsertDnsPrefetchAllowlist[] = {
     "*Chrome/*",
@@ -416,12 +423,6 @@ UserAgentMatcher::UserAgentMatcher()
   for (int i = 0, n = arraysize(kWebpAnimatedBlockedlist); i < n; ++i) {
     supports_webp_animated_.Disallow(kWebpAnimatedBlockedlist[i]);
   }
-  for (int i = 0, n = arraysize(kAvifRewrittenUrlAllowlist); i < n; ++i) {
-    supports_avif_rewritten_urls_.Allow(kAvifRewrittenUrlAllowlist[i]);
-  }
-  for (int i = 0, n = arraysize(kAvifRewrittenUrlBlockedlist); i < n; ++i) {
-    supports_avif_rewritten_urls_.Disallow(kAvifRewrittenUrlBlockedlist[i]);
-  }
   for (int i = 0, n = arraysize(kInsertDnsPrefetchAllowlist); i < n; ++i) {
     supports_dns_prefetch_.Allow(kInsertDnsPrefetchAllowlist[i]);
   }
@@ -519,7 +520,190 @@ bool UserAgentMatcher::SupportsWebpAnimated(
 
 bool UserAgentMatcher::SupportsAvifRewrittenUrls(
     const StringPiece& user_agent) const {
-  return supports_avif_rewritten_urls_.Match(user_agent, false);
+  int major, minor;
+  if (IsKnownAvifUnsupported(user_agent)) return false;
+
+  if (ContainsToken(user_agent, "Opera Mini") ||
+      ContainsToken(user_agent, "KaiOS")) {
+    return false;
+  }
+  if (ContainsToken(user_agent, "Opera Mobi") ||
+      ContainsToken(user_agent, "Opera Mobile")) {
+    return (ParseVersionAfter(user_agent, "Opera Mobile/", &major, &minor) &&
+            VersionAtLeast(major, minor, 80, 0)) ||
+           (ParseVersionAfter(user_agent, "Opera Mobi/", &major, &minor) &&
+            VersionAtLeast(major, minor, 80, 0));
+  }
+  if (ContainsToken(user_agent, "EdgiOS/") ||
+      (IsIOSUserAgent(user_agent) &&
+       (ContainsToken(user_agent, "CriOS/") ||
+        ContainsToken(user_agent, "FxiOS/")))) {
+    return IOSVersionAtLeast16(user_agent);
+  }
+  if (ContainsToken(user_agent, "SamsungBrowser/")) {
+    return ParseVersionAfter(user_agent, "SamsungBrowser/", &major, &minor) &&
+           VersionAtLeast(major, minor, 14, 0);
+  }
+  if (ContainsToken(user_agent, "UCBrowser/")) {
+    return ParseVersionAfter(user_agent, "UCBrowser/", &major, &minor) &&
+           VersionAtLeast(major, minor, 15, 5);
+  }
+  if (ContainsToken(user_agent, "BaiduBrowser/")) {
+    return ParseVersionAfter(user_agent, "BaiduBrowser/", &major, &minor) &&
+           VersionAtLeast(major, minor, 13, 52);
+  }
+  if (ContainsToken(user_agent, "Version/") &&
+      ContainsToken(user_agent, "Safari/") &&
+      !ContainsToken(user_agent, "Chrome/") &&
+      !ContainsToken(user_agent, "CriOS/") &&
+      !ContainsToken(user_agent, "Edg")) {
+    if (IsIOSUserAgent(user_agent)) return IOSVersionAtLeast16(user_agent);
+    return ParseVersionAfter(user_agent, "Version/", &major, &minor) &&
+           VersionAtLeast(major, minor, 16, 4);
+  }
+  if (ContainsToken(user_agent, "Firefox/")) {
+    return ParseVersionAfter(user_agent, "Firefox/", &major, &minor) &&
+           VersionAtLeast(major, minor, 93, 0);
+  }
+  if (ContainsToken(user_agent, "OPR/")) {
+    return ParseVersionAfter(user_agent, "OPR/", &major, &minor) &&
+           VersionAtLeast(major, minor, 71, 0);
+  }
+  if (ContainsToken(user_agent, "Edg/")) {
+    return ParseVersionAfter(user_agent, "Edg/", &major, &minor) &&
+           VersionAtLeast(major, minor, 121, 0);
+  }
+  if (ContainsToken(user_agent, "EdgA/")) {
+    return ParseVersionAfter(user_agent, "EdgA/", &major, &minor) &&
+           VersionAtLeast(major, minor, 121, 0);
+  }
+  if (ContainsToken(user_agent, "EdgiOS/")) return IOSVersionAtLeast16(user_agent);
+
+  // Chrome iOS is WebKit-based; use the iOS platform version, not its Chrome
+  // marketing version. Chromium-based Android browsers/WebView follow the
+  // engine's AVIF support threshold.
+  if (ContainsToken(user_agent, "CriOS/")) {
+    return IsIOSUserAgent(user_agent)
+               ? IOSVersionAtLeast16(user_agent)
+               : ParseVersionAfter(user_agent, "CriOS/", &major, &minor) &&
+                     VersionAtLeast(major, minor, 85, 0);
+  }
+  if (ContainsToken(user_agent, "Chrome/") ||
+      ContainsToken(user_agent, "Chromium/")) {
+    const char* token = ContainsToken(user_agent, "Chrome/") ? "Chrome/"
+                                                              : "Chromium/";
+    return ParseVersionAfter(user_agent, token, &major, &minor) &&
+           VersionAtLeast(major, minor, 85, 0);
+  }
+  return false;
+}
+
+bool UserAgentMatcher::IsKnownAvifUnsupported(
+    const StringPiece& user_agent) const {
+  int major, minor;
+  if (user_agent.empty()) return false;
+  if (IsIe(user_agent) || ContainsToken(user_agent, "Edge/") ||
+      ContainsToken(user_agent, "Opera Mini") ||
+      ContainsToken(user_agent, "KaiOS")) {
+    return true;
+  }
+  if (ContainsToken(user_agent, "AndroidBrowser/") ||
+      ContainsToken(user_agent, "Android Browser")) {
+    return true;
+  }
+  if (ContainsToken(user_agent, "Android ") &&
+      !ContainsToken(user_agent, "Chrome/") &&
+      !ContainsToken(user_agent, "Chromium/") &&
+      ParseVersionAfter(user_agent, "Android ", &major, &minor) &&
+      (major < 5 || (major == 4 && minor <= 4))) {
+    return true;
+  }
+  if (ContainsToken(user_agent, "Opera Mobi") ||
+      ContainsToken(user_agent, "Opera Mobile")) {
+    if (ParseVersionAfter(user_agent, "Opera Mobi/", &major, &minor) ||
+        ParseVersionAfter(user_agent, "Opera Mobile/", &major, &minor)) {
+      return !VersionAtLeast(major, minor, 80, 0);
+    }
+    if (!ContainsToken(user_agent, "OPR/") &&
+        ParseVersionAfter(user_agent, "Version/", &major, &minor)) {
+      return major < 13 || (major == 12 && minor <= 1);
+    }
+  }
+  if (ContainsToken(user_agent, "Opera/") &&
+      !ContainsToken(user_agent, "OPR/")) {
+    if (ParseVersionAfter(user_agent, "Version/", &major, &minor)) {
+      return major < 13 || (major == 12 && minor <= 1);
+    }
+    return true;
+  }
+  if ((ContainsToken(user_agent, "EdgiOS/") ||
+       (IsIOSUserAgent(user_agent) &&
+        (ContainsToken(user_agent, "CriOS/") ||
+         ContainsToken(user_agent, "FxiOS/")))) &&
+      !IOSVersionAtLeast16(user_agent)) {
+    return true;
+  }
+  if (ContainsToken(user_agent, "Version/") &&
+      ContainsToken(user_agent, "Safari/") && IsIOSUserAgent(user_agent)) {
+    return !IOSVersionAtLeast16(user_agent);
+  }
+  if (ContainsToken(user_agent, "Version/") &&
+      ContainsToken(user_agent, "Safari/") &&
+      !ContainsToken(user_agent, "Chrome/") &&
+      !ContainsToken(user_agent, "CriOS/") &&
+      !ContainsToken(user_agent, "Edg")) {
+    return !ParseVersionAfter(user_agent, "Version/", &major, &minor) ||
+           !VersionAtLeast(major, minor, 16, 4);
+  }
+  if (ContainsToken(user_agent, "Safari/") &&
+      !ContainsToken(user_agent, "Chrome/") &&
+      !ContainsToken(user_agent, "CriOS/") &&
+      !ContainsToken(user_agent, "Edg") &&
+      !ContainsToken(user_agent, "OPR/") &&
+      !ContainsToken(user_agent, "Version/")) {
+    return true;
+  }
+  if (ContainsToken(user_agent, "Edg/") &&
+      ParseVersionAfter(user_agent, "Edg/", &major, &minor)) {
+    return !VersionAtLeast(major, minor, 121, 0);
+  }
+  if (ContainsToken(user_agent, "EdgA/") &&
+      ParseVersionAfter(user_agent, "EdgA/", &major, &minor)) {
+    return !VersionAtLeast(major, minor, 121, 0);
+  }
+  if (ContainsToken(user_agent, "Firefox/") &&
+      ParseVersionAfter(user_agent, "Firefox/", &major, &minor)) {
+    return !VersionAtLeast(major, minor, 93, 0);
+  }
+  if (ContainsToken(user_agent, "OPR/") &&
+      ParseVersionAfter(user_agent, "OPR/", &major, &minor)) {
+    return !VersionAtLeast(major, minor, 71, 0);
+  }
+  if ((ContainsToken(user_agent, "Chrome/") ||
+       ContainsToken(user_agent, "Chromium/")) &&
+      ParseVersionAfter(user_agent,
+                        ContainsToken(user_agent, "Chrome/") ? "Chrome/"
+                                                              : "Chromium/",
+                        &major, &minor)) {
+    return !VersionAtLeast(major, minor, 85, 0);
+  }
+  if (ContainsToken(user_agent, "UCBrowser/")) {
+    return !ParseVersionAfter(user_agent, "UCBrowser/", &major, &minor) ||
+           !VersionAtLeast(major, minor, 15, 5);
+  }
+  if (ContainsToken(user_agent, "BaiduBrowser/")) {
+    return !ParseVersionAfter(user_agent, "BaiduBrowser/", &major, &minor) ||
+           !VersionAtLeast(major, minor, 13, 52);
+  }
+  if (ContainsToken(user_agent, "QQBrowser/")) {
+    return ParseVersionAfter(user_agent, "QQBrowser/", &major, &minor) &&
+           major == 14 && minor == 9;
+  }
+  if (ContainsToken(user_agent, "SamsungBrowser/")) {
+    return !ParseVersionAfter(user_agent, "SamsungBrowser/", &major, &minor) ||
+           !VersionAtLeast(major, minor, 14, 0);
+  }
+  return false;
 }
 
 UserAgentMatcher::DeviceType UserAgentMatcher::GetDeviceTypeForUAAndHeaders(
