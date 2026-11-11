@@ -36,15 +36,6 @@ namespace net_instaweb {
 
 const char Statistics::kDefaultGroup[] = "Statistics";
 
-namespace {
-// As we do fix size buckets, each bucket has the same height.
-const double kBarHeightPerBucket = 20;
-// Each bucket has different width, depends on the percentage of bucket value
-// out of total counts.
-// The width of a bucket is percentage_of_bucket_value * kBarWidthTotal.
-const double kBarWidthTotal = 400;
-}  // namespace
-
 class MessageHandler;
 
 Variable::~Variable() {
@@ -126,15 +117,12 @@ FakeTimedVariable::~FakeTimedVariable() {
 }
 
 void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
-  const char bucket_style[] = "<tr><td style=\"padding: 0 0 0 0.25em\">"
-      "[</td><td style=\"text-align:right;padding:0 0.25em 0 0\">"
-      "%s,</td><td style=\"text-align:right;padding:0 0.25em\">%s)</td>";
-  const char value_style[] = "<td style=\"text-align:right;padding:0 0.25em\">"
-                             "%.f</td>";
-  const char perc_style[] = "<td style=\"text-align:right;padding:0 0.25em\">"
-                            "%.1f%%</td>";
-  const char bar_style[] = "<td><div style=\"width: %.fpx;height:%.fpx;"
-                           "background-color:blue\"></div></td>";
+  const char row_format[] =
+      "<tr><td class=\"pagespeed-histogram-range\">%s&ndash;%s</td>"
+      "<td class=\"pagespeed-histogram-count\">%.0f</td>"
+      "<td class=\"pagespeed-histogram-share\">%.1f%%</td>"
+      "<td class=\"pagespeed-histogram-cumulative\">%.1f%%</td>"
+      "<td class=\"pagespeed-histogram-distribution\">%s</td></tr>";
   double count = CountInternal();
   double perc = 0;
   double cumulative_perc = 0;
@@ -142,15 +130,11 @@ void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
   writer->Write(
       "<div class='pagespeed-admin-table-wrap'><table class='"
       "pagespeed-admin-data-table pagespeed-histogram-buckets'>"
-      "<thead><tr><th colspan='3'>Bucket range</th><th>Count</th>"
-      "<th>Share</th><th>Cumulative</th><th>Distribution</th></tr></thead><tbody>",
+      "<thead><tr><th>Range</th><th>Samples</th><th>Share</th>"
+      "<th>Cumulative</th><th>Distribution</th></tr></thead><tbody>",
       handler);
   for (int i = 0, n = NumBuckets(); i < n; ++i) {
     double value = BucketCount(i);
-    if (value == 0) {
-      // We do not draw empty bucket.
-      continue;
-    }
     double lower_bound = BucketStart(i);
     double upper_bound = BucketLimit(i);
 
@@ -163,16 +147,15 @@ void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
       upper_bound_string = "&infin;";
     }
 
-    perc = value * 100 / count;
+    perc = count > 0 ? value * 100 / count : 0;
     cumulative_perc += perc;
-    GoogleString output = StrCat(
-        StringPrintf(bucket_style, lower_bound_string.c_str(),
-                     upper_bound_string.c_str()),
-        StringPrintf(value_style, value),
-        StringPrintf(perc_style, perc),
-        StringPrintf(perc_style, cumulative_perc),
-        StringPrintf(bar_style, (perc * kBarWidthTotal) / 100,
-                     kBarHeightPerBucket));
+    GoogleString distribution = value > 0
+        ? StringPrintf("<span class=\"pagespeed-histogram-bar\" "
+                       "style=\"width: %.1f%%\"></span>", perc)
+        : "&mdash;";
+    GoogleString output = StringPrintf(
+        row_format, lower_bound_string.c_str(), upper_bound_string.c_str(),
+        value, perc, cumulative_perc, distribution.c_str());
     writer->Write(output, handler);
   }
   // Write suffix of the table.
@@ -371,12 +354,21 @@ const char kHistogramScript[] =
     "    detail.appendChild(grid);\n"
     "    var bucketTable = detail.querySelector('.pagespeed-histogram-buckets');\n"
     "    var bucketRows = bucketTable ? bucketTable.tBodies[0].rows : [];\n"
+    "    var histogramName = summaryRow.cells[0].textContent;\n"
+    "    if (bucketTable && /latency/i.test(histogramName)) {\n"
+    "      bucketTable.tHead.rows[0].cells[0].textContent = 'Latency range';\n"
+    "      bucketTable.tHead.rows[0].cells[1].textContent = 'Requests';\n"
+    "      var unit = /_ms$/i.test(histogramName) ? ' ms' :\n"
+    "          (/_us$/i.test(histogramName) ? ' us' : '');\n"
+    "      if (unit) for (var r = 0; r < bucketRows.length; r++)\n"
+    "        bucketRows[r].cells[0].textContent += unit;\n"
+    "    }\n"
     "    var colors = ['#39765e', '#6a9c7b', '#d69a45', '#92b7a0', '#b8cbbd'];\n"
     "    var stops = []; var cursor = 0; var total = 0; var common = null;\n"
     "    for (var i = 0; i < bucketRows.length; i++) {\n"
     "      var cells = bucketRows[i].cells;\n"
-    "      var share = histogramNumber(cells[4].textContent);\n"
-    "      var count = histogramNumber(cells[3].textContent);\n"
+    "      var share = histogramNumber(cells[2].textContent);\n"
+    "      var count = histogramNumber(cells[1].textContent);\n"
     "      var range = histogramRange(bucketRows[i]);\n"
     "      if (!common || share > common.share) common = {share: share, range: range};\n"
     "      total += count;\n"

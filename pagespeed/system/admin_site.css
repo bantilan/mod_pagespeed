@@ -836,9 +836,9 @@ mod rules
 .pagespeed-histogram-select:hover { text-decoration: underline; }
 .pagespeed-histogram-selected td { background: #eef4ef; }
 .pagespeed-histogram-buckets { margin-top: 14px !important; }
-.pagespeed-histogram-buckets td:nth-child(4),
-.pagespeed-histogram-buckets td:nth-child(5),
-.pagespeed-histogram-buckets td:nth-child(6) { text-align: right; }
+.pagespeed-histogram-buckets td:nth-child(2),
+.pagespeed-histogram-buckets td:nth-child(3),
+.pagespeed-histogram-buckets td:nth-child(4) { text-align: right; }
 .pagespeed-admin-body #pagespeed-histograms > hr { display: none; }
 .pagespeed-admin-body #pagespeed-histograms > div { margin-bottom: 20px; }
 .pagespeed-admin-body #pagespeed-histograms > div:last-child { margin-bottom: 0; }
@@ -970,10 +970,14 @@ mod rules
   border-radius: 5px;
 }
 .pagespeed-histogram-bucket-panel table { min-width: 520px; }
-.pagespeed-histogram-buckets td:last-child > div {
-  max-width: 150px;
-  border-radius: 3px;
-  background: #39765e !important;
+.pagespeed-histogram-buckets .pagespeed-histogram-range { white-space: nowrap; }
+.pagespeed-histogram-buckets .pagespeed-histogram-distribution { width: 30%; }
+.pagespeed-histogram-buckets .pagespeed-histogram-bar {
+  display: block;
+  min-width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: #1d2927;
 }
 .pagespeed-histogram-side { display: grid; gap: 12px; }
 .pagespeed-histogram-share-layout {
