@@ -32,6 +32,7 @@
 namespace net_instaweb {
 
 static const int kDefaultMaxColumn = -1;
+static const size_t kOutputBufferSize = 16384;
 
 HtmlWriterFilter::HtmlWriterFilter(HtmlParse* html_parse)
     : html_parse_(html_parse),
@@ -43,18 +44,24 @@ HtmlWriterFilter::HtmlWriterFilter(HtmlParse* html_parse)
 
 HtmlWriterFilter::~HtmlWriterFilter() {}
 
+void HtmlWriterFilter::set_writer(Writer* writer) {
+  if (writer_ != writer) {
+    DrainBuffer();
+    writer_ = writer;
+  }
+}
+
 void HtmlWriterFilter::Clear() {
   lazy_close_element_ = nullptr;
   column_ = 0;
   write_errors_ = 0;
+  output_buffer_.clear();
 }
 
 void HtmlWriterFilter::TerminateLazyCloseElement() {
   if (lazy_close_element_ != nullptr) {
     lazy_close_element_ = nullptr;
-    if (!writer_->Write(">", html_parse_->message_handler())) {
-      ++write_errors_;
-    }
+    WriteBytes(">");
     ++column_;
   }
 }
@@ -70,8 +77,33 @@ void HtmlWriterFilter::EmitBytes(const StringPiece& str) {
       break;
     }
   }
-  if (!writer_->Write(str, html_parse_->message_handler())) {
-    ++write_errors_;
+  WriteBytes(str);
+}
+
+void HtmlWriterFilter::WriteBytes(const StringPiece& str) {
+  if (str.empty()) {
+    return;
+  }
+  if (str.size() >= kOutputBufferSize) {
+    DrainBuffer();
+    // Do not copy large text nodes into the staging buffer.
+    if (!writer_->Write(str, html_parse_->message_handler())) {
+      ++write_errors_;
+    }
+  } else {
+    if (output_buffer_.size() + str.size() > kOutputBufferSize) {
+      DrainBuffer();
+    }
+    output_buffer_.append(str.data(), str.size());
+  }
+}
+
+void HtmlWriterFilter::DrainBuffer() {
+  if (!output_buffer_.empty()) {
+    if (!writer_->Write(output_buffer_, html_parse_->message_handler())) {
+      ++write_errors_;
+    }
+    output_buffer_.clear();
   }
 }
 
@@ -242,9 +274,11 @@ void HtmlWriterFilter::StartDocument() { Clear(); }
 
 void HtmlWriterFilter::EndDocument() {
   EmitBytes("");  // flushes any lazily closed elements at end of the document.
+  DrainBuffer();
 }
 
 void HtmlWriterFilter::Flush() {
+  DrainBuffer();
   if (!writer_->Flush(html_parse_->message_handler())) {
     ++write_errors_;
   }

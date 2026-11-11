@@ -32,6 +32,7 @@
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/base/string_writer.h"
+#include "pagespeed/kernel/base/writer.h"
 #include "pagespeed/kernel/html/disable_test_filter.h"
 #include "pagespeed/kernel/html/empty_html_filter.h"
 #include "pagespeed/kernel/html/explicit_close_tag.h"
@@ -92,6 +93,133 @@ class HtmlParseTest : public HtmlParseTestBase {
     html_parse_.FinishParse();
   }
 };
+
+namespace {
+class BatchingTestWriter : public Writer {
+ public:
+  BatchingTestWriter() : writes(0), flushes(0), fail_writes(false) {}
+  bool Write(const StringPiece& str, MessageHandler* handler) override {
+    ++writes;
+    sizes.push_back(str.size());
+    if (fail_writes) {
+      return false;
+    }
+    output.append(str.data(), str.size());
+    return true;
+  }
+  bool Flush(MessageHandler* handler) override {
+    ++flushes;
+    return true;
+  }
+  GoogleString output;
+  std::vector<size_t> sizes;
+  int writes;
+  int flushes;
+  bool fail_writes;
+};
+}  // namespace
+
+TEST_F(HtmlParseTest, WriterBatchesSmallTokens) {
+  SetupWriter();
+  BatchingTestWriter writer;
+  html_writer_filter_->set_writer(&writer);
+  const char kInput[] = "<div class='card'><img src='x.png'/><b>Hello</b></div>";
+  html_parse_.StartParse("http://example.com/");
+  html_parse_.ParseText(kInput);
+  html_parse_.FinishParse();
+  EXPECT_EQ(kInput, writer.output);
+  EXPECT_EQ(1, writer.writes);
+}
+
+TEST_F(HtmlParseTest, WriterDrainsBeforeExplicitFlush) {
+  SetupWriter();
+  BatchingTestWriter writer;
+  html_writer_filter_->set_writer(&writer);
+  html_parse_.StartParse("http://example.com/");
+  html_parse_.ParseText("<div>first</div>");
+  html_parse_.Flush();
+  EXPECT_EQ("<div>first</div>", writer.output);
+  EXPECT_EQ(1, writer.flushes);
+  html_parse_.ParseText("<div><img src=x/>last</div>");
+  html_parse_.FinishParse();
+  EXPECT_EQ("<div>first</div><div><img src=x/>last</div>", writer.output);
+}
+
+TEST_F(HtmlParseTest, WriterBoundsSmallTokenBuffer) {
+  SetupWriter();
+  BatchingTestWriter writer;
+  html_writer_filter_->set_writer(&writer);
+  GoogleString input;
+  for (int i = 0; i < 10000; ++i) {
+    input.append("<span class='x'>text</span>");
+  }
+  html_parse_.StartParse("http://example.com/");
+  html_parse_.ParseText(input);
+  html_parse_.FinishParse();
+  EXPECT_EQ(input, writer.output);
+  ASSERT_GT(writer.writes, 1);
+  EXPECT_LT(writer.writes, 30);
+  for (size_t i = 0; i < writer.sizes.size(); ++i) {
+    EXPECT_LE(writer.sizes[i], 16384u);
+  }
+}
+
+TEST_F(HtmlParseTest, WriterPassesThroughLargeTextInOrder) {
+  SetupWriter();
+  BatchingTestWriter writer;
+  html_writer_filter_->set_writer(&writer);
+  const GoogleString input = StrCat("<div>", GoogleString(65536, 'x'), "</div>");
+  html_parse_.StartParse("http://example.com/");
+  html_parse_.ParseText(input);
+  html_parse_.FinishParse();
+  EXPECT_EQ(input, writer.output);
+  EXPECT_LT(writer.writes, 10);
+}
+
+TEST_F(HtmlParseTest, WriterBatchesCaseFoldedNames) {
+  SetupWriter();
+  BatchingTestWriter writer;
+  html_writer_filter_->set_writer(&writer);
+  html_writer_filter_->set_case_fold(true);
+  html_parse_.StartParse("http://example.com/");
+  html_parse_.ParseText("<DIV CLASS='Mixed'><IMG SRC='X.png'/></DIV>");
+  html_parse_.FinishParse();
+  EXPECT_EQ("<div class='Mixed'><img src='X.png'/></div>", writer.output);
+  EXPECT_EQ(1, writer.writes);
+}
+
+TEST_F(HtmlParseTest, WriterDrainsBeforeChangingDestination) {
+  SetupWriter();
+  BatchingTestWriter first;
+  BatchingTestWriter second;
+  html_writer_filter_->set_writer(&first);
+  HtmlElement* element = html_parse_.NewElement(NULL, HtmlName::kDiv);
+  html_writer_filter_->StartDocument();
+  html_writer_filter_->StartElement(element);
+  EXPECT_TRUE(first.output.empty());
+  html_writer_filter_->set_writer(&second);
+  EXPECT_EQ("<div>", first.output);
+  html_writer_filter_->EndElement(element);
+  html_writer_filter_->EndDocument();
+  EXPECT_EQ("</div>", second.output);
+  html_writer_filter_->set_writer(NULL);
+}
+
+TEST_F(HtmlParseTest, WriterDoesNotReplayFailedBatch) {
+  SetupWriter();
+  BatchingTestWriter writer;
+  html_writer_filter_->set_writer(&writer);
+  writer.fail_writes = true;
+  html_parse_.StartParse("http://example.com/");
+  html_parse_.ParseText("<div>discarded</div>");
+  html_parse_.Flush();
+  EXPECT_EQ(1, writer.writes);
+  EXPECT_EQ(1, writer.flushes);
+  writer.fail_writes = false;
+  html_parse_.ParseText("<span>retained</span>");
+  html_parse_.FinishParse();
+  EXPECT_EQ("<span>retained</span>", writer.output);
+}
 
 class HtmlParseTestNoBody : public HtmlParseTestBase {
   virtual bool AddBody() const { return false; }

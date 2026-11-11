@@ -38,7 +38,8 @@ class HtmlWriterFilter : public HtmlFilter {
  public:
   explicit HtmlWriterFilter(HtmlParse* html_parse);
 
-  void set_writer(Writer* writer) { writer_ = writer; }
+  // Deliver pending bytes to the old writer before changing destinations.
+  void set_writer(Writer* writer);
   ~HtmlWriterFilter() override;
 
   void StartDocument() override;
@@ -72,6 +73,8 @@ class HtmlWriterFilter : public HtmlFilter {
 
  private:
   void EmitBytes(const StringPiece& str);
+  void WriteBytes(const StringPiece& str);
+  void DrainBuffer();
 
   // Emits an HTML name, possibly case-folded depending on the
   // caller-specified option.
@@ -98,6 +101,8 @@ class HtmlWriterFilter : public HtmlFilter {
   int write_errors_;
   bool case_fold_;
   GoogleString case_fold_buffer_;
+  // Bounded batching avoids a downstream write (and often a lock) per token.
+  GoogleString output_buffer_;
 
   DISALLOW_COPY_AND_ASSIGN(HtmlWriterFilter);
 };

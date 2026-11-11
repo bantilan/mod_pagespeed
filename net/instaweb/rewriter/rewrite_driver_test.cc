@@ -1276,6 +1276,37 @@ TEST_F(RewriteDriverTest, DiagnosticsWithPercent) {
   logging::SetMinLogLevel(prev_log_level);
 }
 
+TEST_F(RewriteDriverTest, UnmappedResourceFetcherSchemes) {
+  ASSERT_TRUE(options()->domain_lawyer()->empty());
+  factory()->mock_url_async_fetcher()->set_fetcher_supports_https(false);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "http://example.com/a.css").get() != NULL);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "https://example.com/a.css").get() == NULL);
+  factory()->mock_url_async_fetcher()->set_fetcher_supports_https(true);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "https://example.com/a.css").get() != NULL);
+}
+
+TEST_F(RewriteDriverTest, MappedResourceFetcherSchemes) {
+  ASSERT_TRUE(options()->WriteableDomainLawyer()->AddOriginDomainMapping(
+      "http://origin.example.com", "https://secure.example.com", "",
+      message_handler()));
+  ASSERT_TRUE(options()->WriteableDomainLawyer()->AddOriginDomainMapping(
+      "https://origin.example.com", "http://plain.example.com", "",
+      message_handler()));
+  factory()->mock_url_async_fetcher()->set_fetcher_supports_https(false);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "https://secure.example.com/a.css").get() != NULL);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "http://plain.example.com/a.css").get() == NULL);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "http://unmapped.example.com/a.css").get() != NULL);
+  factory()->mock_url_async_fetcher()->set_fetcher_supports_https(true);
+  EXPECT_TRUE(rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+      "http://plain.example.com/a.css").get() != NULL);
+}
+
 // Tests that we reject https URLs quickly.
 TEST_F(RewriteDriverTest, RejectHttpsQuickly) {
   // Need to expressly authorize https even though we don't support it.
