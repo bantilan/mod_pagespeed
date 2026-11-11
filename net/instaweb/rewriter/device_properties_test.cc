@@ -85,6 +85,16 @@ TEST_F(DevicePropertiesTest, WebpUserAgentIdentificationNoAccept) {
   EXPECT_TRUE(device_properties_.SupportsWebpLosslessAlpha());
 }
 
+TEST_F(DevicePropertiesTest, Firefox92UsesWebpWithoutHtmlAcceptHeader) {
+  RequestHeaders headers;
+  device_properties_.ParseRequestHeaders(headers);
+  device_properties_.SetUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:92.0) "
+      "Gecko/20100101 Firefox/92.0");
+  EXPECT_FALSE(device_properties_.SupportsAvifRewrittenUrls());
+  EXPECT_TRUE(device_properties_.SupportsWebpRewrittenUrls());
+}
+
 TEST_F(DevicePropertiesTest, AvifAcceptNegotiationAndConservativeUserAgents) {
   RequestHeaders headers;
   headers.Add(HttpAttributes::kAccept,

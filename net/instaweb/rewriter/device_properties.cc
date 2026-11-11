@@ -254,7 +254,8 @@ bool DeviceProperties::SupportsWebpInPlace() const {
 // by only checking the "accept" header.
 bool DeviceProperties::SupportsWebpRewrittenUrls() const {
   if (supports_webp_rewritten_urls_ == kNotSet) {
-    if ((accepts_webp_ == kTrue) || ua_matcher_->LegacyWebp(user_agent_)) {
+    if ((accepts_webp_ == kTrue) ||
+        ua_matcher_->SupportsWebpRewrittenUrls(user_agent_)) {
       supports_webp_rewritten_urls_ = kTrue;
     } else {
       supports_webp_rewritten_urls_ = kFalse;

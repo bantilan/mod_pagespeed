@@ -508,6 +508,49 @@ bool UserAgentMatcher::LegacyWebp(const StringPiece& user_agent) const {
   return legacy_webp_.Match(user_agent, false);
 }
 
+bool UserAgentMatcher::SupportsWebpRewrittenUrls(
+    const StringPiece& user_agent) const {
+  int major, minor;
+  if (LegacyWebp(user_agent)) return true;
+  if (ContainsToken(user_agent, "Firefox/")) {
+    return ParseVersionAfter(user_agent, "Firefox/", &major, &minor) &&
+           VersionAtLeast(major, minor, 65, 0);
+  }
+  if (ContainsToken(user_agent, "Chrome/") ||
+      ContainsToken(user_agent, "Chromium/")) {
+    const char* token = ContainsToken(user_agent, "Chrome/") ? "Chrome/"
+                                                              : "Chromium/";
+    return ParseVersionAfter(user_agent, token, &major, &minor) &&
+           VersionAtLeast(major, minor, 32, 0);
+  }
+  if (ContainsToken(user_agent, "OPR/")) {
+    return ParseVersionAfter(user_agent, "OPR/", &major, &minor) &&
+           VersionAtLeast(major, minor, 19, 0);
+  }
+  if (ContainsToken(user_agent, "Version/") &&
+      ContainsToken(user_agent, "Safari/") && IsIOSUserAgent(user_agent)) {
+    return (ParseVersionAfter(user_agent, "iPhone OS ", &major, &minor) ||
+            ParseVersionAfter(user_agent, "CPU OS ", &major, &minor)) &&
+           VersionAtLeast(major, minor, 14, 0);
+  }
+  if (ContainsToken(user_agent, "Version/") &&
+      ContainsToken(user_agent, "Safari/") &&
+      !ContainsToken(user_agent, "Chrome/") &&
+      !ContainsToken(user_agent, "CriOS/") &&
+      !ContainsToken(user_agent, "Edg")) {
+    bool modern_macos = ContainsToken(user_agent, "Mac OS X 11_") ||
+                        ContainsToken(user_agent, "Mac OS X 12_") ||
+                        ContainsToken(user_agent, "Mac OS X 13_") ||
+                        ContainsToken(user_agent, "Mac OS X 14_") ||
+                        ContainsToken(user_agent, "Mac OS X 15_") ||
+                        ContainsToken(user_agent, "Mac OS X 26_");
+    return modern_macos &&
+           ParseVersionAfter(user_agent, "Version/", &major, &minor) &&
+           VersionAtLeast(major, minor, 14, 0);
+  }
+  return false;
+}
+
 bool UserAgentMatcher::SupportsWebpLosslessAlpha(
     const StringPiece& user_agent) const {
   return supports_webp_lossless_alpha_.Match(user_agent, false);

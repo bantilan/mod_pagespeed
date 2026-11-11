@@ -97,6 +97,10 @@ class UserAgentMatcher {
   // only Android 4.0+ (excluding Firefox).
   bool LegacyWebp(const StringPiece& user_agent) const;
 
+  // Returns true for browsers known to decode WebP even when the HTML
+  // request's Accept header does not advertise image/webp.
+  bool SupportsWebpRewrittenUrls(const StringPiece& user_agent) const;
+
   // Returns true if the user agent includes a string indicating WebP lossy
   // or WebP alpha support. If the browser does indeed support WebP, it also
   // needs to send out an "accept: webp" header.

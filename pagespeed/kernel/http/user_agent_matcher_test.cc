@@ -215,6 +215,18 @@ TEST_F(UserAgentMatcherTest, WebpCapableLackingAcceptHeader) {
       kOperaWithFirefoxUserAgent));
 }
 
+TEST_F(UserAgentMatcherTest, ModernFirefoxWebpWithoutAcceptHeader) {
+  EXPECT_FALSE(user_agent_matcher_->SupportsWebpRewrittenUrls(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:64.0) "
+      "Gecko/20100101 Firefox/64.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsWebpRewrittenUrls(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:65.0) "
+      "Gecko/20100101 Firefox/65.0"));
+  EXPECT_TRUE(user_agent_matcher_->SupportsWebpRewrittenUrls(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:92.0) "
+      "Gecko/20100101 Firefox/92.0"));
+}
+
 TEST_F(UserAgentMatcherTest, DoesntSupportWebp) {
   // The most interesting tests here are the recent but slightly older versions
   // of Chrome and Opera that can't display webp.
