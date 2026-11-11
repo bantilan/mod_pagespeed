@@ -118,7 +118,7 @@ FakeTimedVariable::~FakeTimedVariable() {
 
 void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
   const char row_format[] =
-      "<tr><td class=\"pagespeed-histogram-range\">%s&ndash;%s</td>"
+      "<tr class=\"%s\"><td class=\"pagespeed-histogram-range\">%s&ndash;%s</td>"
       "<td class=\"pagespeed-histogram-count\">%.0f</td>"
       "<td class=\"pagespeed-histogram-share\">%.1f%%</td>"
       "<td class=\"pagespeed-histogram-cumulative\">%.1f%%</td>"
@@ -135,6 +135,7 @@ void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
       handler);
   for (int i = 0, n = NumBuckets(); i < n; ++i) {
     double value = BucketCount(i);
+    if (value == 0) continue;
     double lower_bound = BucketStart(i);
     double upper_bound = BucketLimit(i);
 
@@ -154,7 +155,7 @@ void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
                        "style=\"width: %.1f%%\"></span>", perc)
         : "&mdash;";
     GoogleString output = StringPrintf(
-        row_format, lower_bound_string.c_str(), upper_bound_string.c_str(),
+        row_format, "", lower_bound_string.c_str(), upper_bound_string.c_str(),
         value, perc, cumulative_perc, distribution.c_str());
     writer->Write(output, handler);
   }
