@@ -183,7 +183,7 @@ pagespeed.Configuration.render_ = function(root, model) {
     heading.appendChild(title); heading.appendChild(badge);
     var list = document.createElement('ul');
     list.className = 'pagespeed-config-filter-list';
-    var visibleCount = Math.min(4, groupFilters.length);
+    var visibleCount = Math.min(5, groupFilters.length);
     for (var j = 0; j < groupFilters.length; j++) {
       var item = document.createElement('li');
       var filterName = document.createElement('span');

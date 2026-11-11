@@ -430,6 +430,7 @@ mod rules
   font-size: 10px;
   line-height: 1.4;
 }
+.pagespeed-config-filter-list li[hidden] { display: none; }
 .pagespeed-config-filter-name { min-width: 0; }
 .pagespeed-config-filter-code {
   flex: 0 0 auto;

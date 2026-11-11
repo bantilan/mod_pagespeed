@@ -128,7 +128,7 @@ FakeTimedVariable::~FakeTimedVariable() {
 void Histogram::WriteRawHistogramData(Writer* writer, MessageHandler* handler) {
   const char bucket_style[] = "<tr><td style=\"padding: 0 0 0 0.25em\">"
       "[</td><td style=\"text-align:right;padding:0 0.25em 0 0\">"
-      "%s,</td><td style=text-align:right;padding: 0 0.25em\">%s)</td>";
+      "%s,</td><td style=\"text-align:right;padding:0 0.25em\">%s)</td>";
   const char value_style[] = "<td style=\"text-align:right;padding:0 0.25em\">"
                              "%.f</td>";
   const char perc_style[] = "<td style=\"text-align:right;padding:0 0.25em\">"
