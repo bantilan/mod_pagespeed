@@ -165,8 +165,11 @@ the live buffer with retained archive records in their existing views, with UTC
 date filtering and older-record pagination. JavaScript/CSS show existing
 diagnostics only, not complete per-resource rewrite histories. Archive health
 and gaps are shown at `/pagespeed_admin/history`; the dashboard keeps its
-performance overview and links to that page. StatisticsLogger, Console and
-Graphs are unchanged.
+performance overview, merges retained image records into its recent-image
+section, and links to that page. Dashboard aggregate counters still reflect
+the running statistics instance and reset according to its statistics
+configuration; they are not reconstructed from diagnostic history.
+StatisticsLogger, Console and Graphs are otherwise unchanged.
 
 Periodic snapshots can miss overwritten records or an unsaved restart tail;
 these gaps are reported rather than hidden. There is some background CPU,

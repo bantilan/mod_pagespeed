@@ -117,7 +117,8 @@ class AdminSite {
   // Displays a summary of PageSpeed runtime and optimization savings.
   void DashboardHandler(AdminSource source, AsyncFetch* fetch,
                         Statistics* stats,
-                        const SystemRewriteOptions* archive_options = nullptr);
+                        const SystemRewriteOptions* archive_options = nullptr,
+                        const GoogleString* recent_images = nullptr);
 
   // Displays configuration and health for the shared history archive.
   void HistoryArchiveHandler(AdminSource source, AsyncFetch* fetch,

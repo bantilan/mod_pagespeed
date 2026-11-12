@@ -215,11 +215,37 @@ void HistoryArchive::Run() {
   int fd = -1;
   auto delay = std::chrono::seconds(interval_ > 0 ? interval_ : 300);
   auto due = std::chrono::steady_clock::now() + delay;
-  Health initial_health;
-  buffer_->GetHistoryHealth(&initial_health);
-  initial_health.next_snapshot_ms = timer_->NowMs() +
-      static_cast<int64>(interval_) * 1000;
-  buffer_->SetHistoryHealth(initial_health);
+  // Restore persisted health before serving admin status requests. The shared
+  // health block is recreated on an NGINX restart, while the checkpoint is not.
+  if (Prepare()) {
+    fd = open((path_ + "/.writer.lock").c_str(), O_CREAT | O_RDWR |
+              O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+      Fail(errno);
+    } else if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+      close(fd);
+      fd = -1;
+    } else {
+      GoogleString checkpoint_data;
+      State checkpoint;
+      bool have_checkpoint = Read(path_ + "/checkpoint", &checkpoint_data,
+                                  4096) &&
+          checkpoint.Parse(checkpoint_data, false);
+      State restored;
+      if (Load(&restored)) {
+        bool repair_checkpoint = restored.sequence > 0 &&
+            (!have_checkpoint || restored.sequence > checkpoint.sequence);
+        if (!repair_checkpoint || Save(restored)) {
+          health_ = restored.health;
+          int64 bytes = 0;
+          if (Prune(0, &bytes)) health_.disk_bytes = bytes;
+          health_.next_snapshot_ms = timer_->NowMs() +
+              static_cast<int64>(interval_) * 1000;
+          buffer_->SetHistoryHealth(health_);
+        }
+      }
+    }
+  }
   for (;;) {
     std::function<void()> job;
     bool stopping;

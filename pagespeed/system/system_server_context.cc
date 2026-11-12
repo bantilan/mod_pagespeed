@@ -408,9 +408,11 @@ void SystemServerContext::AdminPage(bool is_global,
                                     const RewriteOptions* options,
                                     AsyncFetch* fetch) {
   StringPiece leaf = stripped_gurl.LeafSansQuery();
+  bool dashboard_view = leaf == "dashboard" || leaf.empty();
   bool history_view = leaf == "message_history" || leaf == "images" ||
       leaf == "html_cache" || leaf == "javascript" || leaf == "css";
-  if (global_system_rewrite_options()->history_archive() && history_view) {
+  bool archive_view = history_view || dashboard_view;
+  if (global_system_rewrite_options()->history_archive() && archive_view) {
     HistoryArchive* archive = dynamic_cast<SystemRewriteDriverFactory*>(factory())->history_archive();
     std::shared_ptr<RewriteOptions> copied_options(options->Clone());
     std::shared_ptr<QueryParams> copied_query(new QueryParams);

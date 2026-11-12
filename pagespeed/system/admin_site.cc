@@ -641,7 +641,8 @@ void AdminSite::StatisticsHandler(const RewriteOptions& options,
 
 void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
                                  Statistics* stats,
-                                 const SystemRewriteOptions* archive_options) {
+                                 const SystemRewriteOptions* archive_options,
+                                 const GoogleString* recent_images) {
   AdminHtml admin_html("dashboard", "", source, timer_, fetch,
                        message_handler_);
 
@@ -673,8 +674,8 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "<div class='pagespeed-dashboard-heading'>"
       "<div><p class='pagespeed-dashboard-eyebrow'>LIVE OVERVIEW</p>"
       "<h1>Performance dashboard</h1>"
-      "<p class='pagespeed-dashboard-description'>Optimization activity "
-      "and cumulative savings from this PageSpeed instance.</p></div>"
+      "<p class='pagespeed-dashboard-description'>Live optimization counters "
+      "and recent image history for this PageSpeed instance.</p></div>"
       "<div class='pagespeed-dashboard-controls'>"
       "<span class='pagespeed-dashboard-live'><i></i> INSTANCE ACTIVE</span>"
       "<a class='pagespeed-history-compact-link' href='history'>Archive status</a>"
@@ -790,14 +791,20 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
   fetch->Write(
       "</div></section></div><section class='pagespeed-dashboard-panel "
       "pagespeed-dashboard-recent'><div class='pagespeed-dashboard-panel-"
-      "heading'><div><h2>Recent image optimization</h2><p>Latest image assets "
-      "rewritten by PageSpeed</p></div><a href='images'>Browse image history "
-      "&rarr;</a></div>",
+      "heading'><div><h2>Recent image optimization</h2><p>",
       message_handler_);
+  fetch->Write(recent_images != nullptr ?
+      "Latest image records from live memory and retained archive, when available." :
+      "Latest image assets rewritten by PageSpeed.", message_handler_);
+  fetch->Write("</p></div><a href='images'>Browse image history &rarr;</a></div>",
+               message_handler_);
   std::vector<ImageRewriteRow> recent_rows;
-  ReadRecentImageRewrites(message_handler_, 4, &recent_rows);
+  ReadRecentImageRewrites(message_handler_, 4, &recent_rows, recent_images);
   if (recent_rows.empty()) {
     fetch->Write(
+        recent_images != nullptr ?
+        "<div class='pagespeed-dashboard-recent-empty'>No image rewrite "
+        "records were found in the current buffer or retained archive.</div>" :
         "<div class='pagespeed-dashboard-recent-empty'>Successful image "
         "rewrites will appear here while their entries remain in the bounded "
         "message buffer.</div>",
@@ -1694,9 +1701,11 @@ void AdminSite::AdminPage(
     StringPiece leaf = stripped_gurl.LeafSansQuery();
     GoogleString history_log, history_controls;
     bool combined_history = false;
-    StringPiece kind = leaf == "message_history" ? "messages" : leaf;
+    bool dashboard_view = leaf == "dashboard" || leaf.empty();
+    StringPiece kind = dashboard_view ? "images" :
+        (leaf == "message_history" ? "messages" : leaf);
     if (kind == "messages" || kind == "images" || kind == "html_cache" ||
-        kind == "javascript" || kind == "css") {
+        kind == "javascript" || kind == "css" || dashboard_view) {
       history_controls = HistoryControls(*global_system_rewrite_options,
           query_params, kind, message_handler_, &history_log, &combined_history);
       if (global_system_rewrite_options->history_archive())
@@ -1705,7 +1714,8 @@ void AdminSite::AdminPage(
     }
     const GoogleString* stored = combined_history ? &history_log : nullptr;
     if ((leaf == "dashboard") || leaf.empty()) {
-      DashboardHandler(kPageSpeedAdmin, fetch, stats, global_system_rewrite_options);
+      DashboardHandler(kPageSpeedAdmin, fetch, stats, global_system_rewrite_options,
+                       stored);
     } else if (leaf == "history") {
       HistoryArchiveHandler(kPageSpeedAdmin, fetch, *global_system_rewrite_options);
     } else if (leaf == "images") {
