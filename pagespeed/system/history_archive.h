@@ -45,6 +45,7 @@ class HistoryArchive {
   bool SnapshotLocked();
   bool Fail(int error);
   bool Load(State* state);
+  bool RestoreHealth();
   bool Save(const State& state);
   bool Prune(int64 reserve, int64* bytes);
   SharedCircularBuffer* buffer_;

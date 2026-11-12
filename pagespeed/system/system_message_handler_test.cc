@@ -112,6 +112,7 @@ TEST_F(SystemMessageHandlerTest, AddsFileLineInfoWrapLongLines) {
 #include <dirent.h>
 #include <fcntl.h>
 #include <fstream>
+#include <future>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -251,6 +252,61 @@ TEST_F(HistoryArchiveTest, RestartRecoveryAndIncompleteCheckpointWrite) {
   EXPECT_EQ(1, Health().restart_gaps);
   EXPECT_EQ(2, Health().records);
 }
+TEST_F(HistoryArchiveTest, EmptyRestartReadsAllViewsBeforeAnotherSnapshot) {
+  Write("archived restart message");
+  Write("PS_IMAGE_DETAIL\t100\t200\t100\timage/webp\thttp://a/x\thttp://a/y");
+  Write("PS_HTML_DETAIL\t100\t200\t20\tdesktop\tAVIF capable\tvariant\turl");
+  Write("Script http://a/a.js didn't shrink.");
+  Write("CSS parsing error in http://a/a.css");
+  ASSERT_TRUE(archive_->SnapshotOnce());
+  const auto saved = Health();
+  const GoogleString original = Page().log;
+  GoogleString checkpoint;
+  { std::ifstream file(path_ + "/history/checkpoint"); std::getline(file, checkpoint); }
+  archive_.reset();
+  for (const char* mode : {"valid", "missing", "corrupt", "stale"}) {
+    SCOPED_TRACE(mode);
+    if (GoogleString(mode) == "missing") {
+      ASSERT_EQ(0, unlink((path_ + "/history/checkpoint").c_str()));
+    } else {
+      std::ofstream file(path_ + "/history/checkpoint");
+      if (GoogleString(mode) == "corrupt") file << "incomplete checkpoint\n";
+      else if (GoogleString(mode) == "stale")
+        file << "PSH1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+      else file << checkpoint << '\n';
+    }
+    SharedCircularBuffer restarted(&shm_, 4096, "history-test", mode, true);
+    ASSERT_TRUE(restarted.InitSegment(true, &handler_));
+    SharedCircularBuffer::HistorySnapshot empty;
+    ASSERT_TRUE(restarted.SnapshotHistory(&empty, &handler_));
+    EXPECT_TRUE(empty.data.empty());
+    std::promise<void> ready;
+    auto initialized = ready.get_future();
+    HistoryArchive recovered(&restarted, &timer_, path_, 300, 7, 1);
+    recovered.Start();
+    ASSERT_TRUE(recovered.Schedule([&] { ready.set_value(); }));
+    ASSERT_EQ(std::future_status::ready,
+              initialized.wait_for(std::chrono::seconds(5)));
+    recovered.Stop();
+    SharedCircularBuffer::HistoryHealth restored;
+    ASSERT_TRUE(restarted.GetHistoryHealth(&restored));
+    EXPECT_TRUE(restored.initialized);
+    EXPECT_EQ(saved.records, restored.records);
+    EXPECT_EQ(5, restored.retained_records);
+    EXPECT_EQ(saved.last_success_ms, restored.last_success_ms);
+    EXPECT_GT(restored.disk_bytes, 0);
+    EXPECT_EQ(0, restored.error);
+    const char* kinds[] = {"messages", "images", "html_cache", "javascript", "css"};
+    for (const char* kind : kinds) {
+      auto page = HistoryArchive::Browse(path_, kind, 0, 253402300800000LL, "", &empty);
+      EXPECT_TRUE(page.error.empty()) << page.error;
+      EXPECT_EQ(GoogleString(kind) == "messages" ? 5 : 1, Count(page.log, "[Info]"));
+    }
+    EXPECT_EQ(original, Page().log);
+    EXPECT_TRUE(restarted.ToString(&handler_).empty());
+    restarted.GlobalCleanup(&handler_);
+  }
+}
 TEST_F(HistoryArchiveTest, DiskAndPermissionFailuresDoNotAdvanceCursor) {
   for (int error : {ENOSPC, EACCES}) {
     Write(StrCat("failure-", IntegerToString(error)));
@@ -299,6 +355,7 @@ TEST_F(HistoryArchiveTest, RetentionAndCombinedSizeLimit) {
   }
   EXPECT_LE(Health().disk_bytes, 1024 * 1024);
   EXPECT_EQ(380, Health().records);
+  EXPECT_LT(Health().retained_records, Health().records);
   DIR* dir = opendir((path_ + "/history").c_str());
   ASSERT_NE(nullptr, dir);
   while (dirent* e = readdir(dir)) {
@@ -309,6 +366,7 @@ TEST_F(HistoryArchiveTest, RetentionAndCombinedSizeLimit) {
   closedir(dir);
   ASSERT_TRUE(archive_->SnapshotOnce());
   EXPECT_EQ("\n", Page().log);
+  EXPECT_EQ(0, Health().retained_records);
   EXPECT_GT(Health().last_success_ms, 0);
 }
 TEST_F(HistoryArchiveTest, AttachedWorkersShareSequenceWithoutChangingText) {

@@ -21,6 +21,11 @@
 
 #include "pagespeed/system/admin_site.h"
 
+#include <cstdlib>
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "net/instaweb/http/public/async_fetch.h"
 #include "net/instaweb/rewriter/public/custom_rewrite_test_base.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
@@ -39,6 +44,8 @@
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/thread_system.h"
+#include "pagespeed/kernel/http/google_url.h"
+#include "pagespeed/kernel/http/query_params.h"
 #include "pagespeed/kernel/util/platform.h"
 
 namespace net_instaweb {
@@ -117,6 +124,41 @@ TEST_F(AdminSiteTest, StructuredMessagesInHistoryPage) {
                           "class='pagespeed-message-entry' data-severity='warning'"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("Test for Errors"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("Test for Warnings"));
+}
+
+TEST_F(AdminSiteTest, ArchiveReadDoesNotRequireLiveSnapshot) {
+  char directory[] = "/tmp/pagespeed-admin-restart-XXXXXX";
+  ASSERT_NE(nullptr, mkdtemp(directory));
+  GoogleString path(directory);
+  EXPECT_EQ(0, mkdir((path + "/history").c_str(), 0700));
+  const GoogleString payload =
+      "I[Mon, 05 Apr 2010 18:51:26 GMT] [Info] [987] "
+      "Script https://archive.example/no-live.js didn't shrink.\n";
+  const GoogleString header = StrCat("PSH1 1 123456789 0 ",
+      Integer64ToString(payload.size()),
+      " 1270493486000 0 0 1 0 0 1270493486000 1 0 0 1 0\n");
+  { std::ofstream file(path + "/history/checkpoint"); file << header; }
+  { std::ofstream file(path + "/history/segment-00000000000000000001.psh");
+    file << header << payload; }
+  SystemRewriteOptions archive_options(thread_system_.get());
+  archive_options.set_file_cache_path(path);
+  GoogleString error;
+  EXPECT_EQ(RewriteOptions::kOptionOk, archive_options.ParseAndSetOptionFromName1(
+      "HistoryArchive", "on", &error, message_handler()));
+  EXPECT_EQ(nullptr, message_handler()->history_buffer());
+  QueryParams query;
+  GoogleString body;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &body);
+  admin_site_->AdminPage(true,
+      GoogleUrl("http://localhost/pagespeed_admin/javascript"), query,
+      rewrite_driver()->options(), nullptr, &fetch, nullptr, nullptr, nullptr,
+      nullptr, nullptr, server_context_.get(), factory()->statistics(),
+      factory()->statistics(), &archive_options);
+  EXPECT_THAT(body, ::testing::HasSubstr("https://archive.example/no-live.js"));
+  unlink((path + "/history/checkpoint").c_str());
+  unlink((path + "/history/segment-00000000000000000001.psh").c_str());
+  rmdir((path + "/history").c_str());
+  rmdir(path.c_str());
 }
 
 TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {

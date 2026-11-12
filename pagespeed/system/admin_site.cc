@@ -130,22 +130,26 @@ GoogleString HistoryControls(const SystemRewriteOptions& options,
   bool have_snapshot = buffer != nullptr &&
       buffer->SnapshotHistory(&live, &null_handler);
   HistoryArchive::Page page;
-  if (have_snapshot) {
-    page = HistoryArchive::Browse(options.file_cache_path(), kind,
-        begin, end, cursor, &live);
-    if (error.empty() && !page.error.empty()) error = page.error;
-    *log = page.log;
-    if (cursor.empty()) {
-      size_t newline = live.data.find('\n');
+  page = HistoryArchive::Browse(options.file_cache_path(), kind,
+      begin, end, cursor, have_snapshot ? &live : nullptr);
+  if (error.empty() && !page.error.empty()) error = page.error;
+  *log = page.log.empty() ? "\n" : page.log;
+  if (cursor.empty() && have_snapshot) {
+    size_t newline = live.data.find('\n');
+    if (newline != GoogleString::npos)
+      *log += HistoryArchive::FilterLog(
+          StringPiece(live.data).substr(newline + 1), begin, end);
+  }
+  *combined = true;
+  if (cursor.empty() && !have_snapshot) {
+    GoogleString memory;
+    StringWriter writer(&memory);
+    if (handler->Dump(&writer)) {
+      size_t newline = memory.find('\n');
       if (newline != GoogleString::npos)
         *log += HistoryArchive::FilterLog(
-            StringPiece(live.data).substr(newline + 1), begin, end);
+            StringPiece(memory).substr(newline + 1), begin, end);
     }
-    *combined = true;
-  } else {
-    error = "Archive source unavailable; showing current memory history only.";
-    StringWriter writer(log);
-    *combined = handler->Dump(&writer);
   }
   GoogleString controls =
       "<section class='pagespeed-history-controls'><form method='get'>"
@@ -201,6 +205,7 @@ void WriteHistoryHealth(MessageHandler* handler, AsyncFetch* fetch,
       "</p><p>Next scheduled snapshot: ", next,
       "</p><p>Archive disk usage at last successful snapshot: ", Integer64ToString(health.disk_bytes),
       " bytes. Archived records (cumulative): ", Integer64ToString(health.records),
+      ". Currently retained records: ", Integer64ToString(health.retained_records),
       ". Detected missing bytes: ", Integer64ToString(health.lost_bytes),
       ". Uncertain restart/reset gaps: ", Integer64ToString(health.restart_gaps),
       ". Archive failures: ", Integer64ToString(health.failures), ".</p>");

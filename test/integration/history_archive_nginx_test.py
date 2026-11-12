@@ -6,6 +6,7 @@ import concurrent.futures
 import importlib.util
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -42,7 +43,7 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
         status, headers, body = self.fetch('/pagespeed_admin/html_cache?history=1')
         self.assertEqual(200, status)
         self.assertIn(b'archived-page-check=1', body)
-        self.assertIn(b'Archived records only', body)
+        self.assertIn(b'One chronological history', body)
         self.assertIn('no-store', headers.get('Cache-Control', ''))
         for view in ['message_history', 'images', 'html_cache', 'javascript', 'css']:
             status, _, page = self.fetch('/pagespeed_admin/' + view + '?history=1')
@@ -55,9 +56,110 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
         invalid = self.fetch('/pagespeed_admin/html_cache?history=1&from=not-a-date')[2]
         self.assertIn(b'Invalid UTC date', invalid)
         dashboard = self.fetch('/pagespeed_admin/dashboard')[2]
-        self.assertIn(b'Historical archive', dashboard)
-        self.assertIn(b'Detected missing bytes', dashboard)
-        self.assertNotIn(b'No successful snapshot yet', dashboard)
+        self.assertIn(b'Archive status', dashboard)
+        health = self.fetch('/pagespeed_admin/history')[2]
+        self.assertIn(b'Detected missing bytes', health)
+        self.assertNotIn(b'No successful snapshot yet', health)
+
+    def test_restart_reads_all_views_before_new_traffic_or_snapshot(self):
+        cls = type(self)
+        config_path = self.root / 'nginx.conf'
+        config = config_path.read_text()
+        history = self.root / 'cache/history'
+
+        def start():
+            cls.process = subprocess.Popen(
+                [base.OPTIONS.nginx, '-p', str(cls.root) + '/', '-c',
+                 str(config_path), '-e', str(cls.root / 'logs/error.log')],
+                stdout=cls.log, stderr=cls.log)
+            for _ in range(100):
+                if cls.process.poll() is not None:
+                    self.fail((self.root / 'logs/error.log').read_text())
+                try:
+                    with socket.create_connection(('127.0.0.1', cls.port), timeout=1):
+                        return
+                except OSError:
+                    time.sleep(.05)
+            self.fail('Isolated Nginx did not restart')
+
+        cls.stop()
+        try:
+            config_path.write_text(config.replace('HistoryArchiveInterval 1;',
+                                                  'HistoryArchiveInterval 300;'))
+            history.mkdir(exist_ok=True)
+            for p in history.iterdir():
+                p.unlink()
+            prefix = 'I[Mon, 05 Apr 2010 18:51:26 GMT] [Info] [987] '
+            encoded = base64.urlsafe_b64encode(b'http://archive.example/restart.html').decode().rstrip('=')
+            records = [
+                'retained restart diagnostic',
+                'PS_IMAGE_DETAIL\t1000\t200\t100\timage/webp\thttp://archive.example/restart.jpg\thttp://archive.example/restart.webp',
+                'PS_HTML_DETAIL\t1000\t5000\t100\tdesktop\tWebP capable\toptimized-html-v1:restart\t' + encoded,
+                "Script http://archive.example/restart.js didn't shrink.",
+                'CSS parsing error in http://archive.example/restart.css',
+            ]
+
+            def header(sequence, begin, end, count):
+                return ('PSH1 %d 123456789 %d %d 1270493486000 12 2 %d 3 '
+                        '1270493486000 1270493486000 %d 20 10 5 3\n' %
+                        (sequence, begin, end, count, count)).encode()
+
+            offset = 20000
+            for sequence, chunk, count in [(41, records[:3], 98), (42, records[3:], 100)]:
+                payload = ''.join(prefix + line + '\n' for line in chunk).encode()
+                (history / ('segment-%020d.psh' % sequence)).write_bytes(
+                    header(sequence, offset, offset + len(payload), count) + payload)
+                offset += len(payload)
+            checkpoint = header(42, offset, offset, 100)
+            previous = {p.name: p.read_bytes() for p in history.glob('segment-*.psh')}
+            expected = {
+                'message_history': b'retained restart diagnostic',
+                'images': b'http://archive.example/restart.jpg',
+                'html_cache': b'http://archive.example/restart.html',
+                'javascript': b'http://archive.example/restart.js',
+                'css': b'http://archive.example/restart.css',
+            }
+            for mode in ['valid', 'missing', 'corrupt', 'stale']:
+                with self.subTest(checkpoint=mode):
+                    if mode == 'missing':
+                        (history / 'checkpoint').unlink()
+                    elif mode == 'corrupt':
+                        (history / 'checkpoint').write_bytes(b'incomplete checkpoint\n')
+                    elif mode == 'stale':
+                        (history / 'checkpoint').write_bytes(header(0, 0, 0, 0))
+                    else:
+                        (history / 'checkpoint').write_bytes(checkpoint)
+                    start()
+                    began = time.monotonic()
+                    for view, marker in expected.items():
+                        # Repeated connections also cover passive workers during startup.
+                        for _ in range(4):
+                            status, headers, page = self.fetch('/pagespeed_admin/' + view)
+                            self.assertEqual(200, status)
+                            self.assertIn(marker, page)
+                            self.assertIn('no-store', headers.get('Cache-Control', ''))
+                    health = self.fetch('/pagespeed_admin/history')[2]
+                    self.assertIn(b'Archived records (cumulative): 100', health)
+                    self.assertIn(b'Currently retained records: 5', health)
+                    self.assertNotIn(b'No successful snapshot yet', health)
+                    usage = re.search(rb'Archive disk usage at last successful snapshot: (\d+) bytes', health)
+                    self.assertIsNotNone(usage)
+                    allocated = history.stat().st_blocks * 512
+                    allocated += sum(p.stat().st_blocks * 512 for p in history.iterdir())
+                    self.assertEqual(allocated, int(usage[1]))
+                    self.assertIn(b'http://archive.example/restart.jpg',
+                                  self.fetch('/pagespeed_admin/dashboard')[2])
+                    self.assertLess(time.monotonic() - began, 30)
+                    self.assertEqual(previous, {p.name: p.read_bytes()
+                                               for p in history.glob('segment-*.psh')})
+                    self.assertEqual(42, int((history / 'checkpoint').read_bytes().split()[1]))
+                    if mode == 'valid':
+                        self.assertEqual(checkpoint, (history / 'checkpoint').read_bytes())
+                    cls.stop()
+        finally:
+            cls.stop()
+            config_path.write_text(config)
+            start()
 
     def test_concurrent_archive_browsing_does_not_block_normal_responses(self):
         self.fetch('/?concurrent-archive-reader=1')

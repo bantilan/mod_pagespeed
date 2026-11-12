@@ -409,7 +409,7 @@ void SystemServerContext::AdminPage(bool is_global,
                                     AsyncFetch* fetch) {
   StringPiece leaf = stripped_gurl.LeafSansQuery();
   bool dashboard_view = leaf == "dashboard" || leaf.empty();
-  bool history_view = leaf == "message_history" || leaf == "images" ||
+  bool history_view = leaf == "history" || leaf == "message_history" || leaf == "images" ||
       leaf == "html_cache" || leaf == "javascript" || leaf == "css";
   bool archive_view = history_view || dashboard_view;
   if (global_system_rewrite_options()->history_archive() && archive_view) {

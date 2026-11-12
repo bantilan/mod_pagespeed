@@ -110,6 +110,18 @@ memory and successful checkpoints preserve cumulative counts/gaps. An error
 may itself be impossible to persist on a full disk. The scheduler retries later;
 records overwritten before recovery remain unrecoverable and are reported.
 Corrupt committed metadata stops archival rather than guessing a cursor.
+Missing, stale or damaged checkpoints are recovered from existing committed
+segment headers during worker startup, before queued history reads run. The
+elected writer repairs the checkpoint and restores health, disk usage and
+retained record counts; passive workers wait for that startup recovery.
+Recovery does not capture the live buffer or wait for the next snapshot.
+The five-minute snapshot and retention schedule remains unchanged.
+
+Retained counts use segment cumulative counters at each consecutive sequence
+run's endpoints and a streamed line count of its first segment. This preserves
+the existing file format and bounds memory use without parsing all archived
+messages or adding directory scans to admin requests. Counts are refreshed by
+the background snapshot and retention work.
 Directory enumeration is bounded to 65,536 archive segments; exceeding this
 limit reports an error instead of allocating unlimited memory. Use a suitable
 interval/retention/storage budget, not this as a general-purpose logging system.
@@ -131,6 +143,9 @@ live buffer entries remain visible if the archive checkpoint is missing or
 unavailable. Existing view filters operate on the combined records; date range
 and cursor controls page into older archived records without a source-mode
 switch. JavaScript and CSS include only existing diagnostic messages.
+Archive reads also work with an empty or unavailable live-buffer snapshot.
+Only overlapping records from the same generation and byte positions are
+deduplicated; earlier Nginx generations remain visible.
 
 JavaScript and CSS pages display **existing diagnostic messages only**. Their
 classification recognizes known message wording/source filenames; Message
@@ -150,8 +165,9 @@ the unfiltered archive but not in date-filtered results.
 `/pagespeed_admin/history` reports archive status, interval, retention, storage
 limit, last successful and next scheduled snapshot, allocated disk usage at the
 last successful accounting, cumulative archived record and per-view match
-counts, missing source bytes, uncertain generation gaps and archive failures.
-Counts are cumulative, not an inventory of retained records. Per-view matches
+counts, the separate currently retained record count, missing source bytes,
+uncertain generation gaps and archive failures. Per-view match counts are
+cumulative, not an inventory of retained records. Per-view matches
 are classifications of a single stored record; their sum can exceed the number
 of archived records. The main dashboard retains the performance overview and a
 compact link to archive health.
@@ -171,6 +187,13 @@ Run isolated two-worker Nginx integration tests:
 python3 test/integration/history_archive_nginx_test.py \
   --nginx /path/to/compatible/nginx --module /path/to/ngx_pagespeed.so -v
 ```
+
+The restart regression uses a 300-second interval and checks all five history
+views and archive health immediately after master restarts. It covers valid,
+missing, stale and damaged checkpoints, checks exact retained counts and disk
+allocation, and asserts that no new archive segment was produced. The C++
+regressions also cover an empty new shared-memory generation and an admin
+message handler that cannot provide a live snapshot.
 
 Measure throughput, p95/p99, Nginx CPU, sampled RSS and physical disk I/O:
 

@@ -50,8 +50,10 @@ class SharedCircularBuffer : public Writer {
   struct HistoryHealth {
     int64 last_success_ms = 0, next_snapshot_ms = 0;
     int64 records = 0, disk_bytes = 0;
+    int64 retained_records = 0;
     int64 lost_bytes = 0, restart_gaps = 0, failures = 0;
     int error = 0;
+    bool initialized = false;
     int64 categories[5] = {};
   };
   // Construct with shared memory, data buffer capacity, filename_prefix and

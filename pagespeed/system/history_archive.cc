@@ -127,6 +127,14 @@ bool Atomic(const GoogleString& dir, const GoogleString& name,
 GoogleString Name(int64 sequence) {
   return StringPrintf("segment-%020lld.psh", static_cast<long long>(sequence));
 }
+int64 ControlBytes(const GoogleString& path) {
+  int64 bytes = 0;
+  for (const char* name : {"", "/checkpoint", "/.writer.lock"}) {
+    struct stat st;
+    if (lstat((path + name).c_str(), &st) == 0) bytes += st.st_blocks * 512;
+  }
+  return bytes;
+}
 int64 MessageTime(StringPiece line, int64 fallback) {
   size_t end = line.find("]");
   int64 result;
@@ -150,7 +158,7 @@ struct HistoryArchive::State {
     s << '\n';
     return s.str();
   }
-  bool Parse(StringPiece data, bool segment) {
+  bool Parse(StringPiece data, bool segment, int64 file_size = -1) {
     size_t newline = data.find('\n');
     if (newline == StringPiece::npos || newline > 1024) return false;
     std::istringstream s(data.substr(0, newline).as_string());
@@ -167,9 +175,84 @@ struct HistoryArchive::State {
       return false;
     for (int i = 0; i < 5; ++i)
       if (!(s >> health.categories[i]) || health.categories[i] < 0) return false;
-    if (segment && (end - begin != data.size() - newline - 1 ||
-        data.empty() || data[data.size() - 1] != '\n')) return false;
+    const int64 total = file_size >= 0 ? file_size : data.size();
+    if (segment && (end - begin != total - newline - 1 ||
+        (file_size < 0 && (data.empty() || data[data.size() - 1] != '\n'))))
+      return false;
     health.last_success_ms = time;
+    return true;
+  }
+
+  static bool ReadMetadata(const GoogleString& path, State* state) {
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return false;
+    ScopedClose cleanup{&fd};
+    struct stat st;
+    if (fstat(fd, &st) != 0) return false;
+    if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        st.st_size > kMaxSnapshot + 4096) { errno = EINVAL; return false; }
+    char header[1025], tail;
+    ssize_t n;
+    do { n = pread(fd, header, sizeof(header), 0); } while (n < 0 && errno == EINTR);
+    if (n < 0) return false;
+    ssize_t last;
+    do { last = pread(fd, &tail, 1, st.st_size - 1); }
+    while (last < 0 && errno == EINTR);
+    if (last < 0) return false;
+    if (last != 1 || tail != '\n' ||
+        !state->Parse(StringPiece(header, n), true, st.st_size)) {
+      errno = EINVAL;
+      return false;
+    }
+    return true;
+  }
+
+  // A retained consecutive run needs only its endpoint headers and the first
+  // segment's line count. Cumulative counters supply all intervening counts.
+  static bool CountRetained(const GoogleString& path,
+                            const std::vector<File>& files, int64* records) {
+    *records = 0;
+    for (size_t first = 0; first < files.size();) {
+      size_t last = first;
+      int64 sequence;
+      if (!StringToInt64(StringPiece(files[first].name).substr(8, 20), &sequence))
+        return false;
+      while (last + 1 < files.size() && sequence < 9223372036854775807LL &&
+             files[last + 1].name == Name(sequence + 1)) { ++last; ++sequence; }
+      State start, finish;
+      if (!ReadMetadata(path + "/" + files[first].name, &start)) return false;
+      finish = start;
+      if (first != last && !ReadMetadata(path + "/" + files[last].name, &finish))
+        return false;
+      if (Name(start.sequence) != files[first].name ||
+          Name(finish.sequence) != files[last].name) { errno = EINVAL; return false; }
+      int fd = open((path + "/" + files[first].name).c_str(),
+                    O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+      if (fd < 0) return false;
+      ScopedClose cleanup{&fd};
+      char block[8192];
+      bool header = true;
+      int64 lines = 0, bytes = 0;
+      for (;;) {
+        ssize_t n = read(fd, block, sizeof(block));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) return false;
+        if (!n) break;
+        bytes += n;
+        if (bytes > kMaxSnapshot + 4096) { errno = EINVAL; return false; }
+        for (ssize_t i = 0; i < n; ++i) {
+          if (block[i] == '\n') { if (header) header = false; else ++lines; }
+        }
+      }
+      if (lines > start.health.records ||
+          finish.health.records < start.health.records ||
+          *records > 9223372036854775807LL - finish.health.records) {
+        errno = EINVAL;
+        return false;
+      }
+      *records += finish.health.records - start.health.records + lines;
+      first = last + 1;
+    }
     return true;
   }
 };
@@ -197,6 +280,7 @@ void HistoryArchive::Stop() {
   if (thread_.joinable()) thread_.join();
 }
 bool HistoryArchive::Fail(int error) {
+  health_.initialized = true;
   health_.error = error ? error : EIO;
   ++health_.failures;
   buffer_->SetHistoryHealth(health_);
@@ -217,33 +301,39 @@ void HistoryArchive::Run() {
   auto due = std::chrono::steady_clock::now() + delay;
   // Restore persisted health before serving admin status requests. The shared
   // health block is recreated on an NGINX restart, while the checkpoint is not.
-  if (Prepare()) {
-    fd = open((path_ + "/.writer.lock").c_str(), O_CREAT | O_RDWR |
-              O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (fd < 0) {
-      Fail(errno);
-    } else if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-      close(fd);
-      fd = -1;
-    } else {
-      GoogleString checkpoint_data;
-      State checkpoint;
-      bool have_checkpoint = Read(path_ + "/checkpoint", &checkpoint_data,
-                                  4096) &&
-          checkpoint.Parse(checkpoint_data, false);
-      State restored;
-      if (Load(&restored)) {
-        bool repair_checkpoint = restored.sequence > 0 &&
-            (!have_checkpoint || restored.sequence > checkpoint.sequence);
-        if (!repair_checkpoint || Save(restored)) {
-          health_ = restored.health;
-          int64 bytes = 0;
-          if (Prune(0, &bytes)) health_.disk_bytes = bytes;
-          health_.next_snapshot_ms = timer_->NowMs() +
-              static_cast<int64>(interval_) * 1000;
-          buffer_->SetHistoryHealth(health_);
-        }
+  try {
+    if (Prepare()) {
+      fd = open((path_ + "/.writer.lock").c_str(), O_CREAT | O_RDWR |
+                O_CLOEXEC | O_NOFOLLOW, 0600);
+      if (fd < 0) {
+        Fail(errno);
+      } else if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        fd = -1;
+      } else {
+        RestoreHealth();
       }
+    }
+  } catch (...) { Fail(ENOMEM); }
+  if (fd < 0) {
+    // Every worker shares this health block. Readers queued in passive workers
+    // must wait for the elected worker's checkpoint repair as well.
+    for (;;) {
+      Health health;
+      if (!buffer_->GetHistoryHealth(&health) || health.initialized) break;
+      int candidate = open((path_ + "/.writer.lock").c_str(),
+                           O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+      if (candidate >= 0) {
+        if (flock(candidate, LOCK_EX | LOCK_NB) == 0) {
+          fd = candidate;
+          try { RestoreHealth(); } catch (...) { Fail(ENOMEM); }
+          break;
+        }
+        close(candidate);
+      }
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (wake_.wait_for(lock, std::chrono::milliseconds(10),
+                         [this] { return stopped_; })) break;
     }
   }
   for (;;) {
@@ -299,23 +389,44 @@ bool HistoryArchive::SnapshotOnce() {
 }
 bool HistoryArchive::Load(State* state) {
   GoogleString data;
-  if (Read(path_ + "/checkpoint", &data, 4096)) {
-    if (!state->Parse(data, false)) return Fail(EINVAL);
-  } else if (errno != ENOENT) return Fail(errno);
+  bool checkpoint_present = Read(path_ + "/checkpoint", &data, 4096);
+  int checkpoint_error = checkpoint_present ? 0 : errno;
+  if (!checkpoint_present && checkpoint_error != ENOENT && checkpoint_error != EINVAL)
+    return Fail(checkpoint_error);
+  bool valid_checkpoint = checkpoint_present && state->Parse(data, false);
+  if (!valid_checkpoint) *state = State();
   std::vector<File> files;
   if (!Files(path_, &files)) return Fail(errno);
-  // Recover a committed segment whose checkpoint rename was interrupted.
   if (!files.empty()) {
-    int64 last_sequence;
-    if (!StringToInt64(StringPiece(files.back().name).substr(8, 20),
-                       &last_sequence)) return Fail(EINVAL);
-    if (last_sequence <= state->sequence) return true;
     State last;
-    if (!Read(path_ + "/" + files.back().name, &data, kMaxSnapshot + 4096) ||
-        !last.Parse(data, true) || Name(last.sequence) != files.back().name)
-      return Fail(EINVAL);
-    if (last.sequence > state->sequence) *state = last;
+    if (!State::ReadMetadata(path_ + "/" + files.back().name, &last) ||
+        Name(last.sequence) != files.back().name) return Fail(EINVAL);
+    if (!valid_checkpoint || last.sequence > state->sequence) *state = last;
+  } else if ((checkpoint_present || checkpoint_error != ENOENT) && !valid_checkpoint) {
+    return Fail(EINVAL);
   }
+  if (!State::CountRetained(path_, files, &state->health.retained_records))
+    return Fail(errno);
+  state->health.disk_bytes = 0;
+  for (const File& file : files) state->health.disk_bytes += file.allocated;
+  state->health.disk_bytes += ControlBytes(path_);
+  return true;
+}
+bool HistoryArchive::RestoreHealth() {
+  GoogleString data;
+  State checkpoint, restored;
+  bool valid = Read(path_ + "/checkpoint", &data, 4096) &&
+      checkpoint.Parse(data, false);
+  if (!Load(&restored)) return false;
+  health_ = restored.health;
+  const int64 previous_control_bytes = ControlBytes(path_);
+  if (restored.sequence > 0 &&
+      (!valid || restored.sequence > checkpoint.sequence) && !Save(restored))
+    return false;
+  health_.disk_bytes += ControlBytes(path_) - previous_control_bytes;
+  health_.initialized = true;
+  health_.next_snapshot_ms = timer_->NowMs() + static_cast<int64>(interval_) * 1000;
+  buffer_->SetHistoryHealth(health_);
   return true;
 }
 bool HistoryArchive::Save(const State& state) {
@@ -341,13 +452,20 @@ bool HistoryArchive::Prune(int64 reserve, int64* bytes) {
   if (reserve > limit) return Fail(EFBIG);
   const int64 cutoff = timer_->NowMs() / 1000 -
       static_cast<int64>(retention_days_) * 86400;
+  bool removed = false;
+  std::vector<File> retained;
   for (const File& f : files) {
     if (f.time < cutoff || *bytes + reserve > limit) {
       if (unlink((path_ + "/" + f.name).c_str()) != 0 && errno != ENOENT)
         return Fail(errno);
       *bytes -= f.allocated;
+      removed = true;
+    } else {
+      retained.push_back(f);
     }
   }
+  if (removed && !State::CountRetained(path_, retained, &health_.retained_records))
+    return Fail(errno);
   if (*bytes + reserve > limit) return Fail(EFBIG);
   return true;
 }
@@ -359,6 +477,7 @@ bool HistoryArchive::SnapshotLocked() {
   const int64 failures = health_.failures;
   const int64 next_snapshot_ms = health_.next_snapshot_ms;
   health_ = state.health;
+  health_.initialized = true;
   health_.next_snapshot_ms = next_snapshot_ms;
   health_.failures = std::max(failures, state.health.failures);
   SharedCircularBuffer::HistorySnapshot snapshot;
@@ -419,11 +538,14 @@ bool HistoryArchive::SnapshotLocked() {
       buffer_->SetHistoryHealth(health_);
       return false;
     }
+    const int64 retained_after_prune = health_.retained_records;
     if (!Persist(Name(state.sequence), data)) {
       int error = errno;
       health_ = committed;
+      health_.retained_records = retained_after_prune;
       return Fail(error);
     }
+    health_.retained_records += health_.records - committed.records;
     // Persist a recoverable cursor before any subsequent retention pass.
     if (!Save(state)) return false;
     position = newline + 1;
