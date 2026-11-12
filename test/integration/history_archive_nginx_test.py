@@ -94,7 +94,9 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
                 'image_rewrites: 37\nimage_rewrite_total_bytes_saved: 1048576\n'
                 'javascript_blocks_minified: 9\njavascript_total_bytes_saved: 1048576\n'
                 'css_filter_blocks_rewritten: 4\ncss_filter_total_bytes_saved: 1048576\n'
-                'html_cache_hits: 25\nhtml_cache_bytes_served: 1048576\n')
+                'html_cache_hits: 25\nhtml_cache_misses: 7\n'
+                'html_cache_bypasses: 11\nhtml_cache_inserts: 13\n'
+                'html_cache_bytes_served: 1048576\n')
             history.mkdir(exist_ok=True)
             for p in history.iterdir():
                 p.unlink()
@@ -163,6 +165,20 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
                     self.assertIn(b">50</div>", dashboard)
                     self.assertIn(b">37</div>", dashboard)
                     self.assertIn(b">25</div>", dashboard)
+                    html_page = self.fetch('/pagespeed_admin/html_cache')[2]
+                    def summary(page):
+                        match = re.search(rb'HTML CACHE HITS.*?compression savings\.</p>',
+                                          page, re.S)
+                        self.assertIsNotNone(match)
+                        return match[0]
+                    saved_summary = summary(dashboard)
+                    for value in [25, 7, 11, 13]:
+                        self.assertIn(('>%d</div>' % value).encode(), saved_summary)
+                    self.assertIn(b'HTML served from cache: 1.0 MB', saved_summary)
+                    self.assertEqual(saved_summary, summary(html_page))
+                    # Repeated reads must not add already-recovered counters again.
+                    self.assertEqual(saved_summary, summary(
+                        self.fetch('/pagespeed_admin/html_cache')[2]))
                     self.assertLess(time.monotonic() - began, 30)
                     self.assertEqual(previous, {p.name: p.read_bytes()
                                                for p in history.glob('segment-*.psh')})

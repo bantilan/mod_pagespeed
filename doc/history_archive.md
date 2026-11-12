@@ -169,6 +169,11 @@ New statistics samples include a pre-fork server-lifetime identifier. Samples
 from the current lifetime are excluded from recovery to prevent double counting.
 Old-format logs remain readable; decreases identify observable counter resets.
 
+The HTML Cache page uses the same recovered counters and scope as the dashboard
+for hits, misses, bypasses, publications, hit rate and bytes served. Publication
+history rows alone cannot reconstruct those counters, so missing samples are
+not inferred from row counts.
+
 These are **sampled totals, not a complete lifetime ledger**. Unsampled work,
 trimmed statistics logs and unobservable resets in legacy logs cannot be
 reconstructed. HTML cache counters are included in future statistics samples;

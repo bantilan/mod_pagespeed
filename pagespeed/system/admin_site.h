@@ -131,7 +131,8 @@ class AdminSite {
   // Recent HTML cache publications; not a live backend inventory.
   void HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
                         Statistics* stats, const RewriteOptions& options,
-                        const GoogleString* stored = nullptr, StringPiece controls = "");
+                        const GoogleString* stored = nullptr, StringPiece controls = "",
+                        const SystemRewriteOptions* archive_options = nullptr);
 
   // Responds to 'fetch' with data used on statistics page and graphs page
   // in JSON format.

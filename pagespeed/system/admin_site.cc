@@ -303,6 +303,16 @@ int64 DashboardCounter(Statistics* stats, const char* name,
   return live + (found == previous.end() ? 0 : found->second);
 }
 
+std::map<GoogleString, int64> PreviousDashboardCounters(
+    Statistics* stats, const SystemRewriteOptions* options) {
+  std::map<GoogleString, int64> previous;
+  if (options != nullptr && options->history_archive() &&
+      stats->console_logger() != nullptr) {
+    stats->console_logger()->PreviousDashboardCounters(&previous);
+  }
+  return previous;
+}
+
 struct HtmlCacheRow {
   int64 created_ms, expires_ms, bytes;
   GoogleString device, formats, variant, url;
@@ -658,11 +668,7 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
   AdminHtml admin_html("dashboard", "", source, timer_, fetch,
                        message_handler_);
 
-  std::map<GoogleString, int64> previous;
-  if (archive_options != nullptr && archive_options->history_archive() &&
-      stats->console_logger() != nullptr) {
-    stats->console_logger()->PreviousDashboardCounters(&previous);
-  }
+  const auto previous = PreviousDashboardCounters(stats, archive_options);
 
   int64 javascript_saved =
       DashboardCounter(stats, "javascript_total_bytes_saved", previous);
@@ -891,7 +897,8 @@ void AdminSite::HistoryArchiveHandler(AdminSource source, AsyncFetch* fetch,
 void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
                                  Statistics* stats,
                                  const RewriteOptions& options,
-                                 const GoogleString* stored, StringPiece controls) {
+                                 const GoogleString* stored, StringPiece controls,
+                                 const SystemRewriteOptions* archive_options) {
   fetch->response_headers()->SetDateAndCaching(
       timer_->NowMs(), 0, ", private, no-store");
   AdminHtml admin_html("html_cache", "", source, timer_, fetch,
@@ -907,7 +914,8 @@ void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
       "<p class='pagespeed-dashboard-description'>Recent completed HTML "
       "rewrites, isolated by request headers and browser capabilities.</p>"
       "</div>", message_handler_);
-  WriteHtmlCacheSummary(stats, fetch, message_handler_);
+  const auto previous = PreviousDashboardCounters(stats, archive_options);
+  WriteHtmlCacheSummary(stats, fetch, message_handler_, previous);
   fetch->Write(StrCat(
       "<section class='pagespeed-dashboard-panel'><div "
       "class='pagespeed-dashboard-panel-heading'><div>"
@@ -1732,21 +1740,22 @@ void AdminSite::AdminPage(
                                                      ", private, no-store");
     }
     const GoogleString* stored = combined_history ? &history_log : nullptr;
+    // Both summaries must use the same logger and matching live counters.
+    Statistics* history_stats = stats;
+    if ((dashboard_view || leaf == "html_cache") &&
+        global_system_rewrite_options->history_archive() &&
+        stats->console_logger() == nullptr && statistics->console_logger() != nullptr)
+      history_stats = statistics;
     if ((leaf == "dashboard") || leaf.empty()) {
-      // Use the matching local logger/counters if global logging was not
-      // enabled (e.g. StatisticsLogging configured inside a server block).
-      Statistics* dashboard_stats = stats;
-      if (global_system_rewrite_options->history_archive() &&
-          stats->console_logger() == nullptr && statistics->console_logger() != nullptr)
-        dashboard_stats = statistics;
-      DashboardHandler(kPageSpeedAdmin, fetch, dashboard_stats, global_system_rewrite_options,
+      DashboardHandler(kPageSpeedAdmin, fetch, history_stats, global_system_rewrite_options,
                        stored);
     } else if (leaf == "history") {
       HistoryArchiveHandler(kPageSpeedAdmin, fetch, *global_system_rewrite_options);
     } else if (leaf == "images") {
       ImagesHandler(kPageSpeedAdmin, fetch, stored, history_controls);
     } else if (leaf == "html_cache") {
-      HtmlCacheHandler(kPageSpeedAdmin, fetch, stats, *options, stored, history_controls);
+      HtmlCacheHandler(kPageSpeedAdmin, fetch, history_stats, *options, stored,
+                       history_controls, global_system_rewrite_options);
     } else if (leaf == "statistics") {
       StatisticsHandler(*options, kPageSpeedAdmin, fetch, stats);
     } else if (leaf == "stats_json") {
