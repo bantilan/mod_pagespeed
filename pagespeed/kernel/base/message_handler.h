@@ -27,6 +27,7 @@
 #include "pagespeed/kernel/base/string_util.h"
 
 namespace net_instaweb {
+class SharedCircularBuffer;
 
 class Writer;
 
@@ -97,6 +98,7 @@ class MessageHandler {
   // The default implementation returns false, but derived classes may
   // add a circular buffer to implement this, e.g. SharedCircularBuffer.
   virtual bool Dump(Writer* writer);
+  virtual SharedCircularBuffer* history_buffer() { return nullptr; }
 
   // Parse the dumped log into messages.
   virtual void ParseMessageDumpIntoMessages(StringPiece message_dump,

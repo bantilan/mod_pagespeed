@@ -256,6 +256,8 @@ bool FileCache::Clean(int64 target_size_bytes, int64 target_inode_count) {
   }
   // Get the contents of the cache
   FileSystem::DirInfo dir_info;
+  dir_info.excluded_subtree = StrCat(path_,
+      StringPiece(path_).ends_with("/") ? "" : "/", "history");
   file_system_->GetDirInfoWithProgress(path_, &dir_info, notifier,
                                        message_handler_);
 

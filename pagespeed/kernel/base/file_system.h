@@ -141,6 +141,8 @@ class FileSystem {
   };
 
   struct DirInfo {
+    // Optional subtree owned by another persistence system, not this cache.
+    GoogleString excluded_subtree;
     DirInfo() : size_bytes(0), inode_count(0) {}
 
     std::vector<FileInfo> files;

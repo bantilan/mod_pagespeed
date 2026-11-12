@@ -48,6 +48,10 @@ const char SystemRewriteOptions::kPopularityContestMaxQueueSize[] =
     "ExperimentalPopularityContestMaxQueueSize";
 const char SystemRewriteOptions::kStaticAssetCDN[] = "StaticAssetCDN";
 const char SystemRewriteOptions::kRedisServer[] = "RedisServer";
+const char SystemRewriteOptions::kHistoryArchive[] = "HistoryArchive";
+const char SystemRewriteOptions::kHistoryArchiveInterval[] = "HistoryArchiveInterval";
+const char SystemRewriteOptions::kHistoryArchiveRetentionDays[] = "HistoryArchiveRetentionDays";
+const char SystemRewriteOptions::kHistoryArchiveMaxSizeMb[] = "HistoryArchiveMaxSizeMb";
 const char SystemRewriteOptions::kRedisReconnectionDelayMs[] =
     "RedisReconnectionDelayMs";
 const char SystemRewriteOptions::kRedisTimeoutUs[] = "RedisTimeoutUs";
@@ -88,6 +92,15 @@ SystemRewriteOptions::SystemRewriteOptions(const StringPiece& description,
 SystemRewriteOptions::~SystemRewriteOptions() {}
 
 void SystemRewriteOptions::AddProperties() {
+  AddSystemProperty(false, &SystemRewriteOptions::history_archive_, "harc",
+                    kHistoryArchive, kProcessScopeStrict,
+                    "Archive the shared message history asynchronously", true);
+  AddSystemProperty(300, &SystemRewriteOptions::history_archive_interval_, "hari",
+                    kHistoryArchiveInterval, kProcessScopeStrict, "Snapshot interval in seconds", true);
+  AddSystemProperty(7, &SystemRewriteOptions::history_archive_retention_days_, "hard",
+                    kHistoryArchiveRetentionDays, kProcessScopeStrict, "Archive retention in days", true);
+  AddSystemProperty(100, &SystemRewriteOptions::history_archive_max_size_mb_, "harm",
+                    kHistoryArchiveMaxSizeMb, kProcessScopeStrict, "Combined archive size limit in MiB", true);
   AddSystemProperty("", &SystemRewriteOptions::fetcher_proxy_, "afp",
                     RewriteOptions::kFetcherProxy, "Set the fetch proxy",
                     false);

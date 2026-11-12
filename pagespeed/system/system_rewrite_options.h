@@ -53,6 +53,14 @@ class SystemRewriteOptions : public RewriteOptions {
   static const char kRedisTimeoutUs[];
   static const char kRedisDatabaseIndex[];
   static const char kRedisTTLSec[];
+  static const char kHistoryArchive[];
+  static const char kHistoryArchiveInterval[];
+  static const char kHistoryArchiveRetentionDays[];
+  static const char kHistoryArchiveMaxSizeMb[];
+  bool history_archive() const { return history_archive_.value(); }
+  int history_archive_interval() const { return history_archive_interval_.value(); }
+  int history_archive_retention_days() const { return history_archive_retention_days_.value(); }
+  int history_archive_max_size_mb() const { return history_archive_max_size_mb_.value(); }
 
   static constexpr int kMemcachedDefaultPort = 11211;
   static constexpr int kRedisDefaultPort = 6379;
@@ -424,6 +432,10 @@ class SystemRewriteOptions : public RewriteOptions {
   Option<GoogleString> fetcher_proxy_;
   Option<GoogleString> file_cache_path_;
   Option<GoogleString> log_dir_;
+  Option<bool> history_archive_;
+  Option<int> history_archive_interval_;
+  Option<int> history_archive_retention_days_;
+  Option<int> history_archive_max_size_mb_;
 
   ExternalServersOption<ExternalClusterSpec, kMemcachedDefaultPort>
       memcached_servers_;

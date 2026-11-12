@@ -1755,6 +1755,7 @@
         '<(DEPTH)/pagespeed/system/system_cache_path.cc',
         '<(DEPTH)/pagespeed/system/system_caches.cc',
         '<(DEPTH)/pagespeed/system/system_message_handler.cc',
+        '<(DEPTH)/pagespeed/system/history_archive.cc',
         '<(DEPTH)/pagespeed/system/system_request_context.cc',
         '<(DEPTH)/pagespeed/system/system_rewrite_driver_factory.cc',
         '<(DEPTH)/pagespeed/system/system_rewrite_options.cc',

@@ -80,6 +80,8 @@ http {
 }
 ''' % (str(Path(OPTIONS.module).resolve()), cls.root, cls.root, cls.root,
        cls.root, cls.port, cls.root)
+        config = config.replace('  pagespeed FileCachePath',
+            getattr(OPTIONS, 'extra_config', '') + '\n  pagespeed FileCachePath', 1)
         (cls.root / 'nginx.conf').write_text(config)
         cls.log = (cls.root / 'logs/startup.log').open('w')
         cls.addClassCleanup(cls.log.close)

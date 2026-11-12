@@ -304,4 +304,20 @@ TEST_F(SystemRewriteOptionsTest, RedisTimeout) {
                 &SystemRewriteOptions::redis_timeout_us);
 }
 
+TEST_F(SystemRewriteOptionsTest, HistoryArchiveDefaultsAndParsing) {
+  EXPECT_FALSE(options_.history_archive());
+  EXPECT_EQ(300, options_.history_archive_interval());
+  EXPECT_EQ(7, options_.history_archive_retention_days());
+  EXPECT_EQ(100, options_.history_archive_max_size_mb());
+  GoogleString msg;
+  EXPECT_EQ(RewriteOptions::kOptionOk, options_.ParseAndSetOptionFromName1(
+      "HistoryArchive", "on", &msg, &handler_));
+  EXPECT_TRUE(options_.history_archive());
+  EXPECT_EQ(RewriteOptions::kOptionOk, options_.ParseAndSetOptionFromName1(
+      "HistoryArchiveInterval", "60", &msg, &handler_));
+  EXPECT_EQ(60, options_.history_archive_interval());
+  EXPECT_EQ(RewriteOptions::kOptionValueInvalid, options_.ParseAndSetOptionFromName1(
+      "HistoryArchiveMaxSizeMb", "invalid", &msg, &handler_));
+}
+
 }  // namespace net_instaweb

@@ -244,6 +244,13 @@ void FileSystem::GetDirInfoWithProgress(const StringPiece& path,
     for (it = dir_contents.begin(); it != dir_contents.end(); ++it) {
       notifier->Notify();
       GoogleString file_name = *it;
+      StringPiece candidate(file_name);
+      if (candidate.ends_with("/")) candidate.remove_suffix(1);
+      if (!dirinfo->excluded_subtree.empty() &&
+          candidate == dirinfo->excluded_subtree) {
+        --dirinfo->inode_count;
+        continue;
+      }
       // Add size for both files and directories
       int64 file_size;
       Size(file_name, &file_size, handler);

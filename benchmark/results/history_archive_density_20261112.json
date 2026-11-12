@@ -1,0 +1,91 @@
+{
+  "options": {
+    "nginx": "/home/gamingph/Projects/NginxPagespeed/test15/nginx-build/nginx-1.31.8/debian/build-nginx/objs/nginx",
+    "module": "/tmp/pagespeed-history-output/nginx-build/objs/ngx_pagespeed.so",
+    "duration": 10.0,
+    "warmup": 2,
+    "interval": 1,
+    "seed_segments": 2016,
+    "clients": 8,
+    "repeats": 1,
+    "output": "/tmp/pagespeed-history-benchmark-density.json"
+  },
+  "medians": {
+    "disabled": {
+      "requests_per_second": 3785.444479122146,
+      "p95_ms": 4.275526000128593,
+      "p99_ms": 6.200025999987702,
+      "server_cpu_percent": 233.65953745829367,
+      "server_peak_rss_bytes": 89497600,
+      "disk_read_bytes": 0,
+      "disk_write_bytes": 0,
+      "archive_bytes": 0,
+      "archive_allocated_bytes": 0,
+      "archived_records": 0,
+      "overwritten_source_bytes": 0
+    },
+    "enabled": {
+      "requests_per_second": 3982.8064970050527,
+      "p95_ms": 4.1563780000615225,
+      "p99_ms": 5.919550000271556,
+      "server_cpu_percent": 236.45882679595704,
+      "server_peak_rss_bytes": 91443200,
+      "disk_read_bytes": 0,
+      "disk_write_bytes": 995328,
+      "archive_bytes": 1057730,
+      "archive_allocated_bytes": 9371648,
+      "archived_records": 6410,
+      "overwritten_source_bytes": 20033459
+    }
+  },
+  "runs": [
+    {
+      "enabled": false,
+      "requests": 37861,
+      "errors": 0,
+      "elapsed_seconds": 10.001731687999836,
+      "requests_per_second": 3785.444479122146,
+      "p95_ms": 4.275526000128593,
+      "p99_ms": 6.200025999987702,
+      "server_cpu_seconds": 23.370000000000005,
+      "server_cpu_percent": 233.65953745829367,
+      "server_peak_rss_bytes": 89497600,
+      "disk_read_bytes": 0,
+      "disk_write_bytes": 0,
+      "archive_bytes": 0,
+      "archive_allocated_bytes": 0,
+      "archived_records": 0,
+      "overwritten_source_bytes": 0,
+      "repeat": 0
+    },
+    {
+      "enabled": true,
+      "requests": 39835,
+      "errors": 0,
+      "elapsed_seconds": 10.001741241999753,
+      "requests_per_second": 3982.8064970050527,
+      "p95_ms": 4.1563780000615225,
+      "p99_ms": 5.919550000271556,
+      "server_cpu_seconds": 23.65,
+      "server_cpu_percent": 236.45882679595704,
+      "server_peak_rss_bytes": 91443200,
+      "disk_read_bytes": 0,
+      "disk_write_bytes": 995328,
+      "archive_bytes": 1057730,
+      "archive_allocated_bytes": 9371648,
+      "archived_records": 6410,
+      "overwritten_source_bytes": 20033459,
+      "repeat": 0
+    }
+  ],
+  "caveats": [
+    "Loopback synthetic HTML workload, not a production traffic trace.",
+    "RSS is summed across master/workers and double-counts shared pages.",
+    "CPU and physical disk I/O are sampled from Linux /proc for Nginx, not the load generator.",
+    "Snapshots have background overhead; short-run differences include benchmark noise.",
+    "1-second stress cadence is not the default 300-second cadence.",
+    "Warm cached synthetic HTML isolates archive overhead; it does not benchmark image conversions.",
+    "The 100KB live buffer can wrap under load; overwritten bytes are reported, not recovered.",
+    "Optional seeded empty segments stress directory enumeration, not a real historical dataset."
+  ]
+}

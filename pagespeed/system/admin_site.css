@@ -1092,6 +1092,34 @@ mod rules
   gap: 16px;
   min-width: 0;
 }
+.pagespeed-history-controls {
+  margin-bottom: 16px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+}
+.pagespeed-history-controls form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 12px 0;
+}
+.pagespeed-history-controls label { display: grid; gap: 6px; }
+.pagespeed-history-controls input, .pagespeed-history-controls button {
+  font: inherit;
+  padding: 8px;
+  border: 1px solid #dfe7e1;
+  border-radius: 5px;
+  color: #1d2927;
+  background: #fff;
+}
+.pagespeed-history-controls p, .pagespeed-history-status p {
+  color: #718077;
+  margin-bottom: 10px;
+}
+.pagespeed-history-status { padding: 16px; }
 .pagespeed-html-cache-page > .pagespeed-dashboard-footnote { margin: 0; }
 .pagespeed-html-cache-page .pagespeed-dashboard-panel >
 .pagespeed-dashboard-footnote { margin: 16px 20px; }

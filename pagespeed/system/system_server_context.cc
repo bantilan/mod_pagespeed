@@ -23,6 +23,7 @@
 
 #include "base/logging.h"
 #include "net/instaweb/http/public/url_async_fetcher.h"
+#include "net/instaweb/http/public/async_fetch.h"
 #include "net/instaweb/http/public/url_async_fetcher_stats.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_driver_factory.h"
@@ -38,6 +39,9 @@
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/http/google_url.h"
+#include "pagespeed/kernel/http/query_params.h"
+#include "pagespeed/kernel/http/response_headers.h"
+#include "pagespeed/system/history_archive.h"
 #include "pagespeed/kernel/sharedmem/shared_mem_statistics.h"
 #include "pagespeed/system/add_headers_fetcher.h"
 #include "pagespeed/system/loopback_route_fetcher.h"
@@ -52,6 +56,17 @@ namespace net_instaweb {
 class PurgeSet;
 
 namespace {
+
+class HistoryPageFetch : public SharedAsyncFetch {
+ public:
+  explicit HistoryPageFetch(AsyncFetch* fetch) : SharedAsyncFetch(fetch) {}
+  bool done = false;
+ protected:
+  void HandleDone(bool success) override {
+    done = true;
+    SharedAsyncFetch::HandleDone(success);
+  }
+};
 
 const char kHtmlRewriteTimeUsHistogram[] = "Html Time us Histogram";
 const char kLocalFetcherStatsPrefix[] = "http";
@@ -392,6 +407,38 @@ void SystemServerContext::AdminPage(bool is_global,
                                     const QueryParams& query_params,
                                     const RewriteOptions* options,
                                     AsyncFetch* fetch) {
+  GoogleString historical;
+  StringPiece leaf = stripped_gurl.LeafSansQuery();
+  bool history_view = leaf == "message_history" || leaf == "images" ||
+      leaf == "html_cache" || leaf == "javascript" || leaf == "css";
+  if (global_system_rewrite_options()->history_archive() && history_view &&
+      query_params.Lookup1Unescaped("history", &historical) && historical == "1") {
+    HistoryArchive* archive = dynamic_cast<SystemRewriteDriverFactory*>(factory())->history_archive();
+    std::shared_ptr<RewriteOptions> copied_options(options->Clone());
+    std::shared_ptr<QueryParams> copied_query(new QueryParams);
+    copied_query->CopyFrom(query_params);
+    GoogleString url = stripped_gurl.Spec().as_string();
+    if (archive != nullptr && archive->Schedule(
+        [this, is_global, copied_options, copied_query, url, fetch]() {
+          HistoryPageFetch guarded(fetch);
+          try {
+            AdminPageImmediate(is_global, GoogleUrl(url), *copied_query,
+                               copied_options.get(), &guarded);
+          } catch (...) {
+            if (!guarded.done) guarded.Done(false);
+          }
+        })) return;
+    fetch->response_headers()->SetStatusAndReason(HttpStatus::kUnavailable);
+    fetch->Write("History reader unavailable or busy; retry shortly.", message_handler());
+    fetch->Done(true);
+    return;
+  }
+  AdminPageImmediate(is_global, stripped_gurl, query_params, options, fetch);
+}
+
+void SystemServerContext::AdminPageImmediate(bool is_global,
+    const GoogleUrl& stripped_gurl, const QueryParams& query_params,
+    const RewriteOptions* options, AsyncFetch* fetch) {
   Statistics* stats = is_global ? factory()->statistics() : statistics();
   admin_site_->AdminPage(is_global, stripped_gurl, query_params, options,
                          cache_path(), fetch, system_caches_,

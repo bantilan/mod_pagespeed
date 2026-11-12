@@ -43,13 +43,24 @@ class MessageHandler;
 
 class SharedCircularBuffer : public Writer {
  public:
+  struct HistorySnapshot {
+    GoogleString generation, data;
+    int64 begin = 0, end = 0;
+  };
+  struct HistoryHealth {
+    int64 last_success_ms = 0, records = 0, disk_bytes = 0;
+    int64 lost_bytes = 0, restart_gaps = 0, failures = 0;
+    int error = 0;
+    int64 categories[5] = {};
+  };
   // Construct with shared memory, data buffer capacity, filename_prefix and
   // filename_suffix. filename_prefix and filename_suffix are used to name
   // segment for the shared circular buffer.
   SharedCircularBuffer(AbstractSharedMem* shm_runtime,
                        const int buffer_capacity,
                        const GoogleString& filename_prefix,
-                       const GoogleString& filename_suffix);
+                       const GoogleString& filename_suffix,
+                       bool history_tracking = false);
   ~SharedCircularBuffer() override;
   // Initialize the shared memory segment.
   // parent = true if this is invoked in root process -- initialize the shared
@@ -66,6 +77,10 @@ class SharedCircularBuffer : public Writer {
   bool Dump(Writer* writer, MessageHandler* handler) override;
   // Return data content as string. This is for test purposes.
   GoogleString ToString(MessageHandler* handler);
+  // Optional byte-position identity. Neither changes the existing log format.
+  bool SnapshotHistory(HistorySnapshot* snapshot, MessageHandler* handler);
+  bool GetHistoryHealth(HistoryHealth* health);
+  void SetHistoryHealth(const HistoryHealth& health);
   // This should be called from the root process as it is about to exit, when no
   // future children are expected to start.
   void GlobalCleanup(MessageHandler* handler);
@@ -88,6 +103,9 @@ class SharedCircularBuffer : public Writer {
   std::unique_ptr<AbstractMutex> mutex_;
   // Shared memory segment.
   std::unique_ptr<AbstractSharedMemSegment> segment_;
+  struct HistoryState;
+  const bool history_tracking_;
+  HistoryState* history_state_;
 
   DISALLOW_COPY_AND_ASSIGN(SharedCircularBuffer);
 };

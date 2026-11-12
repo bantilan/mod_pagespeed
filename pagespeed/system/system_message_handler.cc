@@ -27,6 +27,7 @@
 #include "pagespeed/kernel/base/time_util.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/base/writer.h"
+#include "pagespeed/kernel/sharedmem/shared_circular_buffer.h"
 
 namespace net_instaweb {
 
@@ -101,6 +102,10 @@ bool SystemMessageHandler::Dump(Writer* writer) {
     return false;
   }
   return buffer_->Dump(writer, &internal_handler_);
+}
+
+SharedCircularBuffer* SystemMessageHandler::history_buffer() {
+  return dynamic_cast<SharedCircularBuffer*>(buffer_);
 }
 
 }  // namespace net_instaweb

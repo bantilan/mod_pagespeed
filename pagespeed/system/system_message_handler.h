@@ -55,6 +55,7 @@ class SystemMessageHandler : public GoogleMessageHandler {
 
   // Dump contents of SharedCircularBuffer.
   bool Dump(Writer* writer) override;
+  SharedCircularBuffer* history_buffer() override;
 
  protected:
   // Add messages to the SharedCircularBuffer.

@@ -196,6 +196,9 @@ class SystemServerContext : public ServerContext {
   Variable* statistics_404_count();
 
  private:
+  void AdminPageImmediate(bool is_global, const GoogleUrl& stripped_gurl,
+                          const QueryParams& query_params,
+                          const RewriteOptions* options, AsyncFetch* fetch);
   // Checks the timestamp of cache.flush, updating the purge context as
   // needed.
   //

@@ -20,8 +20,11 @@
 #include "pagespeed/system/admin_site.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <memory>
+#include <ctime>
+#include <cstring>
 #include <set>
 #include <vector>
 #include <vector>
@@ -52,6 +55,8 @@
 #include "pagespeed/kernel/http/request_headers.h"
 #include "pagespeed/kernel/http/response_headers.h"
 #include "pagespeed/kernel/util/statistics_logger.h"
+#include "pagespeed/system/history_archive.h"
+#include "pagespeed/kernel/base/time_util.h"
 #include "pagespeed/system/system_cache_path.h"
 #include "pagespeed/system/system_caches.h"
 #include "pagespeed/system/system_rewrite_options.h"
@@ -85,12 +90,122 @@ struct Tab {
   const char* statistics_link;  // relative from /mod_pagespeed_statistics
 };
 
+GoogleString EscapeHistory(StringPiece text) {
+  GoogleString escaped;
+  HtmlKeywords::Escape(text, &escaped);
+  return escaped;
+}
+
+bool HistoryDate(const GoogleString& date, int64* ms) {
+  if (date.size() != 10 || date[4] != '-' || date[7] != '-') return false;
+  struct tm value = {};
+  char* end = strptime(date.c_str(), "%Y-%m-%d", &value);
+  if (!end || *end || value.tm_year < 70) return false;
+  time_t time = timegm(&value);
+  char normalized[20];
+  strftime(normalized, sizeof(normalized), "%Y-%m-%d", &value);
+  if (date != normalized || time < 0) return false;
+  *ms = static_cast<int64>(time) * 1000;
+  return true;
+}
+
+GoogleString HistoryControls(const SystemRewriteOptions& options,
+    const QueryParams& query, StringPiece kind, GoogleString* log,
+    bool* historical) {
+  *historical = false;
+  if (!options.history_archive()) return "";
+  GoogleString flag, from, until, cursor, error;
+  query.Lookup1Unescaped("history", &flag);
+  query.Lookup1Unescaped("from", &from);
+  query.Lookup1Unescaped("until", &until);
+  query.Lookup1Unescaped("cursor", &cursor);
+  *historical = flag == "1";
+  int64 begin = 0, end = 253402300800000LL;
+  if ((!from.empty() && !HistoryDate(from, &begin)) ||
+      (!until.empty() && !HistoryDate(until, &end))) error = "Invalid UTC date";
+  if (!until.empty()) end += 86400000;
+  if (begin >= end) error = "Invalid date range";
+  HistoryArchive::Page page;
+  if (*historical && error.empty()) {
+    page = HistoryArchive::Browse(options.file_cache_path(), kind,
+                                  begin, end, cursor);
+    error = page.error;
+    *log = page.log;
+  }
+  GoogleString controls =
+      "<section class='pagespeed-history-controls'><nav aria-label='History source'>"
+      "<a href='?'>Live memory</a> | <a href='?history=1'>Historical archive</a>"
+      "</nav><form method='get'><input type='hidden' name='history' value='1'>"
+      "<label>From (UTC) <input type='date' name='from' value='";
+  controls += EscapeHistory(from) + "'></label><label>Through (UTC) "
+      "<input type='date' name='until' value='" + EscapeHistory(until) +
+      "'></label><button type='submit'>Browse history</button></form><p>";
+  controls += *historical ?
+      "Archived records only; live memory is not merged, so overlapping records "
+      "are never displayed twice. Up to 100 matching records per page; existing "
+      "view filters apply to that page. Some scan windows may have no matches." :
+      "Live memory view. Historical records are saved on the configured snapshot interval.";
+  controls += " Missing byte ranges and restart uncertainty are reported on the dashboard.</p>";
+  if (!error.empty()) controls += "<p role='alert'>" + EscapeHistory(error) + "</p>";
+  if (!page.next.empty()) controls += "<a href='?history=1&amp;from=" +
+      EscapeHistory(from) + "&amp;until=" + EscapeHistory(until) + "&amp;cursor=" +
+      EscapeHistory(page.next) + "'>Older records &rarr;</a>";
+  controls += "</section>";
+  return controls;
+}
+
+void WriteHistoryHealth(MessageHandler* handler, AsyncFetch* fetch,
+                        const SystemRewriteOptions* options) {
+  SharedCircularBuffer* buffer = handler->history_buffer();
+  SharedCircularBuffer::HistoryHealth health;
+  if (buffer == nullptr || !buffer->GetHistoryHealth(&health)) {
+    if (options != nullptr && options->history_archive())
+      fetch->Write("<section class='pagespeed-history-controls' role='alert'>"
+          "Historical archive is enabled but its shared source is unavailable. "
+          "Set MessageBufferSize to a positive value and rebuild matching "
+          "PSOL/module versions.</section>", handler);
+    return;
+  }
+  fetch->Write("<section class='pagespeed-dashboard-panel'>"
+      "<div class='pagespeed-dashboard-panel-heading'><div>"
+      "<h2>Historical archive</h2><p>One shared-buffer archive, persisted "
+      "outside request processing</p></div><a href='message_history?history=1'>"
+      "Browse history &rarr;</a></div><div class='pagespeed-history-status'>",
+      handler);
+  GoogleString time = "No successful snapshot yet";
+  if (health.last_success_ms) ConvertTimeToString(health.last_success_ms, &time);
+  GoogleString text = StrCat("<p>Last successful snapshot: ", time,
+      "</p><p>Archived records (cumulative): ", Integer64ToString(health.records),
+      ". Current archive bytes: ", Integer64ToString(health.disk_bytes),
+      ". Detected missing bytes: ", Integer64ToString(health.lost_bytes),
+      ". Uncertain restart/reset gaps: ", Integer64ToString(health.restart_gaps),
+      ". Archive failures: ", Integer64ToString(health.failures), ".</p>");
+  if (health.error) text += "<p role='alert'>Last error: " +
+      EscapeHistory(strerror(health.error)) + "</p>";
+  if (health.error == EINVAL) text += "<p>Check archive configuration and metadata: "
+      "all server contexts must share one FileCachePath, and the message buffer "
+      "must not exceed 16 MiB. Invalid or damaged archive metadata also stops "
+      "archiving rather than risking duplicate records.</p>";
+  text += "<p>Gap counts are source-wide; the types and number of overwritten "
+      "events cannot be reconstructed. Restarts may lose an unknown unsaved tail. "
+      "Counts below are classifications of the same records, not separate archives.</p>";
+  const char* labels[] = {"Messages", "Images", "HTML cache", "JavaScript diagnostics", "CSS diagnostics"};
+  text += "<table class='pagespeed-admin-data-table'><thead><tr><th>View</th>"
+      "<th>Cumulative archived matches</th></tr></thead><tbody>";
+  for (int i = 0; i < 5; ++i) text += StrCat("<tr><td>", labels[i], "</td><td>",
+      Integer64ToString(health.categories[i]), "</td></tr>");
+  text += "</tbody></table></div></section>";
+  fetch->Write(text, handler);
+}
+
 // TODO(jmarantz): disable or recolor links to pages that are not available
 // based on the current config.
 const Tab kTabs[] = {
     {"Dashboard", "Dashboard", "dashboard", nullptr},
     {"Images", "Optimized Images", "images", nullptr},
     {"HTML Cache", "HTML Cache", "html_cache", nullptr},
+    {"JavaScript", "JavaScript Diagnostics", "javascript", nullptr},
+    {"CSS", "CSS Diagnostics", "css", nullptr},
     {"Statistics", "Statistics", "statistics", "?"},
     {"Configuration", "Configuration", "config", "?config"},
     {"Histograms", "Histograms", "histograms", "?histograms"},
@@ -110,10 +225,12 @@ struct ImageRewriteRow {
 };
 
 void ReadRecentImageRewrites(MessageHandler* message_handler, size_t max_rows,
-                             std::vector<ImageRewriteRow>* rows) {
+                             std::vector<ImageRewriteRow>* rows,
+                             const GoogleString* stored = nullptr) {
   GoogleString log;
   StringWriter log_writer(&log);
-  if (!message_handler->Dump(&log_writer)) {
+  if (stored != nullptr) log = *stored;
+  else if (!message_handler->Dump(&log_writer)) {
     return;
   }
   StringPieceVector messages;
@@ -155,10 +272,12 @@ struct HtmlCacheRow {
 };
 
 void ReadRecentHtmlRewrites(MessageHandler* handler,
-                            std::vector<HtmlCacheRow>* rows) {
+                            std::vector<HtmlCacheRow>* rows,
+                            const GoogleString* stored = nullptr) {
   GoogleString log;
   StringWriter writer(&log);
-  if (!handler->Dump(&writer)) return;
+  if (stored != nullptr) log = *stored;
+  else if (!handler->Dump(&writer)) return;
   StringPieceVector messages;
   handler->ParseMessageDumpIntoMessages(log, &messages);
   std::set<GoogleString> seen;
@@ -495,9 +614,11 @@ void AdminSite::StatisticsHandler(const RewriteOptions& options,
 }
 
 void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
-                                 Statistics* stats) {
+                                 Statistics* stats,
+                                 const SystemRewriteOptions* archive_options) {
   AdminHtml admin_html("dashboard", "", source, timer_, fetch,
                        message_handler_);
+  WriteHistoryHealth(message_handler_, fetch, archive_options);
 
   int64 javascript_saved =
       ReadVariable(stats, "javascript_total_bytes_saved");
@@ -705,13 +826,15 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
 
 void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
                                  Statistics* stats,
-                                 const RewriteOptions& options) {
+                                 const RewriteOptions& options,
+                                 const GoogleString* stored, StringPiece controls) {
   fetch->response_headers()->SetDateAndCaching(
       timer_->NowMs(), 0, ", private, no-store");
   AdminHtml admin_html("html_cache", "", source, timer_, fetch,
                        message_handler_);
+  fetch->Write(controls, message_handler_);
   std::vector<HtmlCacheRow> rows;
-  ReadRecentHtmlRewrites(message_handler_, &rows);
+  ReadRecentHtmlRewrites(message_handler_, &rows, stored);
   fetch->Write(
       "<section class='pagespeed-html-cache-page'>"
       "<div class='pagespeed-dashboard-heading'>"
@@ -728,17 +851,20 @@ void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
       options.html_cache() ? "Enabled" : "Disabled",
       "</strong>. Configured TTL cap: ",
       Integer64ToString(options.html_cache_ttl_sec()), " seconds.</p></div>"
-      "<a href='config'>View configuration &rarr;</a></div>"
+      "<a href='config'>View configuration &rarr;</a></div>",
+      stored ? "<p class='pagespeed-dashboard-footnote'>Archived publications in the selected date window. " :
       "<p class='pagespeed-dashboard-footnote'>Up to 100 recently recorded "
-      "variants from the bounded message buffer (MessageBufferSize must be "
-      "nonzero). This is publication history, not a live cache inventory: "
+      "variants from the bounded message buffer (MessageBufferSize must be nonzero). ",
+      "This is publication history, not a live cache inventory: "
       "eviction, purge, policy changes, or new beacon evidence can invalidate "
       "an entry before its TTL. No HTML bodies or raw request headers are "
       "recorded. Opening a URL makes a new request using your browser's "
       "headers; it is not a snapshot of the listed variant.</p>"),
       message_handler_);
   if (rows.empty()) {
-    fetch->Write(
+    fetch->Write(stored ?
+        "<div class='pagespeed-images-empty'><h2>No archived HTML publications match</h2>"
+        "<p>Try another date range or an older page.</p></div></section></section>" :
         "<div class='pagespeed-images-empty'><h2>No HTML rewrites recorded</h2>"
         "<p>Enable HtmlCache and MessageBufferSize, then visit a publicly "
         "cacheable HTML page. Entries appear after beacon learning and "
@@ -832,26 +958,28 @@ void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
       "window.setInterval(times,1000);})();</script>", message_handler_);
 }
 
-void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
+void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch,
+                              const GoogleString* stored, StringPiece controls) {
   std::vector<ImageRewriteRow> rows;
   int64 total_saved = 0;
   static const size_t kMaxRows = 100;
-  ReadRecentImageRewrites(message_handler_, kMaxRows, &rows);
+  ReadRecentImageRewrites(message_handler_, kMaxRows, &rows, stored);
   for (const ImageRewriteRow& row : rows) {
     total_saved += row.original_bytes - row.optimized_bytes;
   }
 
   AdminHtml admin_html("images", "", source, timer_, fetch,
                        message_handler_);
-  fetch->Write(
+  fetch->Write(controls, message_handler_);
+  fetch->Write(StrCat(
       "<section class='pagespeed-images-page'>"
       "<div class='pagespeed-dashboard-heading'>"
       "<p class='pagespeed-dashboard-eyebrow'>IMAGE OPTIMIZATION</p>"
       "<h1>Recently optimized images</h1>"
-      "<p class='pagespeed-dashboard-description'>Recent successful "
-      "rewrites recorded in the PageSpeed message buffer.</p></div>"
-      "<div class='pagespeed-images-summary'>",
-      message_handler_);
+      "<p class='pagespeed-dashboard-description'>",
+      stored ? "Archived image rewrites in the selected window." :
+      "Recent successful rewrites recorded in the PageSpeed message buffer.",
+      "</p></div><div class='pagespeed-images-summary'>"), message_handler_);
   fetch->Write(StrCat("<strong>",
                       IntegerToString(static_cast<int>(rows.size())),
                       "</strong><span>recent rewrites</span><strong>",
@@ -860,7 +988,9 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
                message_handler_);
 
   if (rows.empty()) {
-    fetch->Write(
+    fetch->Write(stored ?
+        "<div class='pagespeed-images-empty'><h2>No archived images match</h2>"
+        "<p>Try another date range or an older page.</p></div></section>" :
         "<div class='pagespeed-images-empty'><h2>No image rewrites found</h2>"
         "<p>Successful image rewrites will appear here. The message buffer "
         "must be enabled, and this list only includes entries still retained "
@@ -925,8 +1055,8 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
     }
     fetch->Write(
         "</tbody></table></div><div class='pagespeed-images-list-footer'>"
-        "<span id='pagespeed-images-result-count'></span><span>Entries are "
-        "limited to the message buffer's recent history.</span></div>"
+        "<span id='pagespeed-images-result-count'></span><span>Filters apply to "
+        "the records loaded in this page.</span></div>"
         "<div id='pagespeed-images-empty-filter' class='pagespeed-images-empty-"
         "filter' style='display:none'>No images match those filters.</div>"
         "<div class='pagespeed-image-modal' "
@@ -1409,16 +1539,31 @@ void AdminSite::PrintConfig(
 }
 
 void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
-                                      AdminSource source, AsyncFetch* fetch) {
+                                      AdminSource source, AsyncFetch* fetch,
+                                      const GoogleString* stored,
+                                      StringPiece controls, StringPiece kind) {
   // Request for page /mod_pagespeed_message.
   GoogleString log;
   StringWriter log_writer(&log);
-  AdminHtml admin_html("message_history", "", source, timer_, fetch,
-                       message_handler_);
-  WriteAdminPageHeading(fetch, message_handler_, "EVENT LOG", "Message History",
-                        "Review recent PageSpeed notices, warnings, and "
-                        "rewrite diagnostics.");
-  if (message_handler_->Dump(&log_writer)) {
+  AdminHtml admin_html(kind == "messages" ? "message_history" : kind, "",
+                       source, timer_, fetch, message_handler_);
+  fetch->Write(controls, message_handler_);
+  WriteAdminPageHeading(fetch, message_handler_, "EVENT LOG",
+      kind == "javascript" ? "JavaScript diagnostics" :
+      (kind == "css" ? "CSS diagnostics" : "Message History"),
+      kind == "messages" ? "Review PageSpeed notices, warnings, and rewrite diagnostics." :
+      "Existing diagnostic messages only; not a complete per-resource rewrite history.");
+  if (stored != nullptr) log = *stored;
+  bool have_log = stored != nullptr || message_handler_->Dump(&log_writer);
+  if (have_log && kind != "messages") {
+    StringPieceVector records;
+    message_handler_->ParseMessageDumpIntoMessages(log, &records);
+    GoogleString filtered("\n");
+    for (StringPiece record : records)
+      if (HistoryArchive::Matches(kind, record)) StrAppend(&filtered, record, "\n");
+    log.swap(filtered);
+  }
+  if (have_log) {
     fetch->Write("<div id='log'>", message_handler_);
     // Keep the raw record text in an escaped, machine-readable element. The
     // history UI extracts severity and timestamp without parsing HTML styling.
@@ -1509,12 +1654,24 @@ void AdminSite::AdminPage(
     fetch->Done(true);
   } else {
     StringPiece leaf = stripped_gurl.LeafSansQuery();
+    GoogleString history_log, history_controls;
+    bool historical = false;
+    StringPiece kind = leaf == "message_history" ? "messages" : leaf;
+    if (kind == "messages" || kind == "images" || kind == "html_cache" ||
+        kind == "javascript" || kind == "css") {
+      history_controls = HistoryControls(*global_system_rewrite_options,
+          query_params, kind, &history_log, &historical);
+      if (global_system_rewrite_options->history_archive())
+        fetch->response_headers()->SetDateAndCaching(timer_->NowMs(), 0,
+                                                     ", private, no-store");
+    }
+    const GoogleString* stored = historical ? &history_log : nullptr;
     if ((leaf == "dashboard") || leaf.empty()) {
-      DashboardHandler(kPageSpeedAdmin, fetch, stats);
+      DashboardHandler(kPageSpeedAdmin, fetch, stats, global_system_rewrite_options);
     } else if (leaf == "images") {
-      ImagesHandler(kPageSpeedAdmin, fetch);
+      ImagesHandler(kPageSpeedAdmin, fetch, stored, history_controls);
     } else if (leaf == "html_cache") {
-      HtmlCacheHandler(kPageSpeedAdmin, fetch, stats, *options);
+      HtmlCacheHandler(kPageSpeedAdmin, fetch, stats, *options, stored, history_controls);
     } else if (leaf == "statistics") {
       StatisticsHandler(*options, kPageSpeedAdmin, fetch, stats);
     } else if (leaf == "stats_json") {
@@ -1527,8 +1684,9 @@ void AdminSite::AdminPage(
       // TODO(jmarantz): add vhost-local and aggregate message buffers.
       ConsoleHandler(*global_system_rewrite_options, *options, kPageSpeedAdmin,
                      query_params, fetch, statistics);
-    } else if (leaf == "message_history") {
-      MessageHistoryHandler(*options, kPageSpeedAdmin, fetch);
+    } else if (leaf == "message_history" || leaf == "javascript" || leaf == "css") {
+      MessageHistoryHandler(*options, kPageSpeedAdmin, fetch, stored,
+                             history_controls, kind);
     } else if (leaf == "cache") {
       PrintCaches(is_global, kPageSpeedAdmin, stripped_gurl, query_params,
                   options, cache_path, fetch, system_caches,

@@ -67,7 +67,8 @@ class AdminSite {
 
   // Displays recent Info/Warning/Error messages.: public ServerContext
   void MessageHistoryHandler(const RewriteOptions& options, AdminSource source,
-                             AsyncFetch* fetch);
+                             AsyncFetch* fetch, const GoogleString* stored = nullptr,
+                             StringPiece controls = "", StringPiece kind = "messages");
 
   // Deprecated handler for graphs in the PSOL console.
   void StatisticsGraphsHandler(
@@ -115,14 +116,17 @@ class AdminSite {
 
   // Displays a summary of PageSpeed runtime and optimization savings.
   void DashboardHandler(AdminSource source, AsyncFetch* fetch,
-                        Statistics* stats);
+                        Statistics* stats,
+                        const SystemRewriteOptions* archive_options = nullptr);
 
   // Lists recently rewritten images from the bounded PageSpeed message buffer.
-  void ImagesHandler(AdminSource source, AsyncFetch* fetch);
+  void ImagesHandler(AdminSource source, AsyncFetch* fetch,
+                     const GoogleString* stored = nullptr, StringPiece controls = "");
 
   // Recent HTML cache publications; not a live backend inventory.
   void HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
-                        Statistics* stats, const RewriteOptions& options);
+                        Statistics* stats, const RewriteOptions& options,
+                        const GoogleString* stored = nullptr, StringPiece controls = "");
 
   // Responds to 'fetch' with data used on statistics page and graphs page
   // in JSON format.

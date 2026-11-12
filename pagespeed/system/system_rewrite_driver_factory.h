@@ -47,6 +47,7 @@ class NonceGenerator;
 class ProcessContext;
 class ServerContext;
 class SharedCircularBuffer;
+class HistoryArchive;
 class SharedMemStatistics;
 class StaticAssetManager;
 class SystemCaches;
@@ -141,6 +142,7 @@ class SystemRewriteDriverFactory : public RewriteDriverFactory {
   // SystemHtmlParseMessageHandler. is_root is true if this is invoked from
   // root (ie. parent) process.
   void SharedCircularBufferInit(bool is_root);
+  HistoryArchive* history_archive() const { return history_archive_.get(); }
 
   // Most options are parsed by and applied to the RewriteOptions via
   // ParseAndSetOptionFromNameN, but process-scope options need to be set on the
@@ -337,6 +339,7 @@ class SystemRewriteDriverFactory : public RewriteDriverFactory {
   StringVector local_shm_stats_segment_names_;
   std::unique_ptr<AbstractSharedMem> shared_mem_runtime_;
   std::unique_ptr<SharedCircularBuffer> shared_circular_buffer_;
+  std::unique_ptr<HistoryArchive> history_archive_;
 
   bool statistics_frozen_;
   bool is_root_process_;

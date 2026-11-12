@@ -192,6 +192,18 @@ class FileCacheTest : public CacheTestBase {
 };
 
 // Simple flow of putting in an item, getting it, deleting it.
+TEST_F(FileCacheTest, CleanerNeverTraversesOrDeletesHistoryArchive) {
+  GoogleString archive = GTestTempDir() + "/history/segment-00000000000000000001.psh";
+  file_system_.RecursivelyMakeDir(GTestTempDir() + "/history", &message_handler_);
+  ASSERT_TRUE(file_system_.WriteFile(archive.c_str(), "archived records", &message_handler_));
+  CheckPut("ordinary", "cached value");
+  EXPECT_TRUE(Clean(0, 0));
+  GoogleString contents;
+  EXPECT_TRUE(file_system_.ReadFile(archive.c_str(), &contents, &message_handler_));
+  EXPECT_EQ("archived records", contents);
+  CheckNotFound("ordinary");
+}
+
 TEST_F(FileCacheTest, PutGetDelete) {
   CheckPut("Name", "Value");
   CheckGet("Name", "Value");

@@ -145,6 +145,31 @@ buffer. It is not a live inventory of every backend entry; expired, purged or
 evicted entries may still appear as history. HTML bodies and raw request headers
 are not recorded.
 
+### Optional Historical Archive
+
+Preserve the existing shared message buffer asynchronously without adding
+rewrite-event logging. In Nginx's `http` block, alongside FileCachePath:
+
+```nginx
+pagespeed HistoryArchive on;              # Default off
+pagespeed HistoryArchiveInterval 300;
+pagespeed HistoryArchiveRetentionDays 7;
+pagespeed HistoryArchiveMaxSizeMb 100;
+```
+
+A nonzero `MessageBufferSize` and one common FileCachePath are required.
+Snapshots use a single elected writer and store each existing record once under
+`<FileCachePath>/history/`, independently of normal resource-cache cleanup.
+Message History, Images and HTML Cache gain historical UTC date filtering and
+pagination. JavaScript/CSS pages show existing diagnostics only, not complete
+per-resource rewrite histories. The dashboard reports archival health and gaps;
+StatisticsLogger, Console and Graphs are unchanged.
+
+Periodic snapshots can miss overwritten records or an unsaved restart tail;
+these gaps are reported rather than hidden. There is some background CPU,
+memory and disk overhead. See [archive design, limits and benchmarks](doc/history_archive.md).
+A full PSOL/module rebuild and restart are required.
+
 mod_pagespeed releases are available as [precompiled linux packages](https://modpagespeed.com/doc/download) or as [source](https://modpagespeed.com/doc/build_mod_pagespeed_from_source). (See [Release Notes](https://modpagespeed.com/doc/release_notes) for information about bugs fixed)
 
 mod_pagespeed is an open-source Apache module which automatically applies web performance best practices to pages, and associated assets (CSS, JavaScript, images) without requiring that you modify your existing content or workflow.

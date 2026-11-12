@@ -18,6 +18,8 @@
  */
 
 #include "pagespeed/system/system_rewrite_driver_factory.h"
+#include "pagespeed/system/history_archive.h"
+#include <cerrno>
 
 #include <sys/prctl.h>
 
@@ -320,6 +322,8 @@ void SystemRewriteDriverFactory::RootInit() {
 }
 
 void SystemRewriteDriverFactory::ChildInit() {
+  GoogleString history_cache_path;
+  bool history_path_conflict = false;
   const SystemRewriteOptions* conf =
       SystemRewriteOptions::DynamicCast(default_options());
   CHECK(conf != nullptr);
@@ -361,8 +365,28 @@ void SystemRewriteDriverFactory::ChildInit() {
        p != e; ++p) {
     SystemServerContext* server_context = *p;
     server_context->ChildInit(this);
+    if (conf->history_archive()) {
+      GoogleString path = server_context->global_system_rewrite_options()->file_cache_path();
+      while (path.size() > 1 && path.back() == '/') path.pop_back();
+      if (!path.empty()) {
+        if (history_cache_path.empty()) history_cache_path = path;
+        else if (history_cache_path != path) history_path_conflict = true;
+      }
+    }
   }
   uninitialized_server_contexts_.clear();
+  if (conf->history_archive() && shared_circular_buffer_ != nullptr &&
+      !history_cache_path.empty() && !history_path_conflict) {
+    history_archive_.reset(new HistoryArchive(shared_circular_buffer_.get(),
+        timer(), history_cache_path, conf->history_archive_interval(),
+        conf->history_archive_retention_days(), conf->history_archive_max_size_mb()));
+    history_archive_->Start();
+  } else if (conf->history_archive() && shared_circular_buffer_ != nullptr) {
+    SharedCircularBuffer::HistoryHealth health;
+    health.error = EINVAL;
+    health.failures = 1;
+    shared_circular_buffer_->SetHistoryHealth(health);
+  }
 }
 
 std::shared_ptr<CentralController>
@@ -393,7 +417,8 @@ void SystemRewriteDriverFactory::SharedCircularBufferInit(bool is_root) {
     // whether we are naming our shared-memory segments correctly.
     shared_circular_buffer_ = std::make_unique<SharedCircularBuffer>(
         shared_mem_runtime(), message_buffer_size_,
-        filename_prefix().as_string(), hostname_identifier());
+        filename_prefix().as_string(), hostname_identifier(),
+        SystemRewriteOptions::DynamicCast(default_options())->history_archive());
     if (shared_circular_buffer_->InitSegment(is_root, message_handler())) {
       SetCircularBuffer(shared_circular_buffer_.get());
     }
@@ -553,6 +578,7 @@ void SystemRewriteDriverFactory::StopCacheActivity() {
 }
 
 void SystemRewriteDriverFactory::ShutDown() {
+  if (history_archive_ != nullptr) history_archive_->Stop();
   if (!is_root_process_) {
     Variable* child_shutdown_count = statistics()->GetVariable(kShutdownCount);
     child_shutdown_count->Add(1);

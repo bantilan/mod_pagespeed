@@ -205,6 +205,17 @@ TEST_F(AdminSiteTest, HtmlCacheHistoryIsBoundedAndNewestFirst) {
 
 // TODO(xqyin): Add unit tests for other methods in AdminSite.
 
+TEST_F(AdminSiteTest, ExistingDiagnosticsAreFilteredWithoutInventingRewriteFields) {
+  message_handler()->Message(kInfo, "Script https://diagnostic.example/fail.js didn't shrink.");
+  message_handler()->Message(kWarning, "CSS parsing error in https://diagnostic.example/fail.css");
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->MessageHistoryHandler(*rewrite_driver()->options(),
+      AdminSite::kPageSpeedAdmin, &fetch, nullptr, "", "javascript");
+  EXPECT_THAT(buffer, ::testing::HasSubstr("https://diagnostic.example/fail.js"));
+  EXPECT_THAT(buffer, ::testing::Not(::testing::HasSubstr("https://diagnostic.example/fail.css")));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("not a complete per-resource rewrite history"));
+}
 }  // namespace
 
 }  // namespace net_instaweb
