@@ -1205,6 +1205,21 @@ mod rules
   align-items: center;
   gap: 16px;
 }
+.pagespeed-history-compact-link {
+  color: #176b57;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pagespeed-history-cards {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 16px 0;
+}
+.pagespeed-history-cards .pagespeed-dashboard-card { padding: 16px; }
+.pagespeed-history-status { padding: 16px 20px 20px; }
+.pagespeed-history-status p { margin: 0 0 10px; }
+.pagespeed-history-status .pagespeed-admin-data-table { width: 100%; }
+.pagespeed-history-status [role='alert'] { color: #a44b37; }
 .pagespeed-purge-button {
   padding: 9px 13px;
   border: 1px solid #c87857;

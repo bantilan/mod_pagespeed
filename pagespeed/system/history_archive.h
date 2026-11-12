@@ -32,8 +32,10 @@ class HistoryArchive {
   // Tests and standalone maintenance: nonblocking single-writer lock.
   bool SnapshotOnce();
   static bool Matches(StringPiece kind, StringPiece message);
+  static GoogleString FilterLog(StringPiece log, int64 from_ms, int64 until_ms);
   static Page Browse(const GoogleString& cache_path, StringPiece kind,
-                     int64 from_ms, int64 until_ms, StringPiece cursor);
+                     int64 from_ms, int64 until_ms, StringPiece cursor,
+                     const SharedCircularBuffer::HistorySnapshot* live = nullptr);
  protected:
   virtual bool Persist(const GoogleString& name, StringPiece data);
  private:

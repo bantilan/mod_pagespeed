@@ -160,10 +160,13 @@ pagespeed HistoryArchiveMaxSizeMb 100;
 A nonzero `MessageBufferSize` and one common FileCachePath are required.
 Snapshots use a single elected writer and store each existing record once under
 `<FileCachePath>/history/`, independently of normal resource-cache cleanup.
-Message History, Images and HTML Cache gain historical UTC date filtering and
-pagination. JavaScript/CSS pages show existing diagnostics only, not complete
-per-resource rewrite histories. The dashboard reports archival health and gaps;
-StatisticsLogger, Console and Graphs are unchanged.
+When enabled, Message History, Images, HTML Cache, JavaScript, and CSS combine
+the live buffer with retained archive records in their existing views, with UTC
+date filtering and older-record pagination. JavaScript/CSS show existing
+diagnostics only, not complete per-resource rewrite histories. Archive health
+and gaps are shown at `/pagespeed_admin/history`; the dashboard keeps its
+performance overview and links to that page. StatisticsLogger, Console and
+Graphs are unchanged.
 
 Periodic snapshots can miss overwritten records or an unsaved restart tail;
 these gaps are reported rather than hidden. There is some background CPU,

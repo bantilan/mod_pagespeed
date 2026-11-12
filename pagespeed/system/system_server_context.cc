@@ -407,12 +407,10 @@ void SystemServerContext::AdminPage(bool is_global,
                                     const QueryParams& query_params,
                                     const RewriteOptions* options,
                                     AsyncFetch* fetch) {
-  GoogleString historical;
   StringPiece leaf = stripped_gurl.LeafSansQuery();
   bool history_view = leaf == "message_history" || leaf == "images" ||
       leaf == "html_cache" || leaf == "javascript" || leaf == "css";
-  if (global_system_rewrite_options()->history_archive() && history_view &&
-      query_params.Lookup1Unescaped("history", &historical) && historical == "1") {
+  if (global_system_rewrite_options()->history_archive() && history_view) {
     HistoryArchive* archive = dynamic_cast<SystemRewriteDriverFactory*>(factory())->history_archive();
     std::shared_ptr<RewriteOptions> copied_options(options->Clone());
     std::shared_ptr<QueryParams> copied_query(new QueryParams);

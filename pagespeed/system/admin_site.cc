@@ -41,6 +41,7 @@
 #include "pagespeed/kernel/base/base64_util.h"
 #include "pagespeed/kernel/base/callback.h"
 #include "pagespeed/kernel/base/message_handler.h"
+#include "pagespeed/kernel/base/null_message_handler.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
@@ -110,44 +111,53 @@ bool HistoryDate(const GoogleString& date, int64* ms) {
 }
 
 GoogleString HistoryControls(const SystemRewriteOptions& options,
-    const QueryParams& query, StringPiece kind, GoogleString* log,
-    bool* historical) {
-  *historical = false;
+    const QueryParams& query, StringPiece kind, MessageHandler* handler,
+    GoogleString* log, bool* combined) {
+  *combined = false;
   if (!options.history_archive()) return "";
-  GoogleString flag, from, until, cursor, error;
-  query.Lookup1Unescaped("history", &flag);
+  GoogleString from, until, cursor, error;
   query.Lookup1Unescaped("from", &from);
   query.Lookup1Unescaped("until", &until);
   query.Lookup1Unescaped("cursor", &cursor);
-  *historical = flag == "1";
   int64 begin = 0, end = 253402300800000LL;
   if ((!from.empty() && !HistoryDate(from, &begin)) ||
       (!until.empty() && !HistoryDate(until, &end))) error = "Invalid UTC date";
   if (!until.empty()) end += 86400000;
   if (begin >= end) error = "Invalid date range";
+  SharedCircularBuffer* buffer = handler->history_buffer();
+  SharedCircularBuffer::HistorySnapshot live;
+  NullMessageHandler null_handler;
+  bool have_snapshot = buffer != nullptr &&
+      buffer->SnapshotHistory(&live, &null_handler);
   HistoryArchive::Page page;
-  if (*historical && error.empty()) {
+  if (have_snapshot) {
     page = HistoryArchive::Browse(options.file_cache_path(), kind,
-                                  begin, end, cursor);
-    error = page.error;
+        begin, end, cursor, &live);
+    if (error.empty() && !page.error.empty()) error = page.error;
     *log = page.log;
+    if (cursor.empty()) {
+      size_t newline = live.data.find('\n');
+      if (newline != GoogleString::npos)
+        *log += HistoryArchive::FilterLog(
+            StringPiece(live.data).substr(newline + 1), begin, end);
+    }
+    *combined = true;
+  } else {
+    error = "Archive source unavailable; showing current memory history only.";
+    StringWriter writer(log);
+    *combined = handler->Dump(&writer);
   }
   GoogleString controls =
-      "<section class='pagespeed-history-controls'><nav aria-label='History source'>"
-      "<a href='?'>Live memory</a> | <a href='?history=1'>Historical archive</a>"
-      "</nav><form method='get'><input type='hidden' name='history' value='1'>"
+      "<section class='pagespeed-history-controls'><form method='get'>"
       "<label>From (UTC) <input type='date' name='from' value='";
   controls += EscapeHistory(from) + "'></label><label>Through (UTC) "
       "<input type='date' name='until' value='" + EscapeHistory(until) +
       "'></label><button type='submit'>Browse history</button></form><p>";
-  controls += *historical ?
-      "Archived records only; live memory is not merged, so overlapping records "
-      "are never displayed twice. Up to 100 matching records per page; existing "
-      "view filters apply to that page. Some scan windows may have no matches." :
-      "Live memory view. Historical records are saved on the configured snapshot interval.";
-  controls += " Missing byte ranges and restart uncertainty are reported on the dashboard.</p>";
+  controls += "One chronological history combines current memory with archived "
+      "records. Archive pages are bounded to 100 matching records; older links "
+      "continue into retained history. Existing view filters still apply.</p>";
   if (!error.empty()) controls += "<p role='alert'>" + EscapeHistory(error) + "</p>";
-  if (!page.next.empty()) controls += "<a href='?history=1&amp;from=" +
+  if (!page.next.empty()) controls += "<a href='?from=" +
       EscapeHistory(from) + "&amp;until=" + EscapeHistory(until) + "&amp;cursor=" +
       EscapeHistory(page.next) + "'>Older records &rarr;</a>";
   controls += "</section>";
@@ -158,25 +168,39 @@ void WriteHistoryHealth(MessageHandler* handler, AsyncFetch* fetch,
                         const SystemRewriteOptions* options) {
   SharedCircularBuffer* buffer = handler->history_buffer();
   SharedCircularBuffer::HistoryHealth health;
-  if (buffer == nullptr || !buffer->GetHistoryHealth(&health)) {
-    if (options != nullptr && options->history_archive())
-      fetch->Write("<section class='pagespeed-history-controls' role='alert'>"
-          "Historical archive is enabled but its shared source is unavailable. "
-          "Set MessageBufferSize to a positive value and rebuild matching "
-          "PSOL/module versions.</section>", handler);
-    return;
-  }
-  fetch->Write("<section class='pagespeed-dashboard-panel'>"
-      "<div class='pagespeed-dashboard-panel-heading'><div>"
-      "<h2>Historical archive</h2><p>One shared-buffer archive, persisted "
-      "outside request processing</p></div><a href='message_history?history=1'>"
-      "Browse history &rarr;</a></div><div class='pagespeed-history-status'>",
+  bool have_health = buffer != nullptr && buffer->GetHistoryHealth(&health);
+  if (!have_health && options != nullptr && options->history_archive())
+    fetch->Write("<section class='pagespeed-history-controls' role='alert'>"
+        "Archive source health is unavailable. Verify MessageBufferSize and "
+        "that the module and PSOL builds match.</section>", handler);
+  fetch->Write("<section class='pagespeed-dashboard-grid pagespeed-history-cards'>",
       handler);
+  const char* card_labels[] = {"Archive status", "Snapshot interval",
+      "Retention", "Storage limit"};
+  GoogleString interval = options->history_archive_interval() == 1 ? "1 second" :
+      StrCat(IntegerToString(options->history_archive_interval()), " seconds");
+  GoogleString retention = StrCat(IntegerToString(options->history_archive_retention_days()), " days");
+  GoogleString limit = StrCat(IntegerToString(options->history_archive_max_size_mb()), " MiB");
+  const char* values[] = {options->history_archive() ? "Enabled" : "Disabled",
+      interval.c_str(), retention.c_str(), limit.c_str()};
+  for (int i = 0; i < 4; ++i)
+    fetch->Write(StrCat("<article class='pagespeed-dashboard-card'><div "
+        "class='pagespeed-dashboard-card-label'>", card_labels[i],
+        "</div><div class='pagespeed-dashboard-value'>", values[i],
+        "</div></article>"), handler);
+  fetch->Write("</section><section class='pagespeed-dashboard-panel'>"
+      "<div class='pagespeed-dashboard-panel-heading'><div>"
+      "<h2>Archive health</h2><p>Shared-buffer snapshots run in the background</p>"
+      "</div></div><div class='pagespeed-history-status'>", handler);
   GoogleString time = "No successful snapshot yet";
   if (health.last_success_ms) ConvertTimeToString(health.last_success_ms, &time);
+  GoogleString next = health.next_snapshot_ms > 0 ? "Scheduled" :
+      (options->history_archive() ? "Awaiting scheduler" : "Not scheduled");
+  if (health.next_snapshot_ms > 0) ConvertTimeToString(health.next_snapshot_ms, &next);
   GoogleString text = StrCat("<p>Last successful snapshot: ", time,
-      "</p><p>Archived records (cumulative): ", Integer64ToString(health.records),
-      ". Current archive bytes: ", Integer64ToString(health.disk_bytes),
+      "</p><p>Next scheduled snapshot: ", next,
+      "</p><p>Archive disk usage at last successful snapshot: ", Integer64ToString(health.disk_bytes),
+      " bytes. Archived records (cumulative): ", Integer64ToString(health.records),
       ". Detected missing bytes: ", Integer64ToString(health.lost_bytes),
       ". Uncertain restart/reset gaps: ", Integer64ToString(health.restart_gaps),
       ". Archive failures: ", Integer64ToString(health.failures), ".</p>");
@@ -188,7 +212,8 @@ void WriteHistoryHealth(MessageHandler* handler, AsyncFetch* fetch,
       "archiving rather than risking duplicate records.</p>";
   text += "<p>Gap counts are source-wide; the types and number of overwritten "
       "events cannot be reconstructed. Restarts may lose an unknown unsaved tail. "
-      "Counts below are classifications of the same records, not separate archives.</p>";
+      "These are cumulative classifications, not counts of currently retained records. "
+      "A single message may match more than one history view.</p>";
   const char* labels[] = {"Messages", "Images", "HTML cache", "JavaScript diagnostics", "CSS diagnostics"};
   text += "<table class='pagespeed-admin-data-table'><thead><tr><th>View</th>"
       "<th>Cumulative archived matches</th></tr></thead><tbody>";
@@ -202,6 +227,7 @@ void WriteHistoryHealth(MessageHandler* handler, AsyncFetch* fetch,
 // based on the current config.
 const Tab kTabs[] = {
     {"Dashboard", "Dashboard", "dashboard", nullptr},
+    {"Historical Archive", "Historical Archive", "history", nullptr},
     {"Images", "Optimized Images", "images", nullptr},
     {"HTML Cache", "HTML Cache", "html_cache", nullptr},
     {"JavaScript", "JavaScript Diagnostics", "javascript", nullptr},
@@ -618,7 +644,6 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
                                  const SystemRewriteOptions* archive_options) {
   AdminHtml admin_html("dashboard", "", source, timer_, fetch,
                        message_handler_);
-  WriteHistoryHealth(message_handler_, fetch, archive_options);
 
   int64 javascript_saved =
       ReadVariable(stats, "javascript_total_bytes_saved");
@@ -652,6 +677,7 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "and cumulative savings from this PageSpeed instance.</p></div>"
       "<div class='pagespeed-dashboard-controls'>"
       "<span class='pagespeed-dashboard-live'><i></i> INSTANCE ACTIVE</span>"
+      "<a class='pagespeed-history-compact-link' href='history'>Archive status</a>"
       "<button type='button' class='pagespeed-purge-button' "
       "id='pagespeed-purge-cache'>Purge cache</button></div></div>"
       "<p class='pagespeed-purge-status' id='pagespeed-purge-status' "
@@ -660,6 +686,7 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "<article class='pagespeed-dashboard-card pagespeed-dashboard-total'>"
       "<div class='pagespeed-dashboard-card-label'>TOTAL DATA SAVED</div>",
       message_handler_);
+  (void)archive_options;
   fetch->Write(StrCat("<div class='pagespeed-dashboard-total-value'>",
                       FormatDashboardBytes(total_saved), "</div>"),
                message_handler_);
@@ -824,6 +851,17 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       message_handler_);
 }
 
+void AdminSite::HistoryArchiveHandler(AdminSource source, AsyncFetch* fetch,
+                                      const SystemRewriteOptions& options) {
+  AdminHtml admin_html("history", "", source, timer_, fetch, message_handler_);
+  fetch->response_headers()->SetDateAndCaching(timer_->NowMs(), 0,
+                                                ", private, no-store");
+  WriteAdminPageHeading(fetch, message_handler_, "STORAGE & RETENTION",
+      "Historical Archive",
+      "Monitor snapshots, archive capacity, and any gaps in retained history.");
+  WriteHistoryHealth(message_handler_, fetch, &options);
+}
+
 void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
                                  Statistics* stats,
                                  const RewriteOptions& options,
@@ -852,7 +890,7 @@ void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
       "</strong>. Configured TTL cap: ",
       Integer64ToString(options.html_cache_ttl_sec()), " seconds.</p></div>"
       "<a href='config'>View configuration &rarr;</a></div>",
-      stored ? "<p class='pagespeed-dashboard-footnote'>Archived publications in the selected date window. " :
+      stored ? "<p class='pagespeed-dashboard-footnote'>Recent publications merged from memory with retained history. " :
       "<p class='pagespeed-dashboard-footnote'>Up to 100 recently recorded "
       "variants from the bounded message buffer (MessageBufferSize must be nonzero). ",
       "This is publication history, not a live cache inventory: "
@@ -863,7 +901,7 @@ void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
       message_handler_);
   if (rows.empty()) {
     fetch->Write(stored ?
-        "<div class='pagespeed-images-empty'><h2>No archived HTML publications match</h2>"
+        "<div class='pagespeed-images-empty'><h2>No HTML publications match</h2>"
         "<p>Try another date range or an older page.</p></div></section></section>" :
         "<div class='pagespeed-images-empty'><h2>No HTML rewrites recorded</h2>"
         "<p>Enable HtmlCache and MessageBufferSize, then visit a publicly "
@@ -977,7 +1015,7 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch,
       "<p class='pagespeed-dashboard-eyebrow'>IMAGE OPTIMIZATION</p>"
       "<h1>Recently optimized images</h1>"
       "<p class='pagespeed-dashboard-description'>",
-      stored ? "Archived image rewrites in the selected window." :
+      stored ? "Recent rewrites merged from memory with retained history." :
       "Recent successful rewrites recorded in the PageSpeed message buffer.",
       "</p></div><div class='pagespeed-images-summary'>"), message_handler_);
   fetch->Write(StrCat("<strong>",
@@ -1655,19 +1693,21 @@ void AdminSite::AdminPage(
   } else {
     StringPiece leaf = stripped_gurl.LeafSansQuery();
     GoogleString history_log, history_controls;
-    bool historical = false;
+    bool combined_history = false;
     StringPiece kind = leaf == "message_history" ? "messages" : leaf;
     if (kind == "messages" || kind == "images" || kind == "html_cache" ||
         kind == "javascript" || kind == "css") {
       history_controls = HistoryControls(*global_system_rewrite_options,
-          query_params, kind, &history_log, &historical);
+          query_params, kind, message_handler_, &history_log, &combined_history);
       if (global_system_rewrite_options->history_archive())
         fetch->response_headers()->SetDateAndCaching(timer_->NowMs(), 0,
                                                      ", private, no-store");
     }
-    const GoogleString* stored = historical ? &history_log : nullptr;
+    const GoogleString* stored = combined_history ? &history_log : nullptr;
     if ((leaf == "dashboard") || leaf.empty()) {
       DashboardHandler(kPageSpeedAdmin, fetch, stats, global_system_rewrite_options);
+    } else if (leaf == "history") {
+      HistoryArchiveHandler(kPageSpeedAdmin, fetch, *global_system_rewrite_options);
     } else if (leaf == "images") {
       ImagesHandler(kPageSpeedAdmin, fetch, stored, history_controls);
     } else if (leaf == "html_cache") {

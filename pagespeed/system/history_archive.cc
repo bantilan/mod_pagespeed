@@ -26,6 +26,7 @@ namespace net_instaweb {
 namespace {
 const int64 kChunkBytes = 256 * 1024;
 const int64 kMaxSnapshot = 16 * 1024 * 1024;
+const int64 kMaxBrowseBytes = 16 * 1024 * 1024;
 struct File { GoogleString name; int64 size, allocated, time; };
 struct ScopedClose {
   int* fd;
@@ -214,6 +215,11 @@ void HistoryArchive::Run() {
   int fd = -1;
   auto delay = std::chrono::seconds(interval_ > 0 ? interval_ : 300);
   auto due = std::chrono::steady_clock::now() + delay;
+  Health initial_health;
+  buffer_->GetHistoryHealth(&initial_health);
+  initial_health.next_snapshot_ms = timer_->NowMs() +
+      static_cast<int64>(interval_) * 1000;
+  buffer_->SetHistoryHealth(initial_health);
   for (;;) {
     std::function<void()> job;
     bool stopping;
@@ -231,10 +237,24 @@ void HistoryArchive::Run() {
                     O_CLOEXEC | O_NOFOLLOW, 0600);
           if (fd < 0) Fail(errno);
           else if (flock(fd, LOCK_EX | LOCK_NB) != 0) { close(fd); fd = -1; }
+          else {
+            Health health;
+            buffer_->GetHistoryHealth(&health);
+            health.next_snapshot_ms = timer_->NowMs() +
+                static_cast<int64>(interval_) * 1000;
+            buffer_->SetHistoryHealth(health);
+          }
         }
         if (fd >= 0) SnapshotLocked();
       } catch (...) { Fail(ENOMEM); }
       due = std::chrono::steady_clock::now() + delay;
+      if (fd >= 0) {
+        Health health;
+        buffer_->GetHistoryHealth(&health);
+        health.next_snapshot_ms = timer_->NowMs() +
+            static_cast<int64>(interval_) * 1000;
+        buffer_->SetHistoryHealth(health);
+      }
     }
     // Production jobs finish their own AsyncFetch even on rendering failure.
     if (job) { try { job(); } catch (...) {} }
@@ -311,7 +331,9 @@ bool HistoryArchive::SnapshotLocked() {
   State state;
   if (!Load(&state)) return false;
   const int64 failures = health_.failures;
+  const int64 next_snapshot_ms = health_.next_snapshot_ms;
   health_ = state.health;
+  health_.next_snapshot_ms = next_snapshot_ms;
   health_.failures = std::max(failures, state.health.failures);
   SharedCircularBuffer::HistorySnapshot snapshot;
   NullMessageHandler handler;
@@ -408,13 +430,37 @@ bool HistoryArchive::Matches(StringPiece kind, StringPiece message) {
       message.find("css_filter.cc:") != StringPiece::npos;
   return false;
 }
+GoogleString HistoryArchive::FilterLog(StringPiece log, int64 from_ms,
+                                       int64 until_ms) {
+  if (from_ms == 0 && until_ms == 253402300800000LL) return log.as_string();
+  GoogleString filtered("\n");
+  int64 timestamp = -1;
+  size_t begin = 0;
+  while (begin < log.size()) {
+    size_t end = log.find('\n', begin);
+    if (end == StringPiece::npos) break;
+    StringPiece line = log.substr(begin, end - begin);
+    timestamp = MessageTime(line, timestamp);
+    if (timestamp >= from_ms && timestamp < until_ms)
+      StrAppend(&filtered, line, "\n");
+    begin = end + 1;
+  }
+  return filtered;
+}
 HistoryArchive::Page HistoryArchive::Browse(const GoogleString& cache_path,
-    StringPiece kind, int64 from_ms, int64 until_ms, StringPiece cursor) {
+    StringPiece kind, int64 from_ms, int64 until_ms, StringPiece cursor,
+    const SharedCircularBuffer::HistorySnapshot* live) {
   Page page;
   GoogleString path = cache_path + "/history";
-  std::vector<File> files;
-  if (!Files(path, &files)) {
-    page.error = errno == ENOENT ? "No snapshots have been created yet" : "Archive unavailable";
+  GoogleString checkpoint;
+  State latest;
+  if (!Read(path + "/checkpoint", &checkpoint, 4096)) {
+    page.error = errno == ENOENT ? "No snapshots have been created yet" :
+                                   "Archive unavailable";
+    return page;
+  }
+  if (!latest.Parse(checkpoint, false)) {
+    page.error = "Invalid archive checkpoint";
     return page;
   }
   int64 before_sequence = 0, before_offset = 0;
@@ -425,20 +471,26 @@ HistoryArchive::Page HistoryArchive::Browse(const GoogleString& cache_path,
         !StringToInt64(parts[1], &before_offset) || before_sequence <= 0 ||
         before_offset < 0) { page.error = "Invalid page cursor"; return page; }
   }
+  int64 newest_sequence = latest.sequence;
+  if (before_sequence != 0) newest_sequence = std::min(newest_sequence, before_sequence);
   // Prefix preserves the existing parser's first-potentially-partial-line rule.
   page.log = "\n";
   std::vector<GoogleString> selected;
   size_t selected_bytes = 0;
-  int scanned = 0;
-  for (auto it = files.rbegin(); it != files.rend(); ++it) {
-    if (before_sequence && it->name > Name(before_sequence)) continue;
+  int scanned = 0, probed = 0;
+  int64 bytes_read = 0;
+  int64 sequence = newest_sequence;
+  for (; sequence > 0 && scanned < 256 && probed < 65536; --sequence) {
+    ++probed;
+    GoogleString name = Name(sequence);
     GoogleString data;
-    if (!Read(path + "/" + it->name, &data, kMaxSnapshot + 4096)) {
-      if (errno == ENOENT) continue;  // Concurrent retention.
+    if (!Read(path + "/" + name, &data, kMaxSnapshot + 4096)) {
+      if (errno == ENOENT) continue;  // Retention or a sequence gap.
       page.error = "Archive read failed"; return page;
     }
+    bytes_read += data.size();
     State state;
-    if (!state.Parse(data, true) || Name(state.sequence) != it->name) {
+    if (!state.Parse(data, true) || Name(state.sequence) != name) {
       page.error = "Invalid archive segment"; return page;
     }
     size_t header = data.find('\n') + 1;
@@ -475,7 +527,10 @@ HistoryArchive::Page HistoryArchive::Browse(const GoogleString& cache_path,
         }
       }
       if ((record_time > 0 || (from_ms == 0 && until_ms == 253402300800000LL)) &&
-          record_time >= from_ms && record_time < until_ms && Matches(kind, line)) {
+          record_time >= from_ms && record_time < until_ms && Matches(kind, line) &&
+          !(live != nullptr && state.generation == live->generation &&
+            state.begin + begin - header >= live->begin &&
+            state.begin + end - header <= live->end)) {
         if (selected.size() >= 100 || (!selected.empty() &&
             selected_bytes + line.size() > 256 * 1024)) {
           page.next = StrCat(Integer64ToString(state.sequence), ":",
@@ -487,12 +542,19 @@ HistoryArchive::Page HistoryArchive::Browse(const GoogleString& cache_path,
       }
       end = begin;
     }
-    if (++scanned >= 256 && it + 1 != files.rend()) {
+    if (++scanned >= 256) {
+      page.next = StrCat(Integer64ToString(state.sequence), ":",
+                         Integer64ToString(state.begin));
+      break;
+    }
+    if (bytes_read >= kMaxBrowseBytes && sequence > 1) {
       page.next = StrCat(Integer64ToString(state.sequence), ":",
                          Integer64ToString(state.begin));
       break;
     }
   }
+  if (page.next.empty() && sequence > 0 && probed >= 65536)
+    page.error = "Archive sequence gap exceeds the bounded browse limit";
  done:
   for (auto it = selected.rbegin(); it != selected.rend(); ++it) page.log += *it;
   return page;

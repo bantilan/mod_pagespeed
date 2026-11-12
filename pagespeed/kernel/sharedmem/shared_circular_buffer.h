@@ -48,7 +48,8 @@ class SharedCircularBuffer : public Writer {
     int64 begin = 0, end = 0;
   };
   struct HistoryHealth {
-    int64 last_success_ms = 0, records = 0, disk_bytes = 0;
+    int64 last_success_ms = 0, next_snapshot_ms = 0;
+    int64 records = 0, disk_bytes = 0;
     int64 lost_bytes = 0, restart_gaps = 0, failures = 0;
     int error = 0;
     int64 categories[5] = {};

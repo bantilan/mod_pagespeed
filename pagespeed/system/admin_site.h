@@ -119,6 +119,10 @@ class AdminSite {
                         Statistics* stats,
                         const SystemRewriteOptions* archive_options = nullptr);
 
+  // Displays configuration and health for the shared history archive.
+  void HistoryArchiveHandler(AdminSource source, AsyncFetch* fetch,
+                             const SystemRewriteOptions& options);
+
   // Lists recently rewritten images from the bounded PageSpeed message buffer.
   void ImagesHandler(AdminSource source, AsyncFetch* fetch,
                      const GoogleString* stored = nullptr, StringPiece controls = "");

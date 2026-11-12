@@ -122,12 +122,15 @@ text. Directory mode is 0700 and new archive files are 0600.
 
 ## Admin Views
 
-Message History, Images and HTML Cache retain their live interfaces, parsing,
-filters, comparison behavior and tables. When enabled they gain a Live memory /
-Historical archive selector, UTC date filters and cursor-based older-page links.
-Historical pages display archive records only, not a merge with live memory, so
-records present in both cannot appear twice on the same page. Live filters and
-sorts operate on the loaded page.
+Message History, Images, HTML Cache, JavaScript and CSS retain their existing
+interfaces, parsing, filters, comparison behavior and tables. When enabled,
+each history request combines a consistent current shared-memory snapshot with
+retained archive records. Overlap is removed using the shared-memory generation
+and original byte positions, not timestamps or message contents. The newest
+live buffer entries remain visible if the archive checkpoint is missing or
+unavailable. Existing view filters operate on the combined records; date range
+and cursor controls page into older archived records without a source-mode
+switch. JavaScript and CSS include only existing diagnostic messages.
 
 JavaScript and CSS pages display **existing diagnostic messages only**. Their
 classification recognizes known message wording/source filenames; Message
@@ -135,18 +138,23 @@ History remains the authoritative unfiltered record. No successful-rewrite
 inventories, per-resource size fields or optimization events are invented.
 
 Each archival page returns up to 100 matching records. Each scan examines at
-most 256 segments, one bounded segment at a time, and carries a continuation
-cursor even when a scan window has no matches. It does not load the entire
-archive into memory. Dates use original message timestamps; continuation lines
-inherit the preceding timestamp when available, including across chunks.
+most 256 segments and 16 MiB of segment data, one bounded segment at a time,
+and carries a continuation cursor even when a scan window has no matches. A
+single segment may bring the read total up to one segment beyond that budget.
+It does not load the entire archive into memory. Dates use original message
+timestamps; continuation lines inherit the preceding timestamp when available,
+including across chunks.
 Entries whose timestamps were lost with an overwritten prefix are available in
 the unfiltered archive but not in date-filtered results.
 
-The dashboard reports last successful snapshot, cumulative archived record and
-per-view match counts, currently allocated archive bytes, missing source bytes,
-uncertain generation gaps and archive failures. Counts are cumulative, not an
-inventory of retained records. Per-view matches are classifications of a single
-stored record; their sum can exceed the number of archived records.
+`/pagespeed_admin/history` reports archive status, interval, retention, storage
+limit, last successful and next scheduled snapshot, allocated disk usage at the
+last successful accounting, cumulative archived record and per-view match
+counts, missing source bytes, uncertain generation gaps and archive failures.
+Counts are cumulative, not an inventory of retained records. Per-view matches
+are classifications of a single stored record; their sum can exceed the number
+of archived records. The main dashboard retains the performance overview and a
+compact link to archive health.
 
 ## Validation And Benchmarking
 
