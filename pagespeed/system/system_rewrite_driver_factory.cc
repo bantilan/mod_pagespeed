@@ -19,6 +19,7 @@
 
 #include "pagespeed/system/system_rewrite_driver_factory.h"
 #include "pagespeed/system/history_archive.h"
+#include "pagespeed/kernel/util/statistics_logger.h"
 #include <cerrno>
 
 #include <sys/prctl.h>
@@ -323,6 +324,7 @@ void SystemRewriteDriverFactory::RootInit() {
 
 void SystemRewriteDriverFactory::ChildInit() {
   GoogleString history_cache_path;
+  std::set<StatisticsLogger*> history_statistics;
   bool history_path_conflict = false;
   const SystemRewriteOptions* conf =
       SystemRewriteOptions::DynamicCast(default_options());
@@ -366,6 +368,8 @@ void SystemRewriteDriverFactory::ChildInit() {
     SystemServerContext* server_context = *p;
     server_context->ChildInit(this);
     if (conf->history_archive()) {
+      StatisticsLogger* logger = server_context->statistics()->console_logger();
+      if (logger != nullptr) history_statistics.insert(logger);
       GoogleString path = server_context->global_system_rewrite_options()->file_cache_path();
       while (path.size() > 1 && path.back() == '/') path.pop_back();
       if (!path.empty()) {
@@ -377,9 +381,15 @@ void SystemRewriteDriverFactory::ChildInit() {
   uninitialized_server_contexts_.clear();
   if (conf->history_archive() && shared_circular_buffer_ != nullptr &&
       !history_cache_path.empty() && !history_path_conflict) {
+    if (statistics()->console_logger() != nullptr)
+      history_statistics.insert(statistics()->console_logger());
     history_archive_.reset(new HistoryArchive(shared_circular_buffer_.get(),
         timer(), history_cache_path, conf->history_archive_interval(),
-        conf->history_archive_retention_days(), conf->history_archive_max_size_mb()));
+        conf->history_archive_retention_days(), conf->history_archive_max_size_mb(),
+        [history_statistics](bool final) {
+          for (StatisticsLogger* logger : history_statistics)
+            logger->UpdateAndDumpIfRequired(final);
+        }));
     history_archive_->Start();
   } else if (conf->history_archive() && shared_circular_buffer_ != nullptr) {
     SharedCircularBuffer::HistoryHealth health;

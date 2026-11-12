@@ -63,7 +63,9 @@ class StatisticsLogger {
 
   // If it's been longer than kStatisticsDumpIntervalMs, update the
   // timestamp to now and dump the current state of the Statistics.
-  void UpdateAndDumpIfRequired();
+  // force is for graceful shutdown on the archive background thread, so work
+  // since the last periodic sample is not lost on a clean restart.
+  void UpdateAndDumpIfRequired(bool force = false);
 
   // Trim file down if it gets above max_logfile_size_kb.
   void TrimLogfileIfNeeded();

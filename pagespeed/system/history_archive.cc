@@ -257,9 +257,11 @@ struct HistoryArchive::State {
   }
 };
 HistoryArchive::HistoryArchive(SharedCircularBuffer* buffer, Timer* timer,
-    const GoogleString& cache_path, int interval, int days, int mb)
+    const GoogleString& cache_path, int interval, int days, int mb,
+    std::function<void(bool)> statistics_snapshot)
     : buffer_(buffer), timer_(timer), path_(cache_path + "/history"),
-      interval_(interval), retention_days_(days), max_size_mb_(mb) {}
+      interval_(interval), retention_days_(days), max_size_mb_(mb),
+      statistics_snapshot_(std::move(statistics_snapshot)) {}
 HistoryArchive::~HistoryArchive() { Stop(); }
 void HistoryArchive::Start() {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -361,7 +363,12 @@ void HistoryArchive::Run() {
             buffer_->SetHistoryHealth(health);
           }
         }
-        if (fd >= 0) SnapshotLocked();
+        if (fd >= 0) {
+          // Reuse StatisticsLogger's cadence and files, including when all
+          // traffic hits the HTML cache and bypasses RewriteDriver logging.
+          if (statistics_snapshot_) statistics_snapshot_(false);
+          SnapshotLocked();
+        }
       } catch (...) { Fail(ENOMEM); }
       due = std::chrono::steady_clock::now() + delay;
       if (fd >= 0) {
@@ -374,6 +381,12 @@ void HistoryArchive::Run() {
     }
     // Production jobs finish their own AsyncFetch even on rendering failure.
     if (job) { try { job(); } catch (...) {} }
+  }
+  // All workers flush on graceful exit under StatisticsLogger's shared mutex:
+  // the leader alone could exit before another worker finishes its requests.
+  // No history segment is added here and no normal HTTP request writes to disk.
+  if (statistics_snapshot_) {
+    try { statistics_snapshot_(true); } catch (...) {}
   }
   if (fd >= 0) close(fd);
 }

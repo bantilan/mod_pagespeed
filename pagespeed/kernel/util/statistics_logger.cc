@@ -207,15 +207,16 @@ void StatisticsLogger::AddVariable(StringPiece var_name) {
   variables_to_log_[var_name] = var_or_counter;
 }
 
-void StatisticsLogger::UpdateAndDumpIfRequired() {
+void StatisticsLogger::UpdateAndDumpIfRequired(bool force) {
   int64 current_time_ms = timer_->NowMs();
   AbstractMutex* mutex = last_dump_timestamp_->mutex();
   if (mutex == NULL) {
     return;
   }
   // Avoid blocking if the dump is already happening in another thread/process.
-  if (mutex->TryLock()) {
-    if (current_time_ms >=
+  if (force) mutex->Lock();
+  if (force || mutex->TryLock()) {
+    if (force || current_time_ms >=
         (last_dump_timestamp_->GetLockHeld() + update_interval_ms_)) {
       // It's possible we'll need to do some of the following here for
       // cross-process consistency:

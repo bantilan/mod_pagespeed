@@ -478,6 +478,32 @@ TEST_F(StatisticsLoggerTest, MissingDashboardLogDoesNotDisableLiveCounters) {
   EXPECT_EQ(0, file_system_.num_output_file_opens());
 }
 
+TEST_F(StatisticsLoggerTest, ShutdownSavesUnsampledHtmlCountersWithoutDuplicates) {
+  StatisticsLogger writer(kLoggingIntervalMs, 100, kStatsLogFile,
+      stats_.AddVariable(kTimestampVarName)->impl(), &handler_, &stats_,
+      &file_system_, &timer_);
+  writer.Init();
+  timer_.AdvanceMs(2 * kLoggingIntervalMs);
+  writer.UpdateAndDumpIfRequired();
+  ASSERT_EQ(1, file_system_.num_output_file_opens());
+  stats_.GetVariable("html_cache_hits")->Add(17);
+  stats_.GetVariable("html_cache_inserts")->Add(3);
+  writer.UpdateAndDumpIfRequired();
+  EXPECT_EQ(1, file_system_.num_output_file_opens());
+  // Multiple workers can flush the same final counters and timestamp.
+  writer.UpdateAndDumpIfRequired(true);
+  writer.UpdateAndDumpIfRequired(true);
+  EXPECT_EQ(3, file_system_.num_output_file_opens());
+  timer_.AdvanceMs(1);
+  StatisticsLogger restarted(kLoggingIntervalMs, kMaxLogfileSizeKb, kStatsLogFile,
+      stats_.AddVariable(kTimestampVarName)->impl(), &handler_, &stats_,
+      &file_system_, &timer_);
+  std::map<GoogleString, int64> counters;
+  EXPECT_TRUE(restarted.PreviousDashboardCounters(&counters));
+  EXPECT_EQ(17, counters["html_cache_hits"]);
+  EXPECT_EQ(3, counters["html_cache_inserts"]);
+}
+
 TEST_F(StatisticsLoggerTest, LogfileTrimming) {
   const int64 kMaxLogfileSizeBytes = kMaxLogfileSizeKb * 1024;
 

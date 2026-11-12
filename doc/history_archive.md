@@ -182,6 +182,15 @@ always describes the current instance. Missing logs fall back to live counters.
 Oversized logs (over 16 MiB) are rejected rather than risking unbounded reads.
 Message archive retention, checkpoints and the five-minute scheduler are unchanged.
 
+The elected archive worker also asks the existing StatisticsLogger to write if
+its configured interval is due. This covers HTML cache hits that bypass normal
+rewrite processing. On graceful worker shutdown, the same background thread
+flushes a final statistics sample, serialized across workers using the logger's
+existing shared mutex. Repeated samples from one lifetime are not counted twice.
+There is no new timer, statistics file format or event log. The message archive
+does not take an extra shutdown snapshot. Abrupt termination (`SIGKILL`, power
+loss) can still lose counters since the last successful statistics sample.
+
 Each archival page returns up to 100 matching records. Each scan examines at
 most 256 segments and 16 MiB of segment data, one bounded segment at a time,
 and carries a continuation cursor even when a scan window has no matches. A

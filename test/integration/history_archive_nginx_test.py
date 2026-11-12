@@ -4,6 +4,7 @@ import argparse
 import base64
 import concurrent.futures
 import importlib.util
+import json
 from pathlib import Path
 import re
 import socket
@@ -19,6 +20,67 @@ spec.loader.exec_module(base)
 
 
 class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
+    def test_live_html_statistics_survive_immediate_restart(self):
+        cls = type(self)
+        config_path = self.root / 'nginx.conf'
+        original = config_path.read_text()
+        logs = self.root / 'logs/unsampled-html'
+        logs.mkdir(exist_ok=True)
+
+        def start_without_traffic():
+            cls.process = subprocess.Popen(
+                [base.OPTIONS.nginx, '-p', str(cls.root) + '/', '-c',
+                 str(config_path), '-e', str(cls.root / 'logs/error.log')],
+                stdout=cls.log, stderr=cls.log)
+            for _ in range(100):
+                if cls.process.poll() is not None:
+                    self.fail((self.root / 'logs/error.log').read_text())
+                try:
+                    with socket.create_connection(('127.0.0.1', cls.port), timeout=1):
+                        return
+                except OSError:
+                    time.sleep(.05)
+            self.fail('Nginx did not restart')
+
+        def cards(path):
+            page = self.fetch('/pagespeed_admin/' + path)[2]
+            return [int(value) for value in re.findall(
+                rb"pagespeed-dashboard-value'>(\d+)</div>", page)[:4]]
+
+        cls.stop()
+        try:
+            config_path.write_text(original.replace('HistoryArchiveInterval 1;',
+                'HistoryArchiveInterval 300;').replace('  pagespeed FileCachePath',
+                '  pagespeed StatisticsLogging on;\n  pagespeed LogDir "%s";\n'
+                '  pagespeed FileCachePath' % logs, 1))
+            start_without_traffic()
+            self.assertEqual(b'MISS', self.info(self.fetch('/?unsampled-html=1')[2])[0])
+            for _ in range(3):
+                self.assertEqual(b'HIT', self.info(self.fetch('/?unsampled-html=1')[2])[0])
+            self.fetch('/private.html')  # Ineligible responses count as bypasses.
+            live = json.loads(self.fetch('/pagespeed_admin/stats_json')[2])['variables']
+            names = ['html_cache_hits', 'html_cache_misses',
+                     'html_cache_bypasses', 'html_cache_inserts']
+            expected = [int(live[name]) for name in names]
+            self.assertTrue(all(value > 0 for value in expected), expected)
+            self.assertEqual(expected, cards('html_cache'))
+            # No five-minute archive or ten-minute statistics interval elapsed.
+            cls.stop()
+            saved = '\n'.join(p.read_text() for p in logs.glob('stats_log_*'))
+            self.assertIn('html_cache_hits: %d\n' % expected[0], saved)
+            start_without_traffic()
+            for _ in range(4):
+                self.assertEqual(expected, cards('html_cache'))
+                dashboard = self.fetch('/pagespeed_admin/dashboard')[2]
+                summary = dashboard[dashboard.index(b'HTML CACHE HITS'):]
+                actual = [int(v) for v in re.findall(
+                    rb"pagespeed-dashboard-value'>(\d+)</div>", summary)[:4]]
+                self.assertEqual(expected, actual)
+        finally:
+            cls.stop()
+            config_path.write_text(original)
+            start_without_traffic()
+
     def wait_archive(self, text):
         for _ in range(100):
             chunks = list((self.root / 'cache/history').glob('segment-*.psh'))

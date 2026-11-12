@@ -23,7 +23,8 @@ class HistoryArchive {
   };
   HistoryArchive(SharedCircularBuffer* buffer, Timer* timer,
                  const GoogleString& cache_path, int interval,
-                 int retention_days, int max_size_mb);
+                 int retention_days, int max_size_mb,
+                 std::function<void(bool)> statistics_snapshot = {});
   virtual ~HistoryArchive();
   void Start();
   void Stop();
@@ -59,6 +60,7 @@ class HistoryArchive {
   bool started_ = false;
   std::deque<std::function<void()>> jobs_;
   std::thread thread_;
+  std::function<void(bool)> statistics_snapshot_;
 };
 }  // namespace net_instaweb
 #endif
