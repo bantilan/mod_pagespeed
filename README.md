@@ -96,7 +96,8 @@ in the cache key, keeping AVIF, WebP-only, and original-format HTML separate.
 Existing image detection and conversion behavior is preserved; no `<picture>`
 elements or wrappers are introduced.
 
-When critical-image beaconing is active, storage waits for three valid beacons.
+When critical-image beaconing is active, storage waits for one valid, successful
+beacon result. The general beacon-sampling schedule remains unchanged.
 New successful critical-image/LCP evidence selects a fresh HTML entry. Sampled
 beacon/PerformanceObserver responses and rewrites with unfinished resource work
 are not stored, so an early rewrite or sampled beacon nonce is not frozen into

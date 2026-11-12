@@ -47,7 +47,9 @@ header contents are not stored in the cache value. Conservative header matching
 can reduce hit rate when otherwise irrelevant request headers change.
 
 When critical-image beaconing is active, HTML is not cached until the existing
-learning mechanism has received three valid beacons. The learned image evidence
+learning mechanism has received at least one valid, successful beacon result.
+This HTML-cache threshold does not change the general beacon-sampling schedule.
+The learned image evidence
 (including accepted LCP evidence) participates in the identity. A new successful
 beacon therefore invalidates the corresponding HTML variant. Sampling-due
 requests bypass the cache, and responses carrying sampled beacon initialization

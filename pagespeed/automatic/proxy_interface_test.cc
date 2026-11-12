@@ -3832,12 +3832,12 @@ TEST_F(HtmlPageCacheTest, ShowWithoutCacheReportsBypass) {
 class HtmlCacheBeaconFinder : public MockCriticalImagesFinder {
  public:
   explicit HtmlCacheBeaconFinder(Statistics* stats)
-      : MockCriticalImagesFinder(stats), ready(false), due(false), generation(1) {}
+      : MockCriticalImagesFinder(stats), valid_beacons(0), due(false), generation(1) {}
   void UpdateCriticalImagesSetInDriver(RewriteDriver* driver) override {
     MockCriticalImagesFinder::UpdateCriticalImagesSetInDriver(driver);
     CriticalKeys* support = driver->critical_images_info()->proto.
         mutable_html_critical_image_support();
-    support->set_valid_beacons_received(ready ? 3 : 0);
+    support->set_valid_beacons_received(valid_beacons);
     support->set_next_beacon_timestamp_ms(5000000000000LL);
     support->add_key_evidence()->set_key(IntegerToString(generation));
   }
@@ -3845,12 +3845,12 @@ class HtmlCacheBeaconFinder : public MockCriticalImagesFinder {
     UpdateCriticalImagesSetInDriver(driver);
     return due;
   }
-  bool ready;
+  int valid_beacons;
   bool due;
   int generation;
 };
 
-TEST_F(HtmlPageCacheTest, SuccessfulBeaconEvidenceRequiredAndNewEvidenceInvalidates) {
+TEST_F(HtmlPageCacheTest, OneSuccessfulBeaconRequiredAndNewEvidenceInvalidates) {
   factory()->set_use_beacon_results_in_filters(true);
   server_context()->set_enable_property_cache(true);
   server_context()->set_dom_cohort(SetupCohort(
@@ -3864,7 +3864,7 @@ TEST_F(HtmlPageCacheTest, SuccessfulBeaconEvidenceRequiredAndNewEvidenceInvalida
   server_context()->ComputeSignature(opts);
   ExpectStatus(Fetch(), "BYPASS");
   ExpectStatus(Fetch(), "BYPASS");
-  finder->ready = true;
+  finder->valid_beacons = 1;
   ExpectStatus(Fetch(), "MISS");
   ExpectStatus(Fetch(), "HIT");
   ++finder->generation;  // A successful new LCP/critical-image beacon.

@@ -155,7 +155,7 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
       const CriticalImagesInfo* info = driver_->critical_images_info();
       if (info == nullptr || due ||
           info->proto.html_critical_image_support().valid_beacons_received() <
-              kHighFreqBeaconCount) {
+              1) {
         eligible_ = false;
       } else {
         // Cache only the rewrite AFTER successful beacon learning. New image
