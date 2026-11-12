@@ -192,6 +192,22 @@ TEST_F(AdminSiteTest, DashboardShowsSavingsAndUptime) {
   EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-admin-sidebar"));
 }
 
+TEST_F(AdminSiteTest, DashboardShowsHtmlActivityWithoutInventingSavings) {
+  Statistics* stats = factory()->statistics();
+  stats->GetVariable("html_cache_inserts")->Add(4);
+  stats->GetVariable("html_cache_bytes_served")->Add(4096);
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->DashboardHandler(AdminSite::kPageSpeedAdmin, &fetch, stats);
+  EXPECT_THAT(buffer, ::testing::HasSubstr("<span>HTML</span><strong>Not measured</strong>"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Cached HTML served: 4.0 KB"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("<strong>HTML</strong><span>4 publications</span>"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-dashboard-activity-html"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("activity-track'><i style='width:100%"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-dashboard-total-value'>0 B</div>"));
+  EXPECT_THAT(buffer, ::testing::Not(::testing::HasSubstr("HTML CACHE HITS")));
+}
+
 TEST_F(AdminSiteTest, ImagesPageShowsRecordedRewriteAndComparison) {
   message_handler()->Message(
       kInfo,
@@ -213,7 +229,7 @@ TEST_F(AdminSiteTest, ImagesPageShowsRecordedRewriteAndComparison) {
 }
 // TODO(xqyin): Add unit tests for other methods in AdminSite.
 
-TEST_F(AdminSiteTest, HtmlCacheEmptyPageAndDashboardMetrics) {
+TEST_F(AdminSiteTest, HtmlCacheMetricsStayOnDedicatedPage) {
   factory()->statistics()->GetVariable("html_cache_hits")->Add(3);
   factory()->statistics()->GetVariable("html_cache_misses")->Add(1);
   GoogleString buffer;
@@ -230,7 +246,9 @@ TEST_F(AdminSiteTest, HtmlCacheEmptyPageAndDashboardMetrics) {
   admin_site_->DashboardHandler(AdminSite::kPageSpeedAdmin, &dashboard_fetch,
                                  factory()->statistics());
   EXPECT_THAT(dashboard, ::testing::HasSubstr("href='html_cache'"));
-  EXPECT_THAT(dashboard, ::testing::HasSubstr("HTML CACHE HITS"));
+  EXPECT_THAT(dashboard, ::testing::Not(::testing::HasSubstr("HTML CACHE HITS")));
+  EXPECT_THAT(dashboard, ::testing::Not(::testing::HasSubstr("<h2>HTML rewrite cache</h2>")));
+  EXPECT_THAT(dashboard, ::testing::HasSubstr("Savings by resource"));
 }
 
 TEST_F(AdminSiteTest, HtmlCacheRecordsAreEscapedAndDeduplicated) {

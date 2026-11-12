@@ -72,10 +72,8 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
             for _ in range(4):
                 self.assertEqual(expected, cards('html_cache'))
                 dashboard = self.fetch('/pagespeed_admin/dashboard')[2]
-                summary = dashboard[dashboard.index(b'HTML CACHE HITS'):]
-                actual = [int(v) for v in re.findall(
-                    rb"pagespeed-dashboard-value'>(\d+)</div>", summary)[:4]]
-                self.assertEqual(expected, actual)
+                self.assertNotIn(b'HTML CACHE HITS', dashboard)
+                self.assertIn(b'Savings by resource', dashboard)
         finally:
             cls.stop()
             config_path.write_text(original)
@@ -226,18 +224,20 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
                     self.assertIn(b'3.0 MB', dashboard)
                     self.assertIn(b">50</div>", dashboard)
                     self.assertIn(b">37</div>", dashboard)
-                    self.assertIn(b">25</div>", dashboard)
+                    self.assertIn(b'<strong>HTML</strong><span>13 publications</span>', dashboard)
+                    self.assertIn(b'Cached HTML served: 1.0 MB', dashboard)
+                    self.assertIn(b'<span>HTML</span><strong>Not measured</strong>', dashboard)
+                    self.assertNotIn(b'HTML CACHE HITS', dashboard)
                     html_page = self.fetch('/pagespeed_admin/html_cache')[2]
                     def summary(page):
                         match = re.search(rb'HTML CACHE HITS.*?compression savings\.</p>',
                                           page, re.S)
                         self.assertIsNotNone(match)
                         return match[0]
-                    saved_summary = summary(dashboard)
+                    saved_summary = summary(html_page)
                     for value in [25, 7, 11, 13]:
                         self.assertIn(('>%d</div>' % value).encode(), saved_summary)
                     self.assertIn(b'HTML served from cache: 1.0 MB', saved_summary)
-                    self.assertEqual(saved_summary, summary(html_page))
                     # Repeated reads must not add already-recovered counters again.
                     self.assertEqual(saved_summary, summary(
                         self.fetch('/pagespeed_admin/html_cache')[2]))

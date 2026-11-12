@@ -1545,6 +1545,7 @@ mod rules
 .pagespeed-dashboard-legend-js { background: #39856a; }
 .pagespeed-dashboard-legend-css { background: #daa353; }
 .pagespeed-dashboard-legend-image { background: #7196a0; }
+.pagespeed-dashboard-legend-html { background: #8a9885; }
 .pagespeed-dashboard-chart .pagespeed-dashboard-footnote {
   margin: 11px 0 0;
   color: #8b9890;
@@ -1573,6 +1574,7 @@ mod rules
 }
 .pagespeed-dashboard-activity-css { color: #866b3e; background: #f8f1e5; }
 .pagespeed-dashboard-activity-js { color: #456b76; background: #edf3f4; }
+.pagespeed-dashboard-activity-html { color: #52694b; background: #edf1e9; }
 .pagespeed-dashboard-activity-main { flex: 1; min-width: 0; }
 .pagespeed-dashboard-activity-main > div {
   display: flex;

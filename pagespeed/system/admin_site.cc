@@ -685,6 +685,9 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
   int64 css_rewrites = DashboardCounter(stats, "css_filter_blocks_rewritten", previous);
   int64 image_rewrites = DashboardCounter(stats, "image_rewrites", previous);
   int64 total_rewrites = javascript_rewrites + css_rewrites + image_rewrites;
+  int64 html_publications = DashboardCounter(stats, "html_cache_inserts", previous);
+  int64 html_served = DashboardCounter(stats, "html_cache_bytes_served", previous);
+  int64 activity_total = total_rewrites + html_publications;
   GoogleString uptime = FormatDashboardUptime(timer_->NowMs() - start_time_ms_);
   int javascript_percent = DashboardPercent(javascript_saved, total_saved);
   int css_percent = DashboardPercent(css_saved, total_saved);
@@ -745,14 +748,6 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
              "</article></div>"),
       message_handler_);
 
-  fetch->Write("<section class='pagespeed-dashboard-panel'>"
-      "<div class='pagespeed-dashboard-panel-heading'><div>"
-      "<h2>HTML rewrite cache</h2><p>Reuse completed, browser-isolated HTML "
-      "rewrites</p></div><a href='html_cache'>Browse HTML history &rarr;</a>"
-      "</div>", message_handler_);
-  WriteHtmlCacheSummary(stats, fetch, message_handler_, previous);
-  fetch->Write("</section>", message_handler_);
-
   fetch->Write(
       "<div class='pagespeed-dashboard-panels'>"
       "<section class='pagespeed-dashboard-panel'>"
@@ -787,28 +782,41 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
                  message_handler_);
   }
   fetch->Write(
+      "<div class='pagespeed-dashboard-breakdown-row'>"
+      "<span class='pagespeed-dashboard-legend-dot pagespeed-dashboard-legend-html'>"
+      "</span><span>HTML</span><strong>Not measured</strong>"
+      "<small aria-label='Savings percentage unavailable'>&mdash;</small></div>",
+      message_handler_);
+  fetch->Write(StrCat("<p class='pagespeed-dashboard-footnote'>Cached HTML served: ",
+      FormatDashboardBytes(html_served),
+      ". HTML input/output savings are not recorded; cache-served bytes are "
+      "excluded from savings totals and percentages.</p>"), message_handler_);
+  fetch->Write(
       "<p class='pagespeed-dashboard-footnote'>Savings include available saved "
       "statistics and current counters. They represent optimized "
       "resource bytes, not a measurement of all network traffic.</p>"
       "</section><section class='pagespeed-dashboard-panel'>"
       "<div class='pagespeed-dashboard-panel-heading'><div>"
-      "<h2>Rewrite activity</h2><p>Successful resource rewrites by type</p>"
+      "<h2>Rewrite activity</h2><p>Resource rewrites and HTML cache publications</p>"
       "</div></div><div class='pagespeed-dashboard-activity'>",
       message_handler_);
-  const char* activity_labels[] = {"Images", "JavaScript", "CSS"};
-  const char* activity_classes[] = {"image", "js", "css"};
-  int64 activity_values[] = {image_rewrites, javascript_rewrites, css_rewrites};
+  const char* activity_labels[] = {"Images", "JavaScript", "CSS", "HTML"};
+  const char* activity_classes[] = {"image", "js", "css", "html"};
+  const char* activity_icons[] = {"IM", "JS", "#", "HT"};
+  int64 activity_values[] = {image_rewrites, javascript_rewrites, css_rewrites,
+                             html_publications};
   for (int i = 0; i < arraysize(activity_labels); ++i) {
-    int percent = DashboardPercent(activity_values[i], total_rewrites);
+    int percent = DashboardPercent(activity_values[i], activity_total);
     fetch->Write(StrCat("<div class='pagespeed-dashboard-activity-row'>"
                         "<span class='pagespeed-dashboard-activity-icon "
                         "pagespeed-dashboard-activity-",
                         activity_classes[i], "'>",
-                        i == 0 ? "IM" : (i == 1 ? "JS" : "#"),
+                        activity_icons[i],
                         "</span><div class='pagespeed-dashboard-activity-main'>"
                         "<div><strong>", activity_labels[i], "</strong>"
                         "<span>", Integer64ToString(activity_values[i]),
-                        " rewrites</span></div><span class='pagespeed-dashboard-"
+                        i == 3 ? " publications</span></div>" : " rewrites</span></div>",
+                        "<span class='pagespeed-dashboard-"
                         "activity-track'><i style='width:",
                         IntegerToString(percent), "%'></i></span></div></div>"),
                  message_handler_);
