@@ -85,7 +85,16 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
         cls.stop()
         try:
             config_path.write_text(config.replace('HistoryArchiveInterval 1;',
-                                                  'HistoryArchiveInterval 300;'))
+                                                  'HistoryArchiveInterval 300;').replace(
+                '  pagespeed FileCachePath',
+                '  pagespeed StatisticsLogging on;\n  pagespeed LogDir "%s";\n'
+                '  pagespeed FileCachePath' % (self.root / 'logs'), 1))
+            (self.root / 'logs/stats_log_dummy_hostname:-1').write_text(
+                'timestamp: 1270493486000\nstatistics_instance: 123\n'
+                'image_rewrites: 37\nimage_rewrite_total_bytes_saved: 1048576\n'
+                'javascript_blocks_minified: 9\njavascript_total_bytes_saved: 1048576\n'
+                'css_filter_blocks_rewritten: 4\ncss_filter_total_bytes_saved: 1048576\n'
+                'html_cache_hits: 25\nhtml_cache_bytes_served: 1048576\n')
             history.mkdir(exist_ok=True)
             for p in history.iterdir():
                 p.unlink()
@@ -147,8 +156,13 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
                     allocated = history.stat().st_blocks * 512
                     allocated += sum(p.stat().st_blocks * 512 for p in history.iterdir())
                     self.assertEqual(allocated, int(usage[1]))
-                    self.assertIn(b'http://archive.example/restart.jpg',
-                                  self.fetch('/pagespeed_admin/dashboard')[2])
+                    dashboard = self.fetch('/pagespeed_admin/dashboard')[2]
+                    self.assertIn(b'http://archive.example/restart.jpg', dashboard)
+                    self.assertIn(b'Recovered saved statistics + current run', dashboard)
+                    self.assertIn(b'3.0 MB', dashboard)
+                    self.assertIn(b">50</div>", dashboard)
+                    self.assertIn(b">37</div>", dashboard)
+                    self.assertIn(b">25</div>", dashboard)
                     self.assertLess(time.monotonic() - began, 30)
                     self.assertEqual(previous, {p.name: p.read_bytes()
                                                for p in history.glob('segment-*.psh')})

@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <map>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -73,6 +74,10 @@ class StatisticsLogger {
   //
   // It is OK to call this multiple times (e.g. before & after a fork).
   void Init();
+
+  // Sampled counters from earlier server lifetimes, not a lifetime ledger.
+  // Lazy, bounded recovery, cached per worker; never called by website traffic.
+  bool PreviousDashboardCounters(std::map<GoogleString, int64>* counters);
 
  private:
   friend class StatisticsLoggerTest;
@@ -131,6 +136,11 @@ class StatisticsLogger {
   const int64 max_logfile_size_kb_;
   GoogleString logfile_name_;
   VariableMap variables_to_log_;
+  const int64 instance_start_ms_;
+  const int64 instance_id_;
+  std::mutex dashboard_mutex_;
+  bool dashboard_loaded_;
+  std::map<GoogleString, int64> previous_dashboard_counters_;
 
   DISALLOW_COPY_AND_ASSIGN(StatisticsLogger);
 };

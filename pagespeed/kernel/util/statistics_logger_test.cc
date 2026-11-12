@@ -423,8 +423,59 @@ TEST_F(StatisticsLoggerTest, FromStats) {
     TrimWhitespace(&parts[1]);
     ASSERT_TRUE(StringToInt64(parts[1], &value)) << parts[1];
 
-    EXPECT_EQ(value, stats_.GetVariable(name)->Get());
+    if (name == "statistics_instance") {
+      EXPECT_EQ(timer_.NowUs(), value);
+    } else {
+      EXPECT_EQ(value, stats_.GetVariable(name)->Get());
+    }
   }
+}
+
+TEST_F(StatisticsLoggerTest, RecoverPreviousDashboardCounters) {
+  GoogleString log;
+  const int64 now = timer_.NowMs();
+  const char* samples[] = {
+    "statistics_instance: 10\nimage_rewrites: 8\nhtml_cache_hits: 12\n",
+    "statistics_instance: 10\nimage_rewrites: 10\nhtml_cache_hits: 15\n",
+    // A new lifetime must be added even when its count exceeds the old one.
+    "statistics_instance: 20\nimage_rewrites: 40\nhtml_cache_hits: 1\n",
+    "statistics_instance: 20\nimage_rewrites: 41\nhtml_cache_hits: 2\n",
+  };
+  for (int i = 0; i < arraysize(samples); ++i)
+    StrAppend(&log, "timestamp: ", Integer64ToString(now - 10 + i), "\n", samples[i]);
+  StrAppend(&log, "timestamp: ", Integer64ToString(now + 1),
+            "\nimage_rewrites: 999\n");
+  ASSERT_TRUE(file_system_.WriteFile(kStatsLogFile, log, &handler_));
+  std::map<GoogleString, int64> counters;
+  EXPECT_TRUE(logger_.PreviousDashboardCounters(&counters));
+  EXPECT_EQ(51, counters["image_rewrites"]);
+  EXPECT_EQ(17, counters["html_cache_hits"]);
+  // Recovery is cached; current-run samples and later disk changes cannot
+  // contribute twice, and no subsequent disk read is required.
+  ASSERT_TRUE(file_system_.RemoveFile(kStatsLogFile, &handler_));
+  EXPECT_TRUE(logger_.PreviousDashboardCounters(&counters));
+  EXPECT_EQ(51, counters["image_rewrites"]);
+}
+
+TEST_F(StatisticsLoggerTest, RecoverLegacyDashboardCountersAndResets) {
+  GoogleString log;
+  int counts[] = {10, 12, 2, 5};
+  for (int i = 0; i < arraysize(counts); ++i)
+    StrAppend(&log, "timestamp: ", Integer64ToString(timer_.NowMs() - 10 + i),
+              "\nimage_rewrites: ", IntegerToString(counts[i]),
+              "\nmalformed sample\nimage_rewrite_total_bytes_saved: invalid\n");
+  ASSERT_TRUE(file_system_.WriteFile(kStatsLogFile, log, &handler_));
+  std::map<GoogleString, int64> counters;
+  EXPECT_TRUE(logger_.PreviousDashboardCounters(&counters));
+  EXPECT_EQ(17, counters["image_rewrites"]);
+  EXPECT_EQ(0, counters.count("image_rewrite_total_bytes_saved"));
+}
+
+TEST_F(StatisticsLoggerTest, MissingDashboardLogDoesNotDisableLiveCounters) {
+  std::map<GoogleString, int64> counters;
+  EXPECT_FALSE(logger_.PreviousDashboardCounters(&counters));
+  EXPECT_TRUE(counters.empty());
+  EXPECT_EQ(0, file_system_.num_output_file_opens());
 }
 
 TEST_F(StatisticsLoggerTest, LogfileTrimming) {

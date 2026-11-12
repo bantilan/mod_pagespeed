@@ -292,9 +292,15 @@ void ReadRecentImageRewrites(MessageHandler* message_handler, size_t max_rows,
   }
 }
 
-int64 ReadVariable(const Statistics* stats, StringPiece name) {
+int64 DashboardCounter(Statistics* stats, const char* name,
+                       const std::map<GoogleString, int64>& previous) {
   Variable* variable = stats->FindVariable(name);
-  return variable == nullptr ? 0 : variable->Get();
+  UpDownCounter* counter = variable == nullptr
+      ? stats->FindUpDownCounter(name) : nullptr;
+  int64 live = std::max<int64>(0, variable != nullptr ? variable->Get() :
+      (counter != nullptr ? counter->Get() : 0));
+  auto found = previous.find(name);
+  return live + (found == previous.end() ? 0 : found->second);
 }
 
 struct HtmlCacheRow {
@@ -393,7 +399,8 @@ int DashboardPercent(int64 value, int64 total) {
 }
 
 void WriteHtmlCacheSummary(Statistics* stats, AsyncFetch* fetch,
-                           MessageHandler* handler) {
+                           MessageHandler* handler,
+                           const std::map<GoogleString, int64>& previous = {}) {
   const char* names[] = {"html_cache_hits", "html_cache_misses",
                          "html_cache_bypasses", "html_cache_inserts"};
   const char* labels[] = {"HTML CACHE HITS", "LOOKUP MISSES",
@@ -405,17 +412,17 @@ void WriteHtmlCacheSummary(Statistics* stats, AsyncFetch* fetch,
     fetch->Write(StrCat("<article class='pagespeed-dashboard-card'><div "
         "class='pagespeed-dashboard-card-label'>", labels[i],
         "</div><div class='pagespeed-dashboard-value'>",
-        Integer64ToString(ReadVariable(stats, names[i])),
+        Integer64ToString(DashboardCounter(stats, names[i], previous)),
         "</div><div class='pagespeed-dashboard-card-note'>", notes[i],
         "</div></article>"), handler);
   }
-  int64 hits = ReadVariable(stats, "html_cache_hits");
-  int64 misses = ReadVariable(stats, "html_cache_misses");
+  int64 hits = DashboardCounter(stats, "html_cache_hits", previous);
+  int64 misses = DashboardCounter(stats, "html_cache_misses", previous);
   fetch->Write(StrCat("</div><p class='pagespeed-dashboard-footnote'>Hit rate: ",
       IntegerToString(DashboardPercent(hits, hits + misses)),
       "% of lookups. HTML served from cache: ",
-      FormatDashboardBytes(ReadVariable(stats, "html_cache_bytes_served")),
-      ". Counters are cumulative since statistics reset; served bytes are not "
+      FormatDashboardBytes(DashboardCounter(stats, "html_cache_bytes_served", previous)),
+      ". Counters include available saved samples plus current activity; served bytes are not "
       "compression savings.</p>"), handler);
 }
 
@@ -651,13 +658,16 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
   AdminHtml admin_html("dashboard", "", source, timer_, fetch,
                        message_handler_);
 
+  std::map<GoogleString, int64> previous;
+  if (archive_options != nullptr && archive_options->history_archive() &&
+      stats->console_logger() != nullptr) {
+    stats->console_logger()->PreviousDashboardCounters(&previous);
+  }
+
   int64 javascript_saved =
-      ReadVariable(stats, "javascript_total_bytes_saved");
-  UpDownCounter* css_saved_counter =
-      stats->FindUpDownCounter("css_filter_total_bytes_saved");
-  int64 css_saved =
-      css_saved_counter == nullptr ? 0 : css_saved_counter->Get();
-  int64 image_saved = ReadVariable(stats, "image_rewrite_total_bytes_saved");
+      DashboardCounter(stats, "javascript_total_bytes_saved", previous);
+  int64 css_saved = DashboardCounter(stats, "css_filter_total_bytes_saved", previous);
+  int64 image_saved = DashboardCounter(stats, "image_rewrite_total_bytes_saved", previous);
   javascript_saved = std::max<int64>(0, javascript_saved);
   css_saved = std::max<int64>(0, css_saved);
   image_saved = std::max<int64>(0, image_saved);
@@ -665,9 +675,9 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
                       std::max<int64>(0, css_saved) +
                       std::max<int64>(0, image_saved);
   int64 javascript_rewrites =
-      ReadVariable(stats, "javascript_blocks_minified");
-  int64 css_rewrites = ReadVariable(stats, "css_filter_blocks_rewritten");
-  int64 image_rewrites = ReadVariable(stats, "image_rewrites");
+      DashboardCounter(stats, "javascript_blocks_minified", previous);
+  int64 css_rewrites = DashboardCounter(stats, "css_filter_blocks_rewritten", previous);
+  int64 image_rewrites = DashboardCounter(stats, "image_rewrites", previous);
   int64 total_rewrites = javascript_rewrites + css_rewrites + image_rewrites;
   GoogleString uptime = FormatDashboardUptime(timer_->NowMs() - start_time_ms_);
   int javascript_percent = DashboardPercent(javascript_saved, total_saved);
@@ -692,7 +702,11 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "<article class='pagespeed-dashboard-card pagespeed-dashboard-total'>"
       "<div class='pagespeed-dashboard-card-label'>TOTAL DATA SAVED</div>",
       message_handler_);
-  (void)archive_options;
+  if (!previous.empty()) {
+    fetch->Write("<div class='pagespeed-dashboard-card-note'>Recovered saved "
+        "statistics + current run. Sampled history excludes unsaved activity; "
+        "legacy reset boundaries may be incomplete.</div>", message_handler_);
+  }
   fetch->Write(StrCat("<div class='pagespeed-dashboard-total-value'>",
                       FormatDashboardBytes(total_saved), "</div>"),
                message_handler_);
@@ -730,15 +744,15 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       "<h2>HTML rewrite cache</h2><p>Reuse completed, browser-isolated HTML "
       "rewrites</p></div><a href='html_cache'>Browse HTML history &rarr;</a>"
       "</div>", message_handler_);
-  WriteHtmlCacheSummary(stats, fetch, message_handler_);
+  WriteHtmlCacheSummary(stats, fetch, message_handler_, previous);
   fetch->Write("</section>", message_handler_);
 
   fetch->Write(
       "<div class='pagespeed-dashboard-panels'>"
       "<section class='pagespeed-dashboard-panel'>"
       "<div class='pagespeed-dashboard-panel-heading'><div><h2>Savings by "
-      "resource</h2><p>Cumulative optimized bytes since statistics reset</p>"
-      "</div><span class='pagespeed-dashboard-period'>LIFETIME</span></div>"
+      "resource</h2><p>Available saved statistics plus current activity</p>"
+      "</div><span class='pagespeed-dashboard-period'>RECORDED</span></div>"
       "<div class='pagespeed-dashboard-chart' role='img' aria-label='Savings "
       "by resource: JavaScript, CSS, and images'>"
       "<div class='pagespeed-dashboard-stack'>"
@@ -767,8 +781,8 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
                  message_handler_);
   }
   fetch->Write(
-      "<p class='pagespeed-dashboard-footnote'>Savings are cumulative since "
-      "the statistics counters were last reset. They represent optimized "
+      "<p class='pagespeed-dashboard-footnote'>Savings include available saved "
+      "statistics and current counters. They represent optimized "
       "resource bytes, not a measurement of all network traffic.</p>"
       "</section><section class='pagespeed-dashboard-panel'>"
       "<div class='pagespeed-dashboard-panel-heading'><div>"
@@ -1719,7 +1733,13 @@ void AdminSite::AdminPage(
     }
     const GoogleString* stored = combined_history ? &history_log : nullptr;
     if ((leaf == "dashboard") || leaf.empty()) {
-      DashboardHandler(kPageSpeedAdmin, fetch, stats, global_system_rewrite_options,
+      // Use the matching local logger/counters if global logging was not
+      // enabled (e.g. StatisticsLogging configured inside a server block).
+      Statistics* dashboard_stats = stats;
+      if (global_system_rewrite_options->history_archive() &&
+          stats->console_logger() == nullptr && statistics->console_logger() != nullptr)
+        dashboard_stats = statistics;
+      DashboardHandler(kPageSpeedAdmin, fetch, dashboard_stats, global_system_rewrite_options,
                        stored);
     } else if (leaf == "history") {
       HistoryArchiveHandler(kPageSpeedAdmin, fetch, *global_system_rewrite_options);

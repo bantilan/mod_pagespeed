@@ -152,6 +152,31 @@ classification recognizes known message wording/source filenames; Message
 History remains the authoritative unfiltered record. No successful-rewrite
 inventories, per-resource size fields or optimization events are invented.
 
+### Dashboard counters after restart
+
+With `HistoryArchive on`, the dashboard also recovers previously saved savings,
+rewrite counts and HTML cache counters from the existing `StatisticsLogger`.
+Enable `StatisticsLogging on` and configure `LogDir` to retain these samples.
+The message archive is not a source of aggregate performance counters: a
+diagnostic line or an image history row is not necessarily a distinct rewrite.
+No additional event pipeline, snapshot timer or per-request write is introduced.
+
+Recovery streams the selected logger's file once per worker on the first
+dashboard request, caches only eleven counter totals, and adds current live
+counters on each render. When a global logger is unavailable, the dashboard
+uses the local logger **and its matching local counters**, not mixed scopes.
+New statistics samples include a pre-fork server-lifetime identifier. Samples
+from the current lifetime are excluded from recovery to prevent double counting.
+Old-format logs remain readable; decreases identify observable counter resets.
+
+These are **sampled totals, not a complete lifetime ledger**. Unsampled work,
+trimmed statistics logs and unobservable resets in legacy logs cannot be
+reconstructed. HTML cache counters are included in future statistics samples;
+older logs that did not save them cannot supply their previous values. Uptime
+always describes the current instance. Missing logs fall back to live counters.
+Oversized logs (over 16 MiB) are rejected rather than risking unbounded reads.
+Message archive retention, checkpoints and the five-minute scheduler are unchanged.
+
 Each archival page returns up to 100 matching records. Each scan examines at
 most 256 segments and 16 MiB of segment data, one bounded segment at a time,
 and carries a continuation cursor even when a scan window has no matches. A

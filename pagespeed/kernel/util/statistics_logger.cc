@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <map>
+#include <limits>
 #include <memory>
 #include <set>
 #include <utility>                      // for pair
@@ -87,6 +88,16 @@ const char* const kOtherLoggedVars[] = {
   "flatten_imports_limit_exceeded", "flatten_imports_minify_failed",
   "flatten_imports_recursion", "css_filter_parse_failures",
   "converted_meta_tags", "javascript_minification_failures",
+  "html_cache_hits", "html_cache_misses", "html_cache_bypasses",
+  "html_cache_inserts", "html_cache_bytes_served",
+};
+
+const char* const kDashboardCounters[] = {
+  "javascript_total_bytes_saved", "css_filter_total_bytes_saved",
+  "image_rewrite_total_bytes_saved", "javascript_blocks_minified",
+  "css_filter_blocks_rewritten", "image_rewrites", "html_cache_hits",
+  "html_cache_misses", "html_cache_bypasses", "html_cache_inserts",
+  "html_cache_bytes_served",
 };
 
 const char* const kGraphsVars[] = {
@@ -147,7 +158,10 @@ StatisticsLogger::StatisticsLogger(
       file_system_(file_system),
       timer_(timer),
       update_interval_ms_(update_interval_ms),
-      max_logfile_size_kb_(max_logfile_size_kb) {
+      max_logfile_size_kb_(max_logfile_size_kb),
+      instance_start_ms_(timer->NowMs()),
+      instance_id_(timer->NowUs()),
+      dashboard_loaded_(false) {
   logfile_name.CopyToString(&logfile_name_);
 }
 
@@ -187,7 +201,8 @@ void StatisticsLogger::AddVariable(StringPiece var_name) {
   VariableOrCounter var_or_counter;
   var_or_counter.first = statistics_->FindVariable(var_name);
   if (var_or_counter.first == NULL) {
-    var_or_counter.second = statistics_->GetUpDownCounter(var_name);
+    var_or_counter.second = statistics_->FindUpDownCounter(var_name);
+    if (var_or_counter.second == nullptr) return;  // Optional system counters.
   }
   variables_to_log_[var_name] = var_or_counter;
 }
@@ -233,6 +248,9 @@ void StatisticsLogger::DumpConsoleVarsToWriter(
     int64 current_time_ms, Writer* writer) {
   writer->Write(StringPrintf("timestamp: %s\n",
       Integer64ToString(current_time_ms).c_str()), message_handler_);
+  // Constructed before fork, so every worker shares the same lifetime ID.
+  writer->Write(StrCat("statistics_instance: ", Integer64ToString(instance_id_),
+                       "\n"), message_handler_);
 
   for (VariableMap::const_iterator iter = variables_to_log_.begin();
        iter != variables_to_log_.end(); ++iter) {
@@ -245,6 +263,65 @@ void StatisticsLogger::DumpConsoleVarsToWriter(
   }
 
   writer->Flush(message_handler_);
+}
+
+bool StatisticsLogger::PreviousDashboardCounters(
+    std::map<GoogleString, int64>* counters) {
+  std::lock_guard<std::mutex> lock(dashboard_mutex_);
+  if (!dashboard_loaded_) {
+    int64 size;
+    // Refuse unexpectedly large/corrupt logs. The normal logger limit is 1 MiB.
+    if (!file_system_->Size(logfile_name_, &size, message_handler_) ||
+        size > 16 * 1024 * 1024) return false;
+    FileSystem::InputFile* file =
+        file_system_->OpenInputFile(logfile_name_.c_str(), message_handler_);
+    if (file == nullptr) return false;
+    StatisticsLogfileReader reader(file, 0, instance_start_ms_ - 1, 0,
+                                   message_handler_);
+    std::map<GoogleString, int64> previous, totals;
+    int64 last_instance = 0, timestamp = 0;
+    GoogleString data;
+    while (reader.ReadNextDataBlock(&timestamp, &data)) {
+      if (timestamp >= instance_start_ms_) break;
+      std::map<StringPiece, StringPiece> values;
+      StringPiece remaining(data);
+      while (!remaining.empty()) {
+        size_t newline = remaining.find('\n');
+        StringPiece line = remaining.substr(0, newline);
+        remaining.remove_prefix(newline == StringPiece::npos ?
+                                 remaining.size() : newline + 1);
+        size_t colon = line.find(": ");
+        if (colon == StringPiece::npos || line.size() > 1024) continue;
+        StringPiece name = line.substr(0, colon);
+        if (name == "statistics_instance") values[name] = line.substr(colon + 2);
+        for (const char* wanted : kDashboardCounters)
+          if (name == wanted) values[name] = line.substr(colon + 2);
+      }
+      int64 instance = 0;
+      StringToInt64(values["statistics_instance"], &instance);
+      if (instance == instance_id_) continue;
+      if (instance != last_instance) previous.clear();
+      last_instance = instance;
+      for (const char* name : kDashboardCounters) {
+        auto found = values.find(name);
+        int64 value;
+        if (found == values.end() || !StringToInt64(found->second, &value) ||
+            value < 0) continue;
+        // Legacy logs have no instance ID: a decreasing counter identifies a
+        // reset. Unsampled activity and resets cannot be reconstructed.
+        int64 delta = value >= previous[name] ? value - previous[name] : value;
+        // Ignore corrupt samples that would overflow the cumulative value.
+        if (delta <= std::numeric_limits<int64>::max() - totals[name])
+          totals[name] += delta;
+        previous[name] = value;
+      }
+    }
+    file_system_->Close(file, message_handler_);
+    previous_dashboard_counters_.swap(totals);
+    dashboard_loaded_ = true;
+  }
+  *counters = previous_dashboard_counters_;
+  return !counters->empty();
 }
 
 void StatisticsLogger::TrimLogfileIfNeeded() {
