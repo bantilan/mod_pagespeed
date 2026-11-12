@@ -135,6 +135,16 @@ Expect `MISS` followed by `HIT` once the response is eligible and beacon/resourc
 learning has settled. See [HTML cache documentation](doc/html_cache.md) for
 invalidation, limitations, and integration-test commands.
 
+The PageSpeed admin dashboard shows HTML-cache hit/miss/bypass counters, hit
+rate, publication attempts, and cached HTML bytes served. Open
+`/pagespeed_admin/html_cache` for recent publication history with URL search,
+device/capability filters, variant IDs, sizes, creation times, and expiry.
+Like Images, history requires a nonzero `pagespeed MessageBufferSize` and shows
+up to 100 recent distinct variants retained in the bounded shared message
+buffer. It is not a live inventory of every backend entry; expired, purged or
+evicted entries may still appear as history. HTML bodies and raw request headers
+are not recorded.
+
 mod_pagespeed releases are available as [precompiled linux packages](https://modpagespeed.com/doc/download) or as [source](https://modpagespeed.com/doc/build_mod_pagespeed_from_source). (See [Release Notes](https://modpagespeed.com/doc/release_notes) for information about bugs fixed)
 
 mod_pagespeed is an open-source Apache module which automatically applies web performance best practices to pages, and associated assets (CSS, JavaScript, images) without requiring that you modify your existing content or workflow.

@@ -35,20 +35,24 @@
 #include "net/instaweb/rewriter/public/domain_rewrite_filter.h"
 #include "net/instaweb/rewriter/public/experiment_matcher.h"
 #include "net/instaweb/rewriter/public/experiment_util.h"
+#include "net/instaweb/rewriter/public/request_properties.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
 #include "net/instaweb/rewriter/public/server_context.h"
 #include "net/instaweb/rewriter/public/url_namer.h"
 #include "net/instaweb/util/public/fallback_property_page.h"
 #include "pagespeed/kernel/base/abstract_mutex.h"
+#include "pagespeed/kernel/base/base64_util.h"
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/cache_interface.h"
 #include "pagespeed/kernel/base/callback.h"
 #include "pagespeed/kernel/base/function.h"
+#include "pagespeed/kernel/base/message_handler.h"
 #include "pagespeed/kernel/base/ref_counted_ptr.h"
 #include "pagespeed/kernel/base/request_trace.h"
 #include "pagespeed/kernel/base/sha1_signature.h"
 #include "pagespeed/kernel/base/shared_string.h"
+#include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/stl_util.h"
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/base/timer.h"
@@ -75,6 +79,8 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
       : driver_(driver), output_(output), url_(url),
         cache_(driver->server_context()->metadata_cache()),
         timer_(driver->server_context()->timer()),
+        stats_(driver->server_context()->statistics()),
+        enabled_(driver->options()->html_cache()),
         show_(driver->options()->show_cache_timestamp()), eligible_(false),
         hit_(false), good_(true), created_ms_(0), expires_ms_(0),
         ttl_ms_(0), origin_expiry_ms_(0), completion_(nullptr) {
@@ -95,6 +101,12 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
         options->Enabled(RewriteOptions::kPrioritizeCriticalCss)) {
       return;
     }
+    device_ = UserAgentMatcher::DeviceTypeString(
+        driver->request_properties()->GetDeviceType()).as_string();
+    formats_ = driver->request_properties()->SupportsAvifRewrittenUrls()
+        ? "AVIF capable" :
+        (driver->request_properties()->SupportsWebpRewrittenUrls()
+             ? "WebP capable" : "Original formats");
     for (const char* name : forbidden) {
       if (request->Has(name)) return;
     }
@@ -153,6 +165,7 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
       }
     }
     if (!eligible_) {
+      if (enabled_) Count("html_cache_bypasses", 1);
       CompleteLookup();
       return;
     }
@@ -197,6 +210,7 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
     if (!success || !good_) return false;
     if (hit_) {
       good_ = output_->Write(body_, handler);
+      if (good_) Count("html_cache_bytes_served", body_.size());
     } else if (eligible_ && !body_.empty()) {
       // Never freeze a sampled beacon nonce into a cached document, including
       // the boundary case where sampling becomes due during this rewrite.
@@ -211,6 +225,20 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
           SharedString value(StrCat(Integer64ToString(now), "\n",
               Integer64ToString(expires_ms_), "\n", body_));
           cache_->Put(key_, value);
+          Count("html_cache_inserts", 1);
+          // Record publications, not every hit. No raw request headers or
+          // HTML bodies enter the admin history; private requests never enter
+          // this path. Encoding keeps URLs from injecting log delimiters.
+          if (url_.size() <= 4096) {
+            GoogleString encoded_url;
+            Web64Encode(url_, &encoded_url);
+            handler->Message(kInfo,
+                "PS_HTML_DETAIL\t%lld\t%lld\t%lld\t%s\t%s\t%s\t%s",
+                static_cast<long long>(created_ms_),
+                static_cast<long long>(expires_ms_),
+                static_cast<long long>(body_.size()), device_.c_str(),
+                formats_.c_str(), key_.c_str(), encoded_url.c_str());
+          }
         }
       }
     }
@@ -260,6 +288,7 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
 
   void Done(CacheInterface::KeyState state) override {
     hit_ = state == CacheInterface::kAvailable;
+    Count(hit_ ? "html_cache_hits" : "html_cache_misses", 1);
     if (!hit_) {
       created_ms_ = 0;
       body_.clear();
@@ -268,6 +297,11 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
   }
 
  private:
+  void Count(const char* name, int64 amount) {
+    Variable* variable = stats_->FindVariable(name);
+    if (variable != nullptr) variable->Add(amount);
+  }
+
   void CompleteLookup() {
     Function* completion = completion_;
     completion_ = nullptr;
@@ -277,10 +311,11 @@ class HtmlPageCacheWriter : public Writer, public CacheInterface::Callback {
   static const size_t kMaxBodyBytes = 1024 * 1024;
   RewriteDriver* driver_;  // Valid through Lookup; never used by Finish.
   AsyncFetch* output_;
-  GoogleString url_, key_, identity_, body_, beacon_identity_;
+  GoogleString url_, key_, identity_, body_, beacon_identity_, device_, formats_;
   CacheInterface* cache_;
   Timer* timer_;
-  bool show_, eligible_, hit_, good_;
+  Statistics* stats_;
+  bool enabled_, show_, eligible_, hit_, good_;
   int64 created_ms_, expires_ms_, ttl_ms_, origin_expiry_ms_;
   Function* completion_;
 };

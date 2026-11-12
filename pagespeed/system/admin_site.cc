@@ -35,6 +35,7 @@
 #include "net/instaweb/util/public/property_store.h"
 //#include "strings/stringpiece_utils.h"
 #include "pagespeed/kernel/base/cache_interface.h"
+#include "pagespeed/kernel/base/base64_util.h"
 #include "pagespeed/kernel/base/callback.h"
 #include "pagespeed/kernel/base/message_handler.h"
 #include "pagespeed/kernel/base/statistics.h"
@@ -89,6 +90,7 @@ struct Tab {
 const Tab kTabs[] = {
     {"Dashboard", "Dashboard", "dashboard", nullptr},
     {"Images", "Optimized Images", "images", nullptr},
+    {"HTML Cache", "HTML Cache", "html_cache", nullptr},
     {"Statistics", "Statistics", "statistics", "?"},
     {"Configuration", "Configuration", "config", "?config"},
     {"Histograms", "Histograms", "histograms", "?histograms"},
@@ -147,6 +149,46 @@ int64 ReadVariable(const Statistics* stats, StringPiece name) {
   return variable == nullptr ? 0 : variable->Get();
 }
 
+struct HtmlCacheRow {
+  int64 created_ms, expires_ms, bytes;
+  GoogleString device, formats, variant, url;
+};
+
+void ReadRecentHtmlRewrites(MessageHandler* handler,
+                            std::vector<HtmlCacheRow>* rows) {
+  GoogleString log;
+  StringWriter writer(&log);
+  if (!handler->Dump(&writer)) return;
+  StringPieceVector messages;
+  handler->ParseMessageDumpIntoMessages(log, &messages);
+  std::set<GoogleString> seen;
+  for (int i = static_cast<int>(messages.size()) - 1;
+       i >= 0 && rows->size() < 100; --i) {
+    size_t marker = messages[i].find("PS_HTML_DETAIL\t");
+    if (marker == StringPiece::npos) continue;
+    StringPieceVector fields;
+    SplitStringPieceToVector(messages[i].substr(marker), "\t", &fields, true);
+    HtmlCacheRow row;
+    if (fields.size() != 8 ||
+        !StringToInt64(fields[1], &row.created_ms) || row.created_ms <= 0 ||
+        !StringToInt64(fields[2], &row.expires_ms) ||
+        row.expires_ms <= row.created_ms ||
+        !StringToInt64(fields[3], &row.bytes) || row.bytes <= 0 ||
+        row.bytes > 1024 * 1024 || fields[7].size() > 6000 ||
+        !Web64Decode(fields[7], &row.url) || row.url.size() > 4096 ||
+        !GoogleUrl(row.url).IsWebValid() ||
+        !fields[6].starts_with("optimized-html-v1:") || fields[6].size() > 128 ||
+        (fields[4] != "desktop" && fields[4] != "mobile" &&
+         fields[4] != "tablet") ||
+        (fields[5] != "AVIF capable" && fields[5] != "WebP capable" &&
+         fields[5] != "Original formats")) continue;
+    row.device = fields[4].as_string();
+    row.formats = fields[5].as_string();
+    row.variant = fields[6].as_string();
+    if (seen.insert(row.variant).second) rows->push_back(row);
+  }
+}
+
 GoogleString FormatDashboardBytes(int64 bytes) {
   static const int64 kKilobyte = 1024;
   static const int64 kMegabyte = kKilobyte * 1024;
@@ -200,6 +242,33 @@ int DashboardPercent(int64 value, int64 total) {
   return total <= 0 ? 0 : static_cast<int>(value * 100 / total);
 }
 
+void WriteHtmlCacheSummary(Statistics* stats, AsyncFetch* fetch,
+                           MessageHandler* handler) {
+  const char* names[] = {"html_cache_hits", "html_cache_misses",
+                         "html_cache_bypasses", "html_cache_inserts"};
+  const char* labels[] = {"HTML CACHE HITS", "LOOKUP MISSES",
+                          "BYPASSED LOOKUPS", "HTML PUBLICATIONS"};
+  const char* notes[] = {"Parsing and filters skipped", "Entry absent or stale",
+                         "Request or rewrite not eligible", "Best-effort cache writes"};
+  fetch->Write("<div class='pagespeed-dashboard-grid'>", handler);
+  for (int i = 0; i < 4; ++i) {
+    fetch->Write(StrCat("<article class='pagespeed-dashboard-card'><div "
+        "class='pagespeed-dashboard-card-label'>", labels[i],
+        "</div><div class='pagespeed-dashboard-value'>",
+        Integer64ToString(ReadVariable(stats, names[i])),
+        "</div><div class='pagespeed-dashboard-card-note'>", notes[i],
+        "</div></article>"), handler);
+  }
+  int64 hits = ReadVariable(stats, "html_cache_hits");
+  int64 misses = ReadVariable(stats, "html_cache_misses");
+  fetch->Write(StrCat("</div><p class='pagespeed-dashboard-footnote'>Hit rate: ",
+      IntegerToString(DashboardPercent(hits, hits + misses)),
+      "% of lookups. HTML served from cache: ",
+      FormatDashboardBytes(ReadVariable(stats, "html_cache_bytes_served")),
+      ". Counters are cumulative since statistics reset; served bytes are not "
+      "compression savings.</p>"), handler);
+}
+
 // Controls the generation of an HTML Admin page.  Constructing it
 // establishes the content-type as HTML and response code 200, and
 // puts in a banner with links to all the admin pages, ready for
@@ -233,7 +302,9 @@ class AdminHtml {
 
     // Generate some navigational links to help our users get to other
     // admin pages.
-    fetch->Write("<!DOCTYPE html>\n<html><head>", handler_);
+    fetch->Write("<!DOCTYPE html>\n<html><head>"
+                 "<meta name='viewport' content='width=device-width, initial-scale=1'>",
+                 handler_);
     fetch->Write(StrCat("<style>", CSS_admin_site_css, "</style>"), handler_);
 
     GoogleString buf;
@@ -500,6 +571,14 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
              "</article></div>"),
       message_handler_);
 
+  fetch->Write("<section class='pagespeed-dashboard-panel'>"
+      "<div class='pagespeed-dashboard-panel-heading'><div>"
+      "<h2>HTML rewrite cache</h2><p>Reuse completed, browser-isolated HTML "
+      "rewrites</p></div><a href='html_cache'>Browse HTML history &rarr;</a>"
+      "</div>", message_handler_);
+  WriteHtmlCacheSummary(stats, fetch, message_handler_);
+  fetch->Write("</section>", message_handler_);
+
   fetch->Write(
       "<div class='pagespeed-dashboard-panels'>"
       "<section class='pagespeed-dashboard-panel'>"
@@ -622,6 +701,135 @@ void AdminSite::DashboardHandler(AdminSource source, AsyncFetch* fetch,
       ".then(function(){b.disabled=false;});"
       "});})();</script>",
       message_handler_);
+}
+
+void AdminSite::HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
+                                 Statistics* stats,
+                                 const RewriteOptions& options) {
+  fetch->response_headers()->SetDateAndCaching(
+      timer_->NowMs(), 0, ", private, no-store");
+  AdminHtml admin_html("html_cache", "", source, timer_, fetch,
+                       message_handler_);
+  std::vector<HtmlCacheRow> rows;
+  ReadRecentHtmlRewrites(message_handler_, &rows);
+  fetch->Write(
+      "<section class='pagespeed-html-cache-page'>"
+      "<div class='pagespeed-dashboard-heading'>"
+      "<p class='pagespeed-dashboard-eyebrow'>HTML OPTIMIZATION</p>"
+      "<h1>HTML rewrite cache</h1>"
+      "<p class='pagespeed-dashboard-description'>Recent completed HTML "
+      "rewrites, isolated by request headers and browser capabilities.</p>"
+      "</div>", message_handler_);
+  WriteHtmlCacheSummary(stats, fetch, message_handler_);
+  fetch->Write(StrCat(
+      "<section class='pagespeed-dashboard-panel'><div "
+      "class='pagespeed-dashboard-panel-heading'><div>"
+      "<h2>Recent HTML publications</h2><p>HTML cache: <strong>",
+      options.html_cache() ? "Enabled" : "Disabled",
+      "</strong>. Configured TTL cap: ",
+      Integer64ToString(options.html_cache_ttl_sec()), " seconds.</p></div>"
+      "<a href='config'>View configuration &rarr;</a></div>"
+      "<p class='pagespeed-dashboard-footnote'>Up to 100 recently recorded "
+      "variants from the bounded message buffer (MessageBufferSize must be "
+      "nonzero). This is publication history, not a live cache inventory: "
+      "eviction, purge, policy changes, or new beacon evidence can invalidate "
+      "an entry before its TTL. No HTML bodies or raw request headers are "
+      "recorded. Opening a URL makes a new request using your browser's "
+      "headers; it is not a snapshot of the listed variant.</p>"),
+      message_handler_);
+  if (rows.empty()) {
+    fetch->Write(
+        "<div class='pagespeed-images-empty'><h2>No HTML rewrites recorded</h2>"
+        "<p>Enable HtmlCache and MessageBufferSize, then visit a publicly "
+        "cacheable HTML page. Entries appear after beacon learning and "
+        "resource rewrites settle. Private requests and sampled beacon "
+        "responses are not recorded.</p></div></section></section>",
+        message_handler_);
+    return;
+  }
+  fetch->Write(
+      "<div class='pagespeed-images-toolbar'><label "
+      "class='pagespeed-images-search-wrap'><input type='search' "
+      "id='pagespeed-html-search' placeholder='Search page URL or variant' "
+      "aria-label='Search page URL or variant'></label><div>"
+      "<label class='pagespeed-images-filter-label'>Device "
+      "<select id='pagespeed-html-device' aria-label='Filter by device'>"
+      "<option value='all'>All devices</option><option value='desktop'>"
+      "Desktop</option><option value='mobile'>Mobile</option>"
+      "<option value='tablet'>Tablet</option></select></label>"
+      "<label class='pagespeed-images-filter-label'>Capabilities "
+      "<select id='pagespeed-html-format' aria-label='Filter by image capability'>"
+      "<option value='all'>All capabilities</option>"
+      "<option>AVIF capable</option><option>WebP capable</option>"
+      "<option>Original formats</option></select></label></div></div>"
+      "<div class='pagespeed-images-table-wrap'><table "
+      "class='pagespeed-admin-data-table pagespeed-html-cache-table'>"
+      "<thead><tr><th>Created</th><th>Page URL</th><th>Device</th>"
+      "<th>Image capability</th><th>Variant</th><th>HTML size</th>"
+      "<th>Age</th><th>Expires / TTL</th></tr></thead>"
+      "<tbody id='pagespeed-html-rows'>", message_handler_);
+  for (const HtmlCacheRow& row : rows) {
+    GoogleString escaped_url, escaped_variant;
+    HtmlKeywords::Escape(row.url, &escaped_url);
+    HtmlKeywords::Escape(row.variant, &escaped_variant);
+    GoogleString html;
+    html += StrCat("<tr data-device='", row.device, "' data-format='",
+              row.formats, "' data-variant='", escaped_variant,
+              "'><td><time data-html-time='",
+              Integer64ToString(row.created_ms), "'>",
+              Integer64ToString(row.created_ms), "</time></td>");
+    html += StrCat("<td class='pagespeed-image-url'><a href='", escaped_url,
+              "' target='_blank' rel='noopener noreferrer' "
+              "referrerpolicy='no-referrer'>", escaped_url,
+              "</a></td><td>", row.device, "</td><td>", row.formats,
+              "</td><td><code title='", escaped_variant, "'>");
+    GoogleString short_variant;
+    HtmlKeywords::Escape(row.variant.substr(row.variant.size() - 12),
+                          &short_variant);
+    html += StrCat(short_variant, "</code></td><td>",
+              FormatDashboardBytes(row.bytes), "</td><td data-html-age='",
+              Integer64ToString(row.created_ms), "'>",
+              Integer64ToString(std::max<int64>(0,
+                  timer_->NowMs() - row.created_ms) / 1000), "s</td>");
+    html += StrCat("<td><time data-html-time='",
+              Integer64ToString(row.expires_ms), "'>",
+              Integer64ToString(row.expires_ms),
+              "</time><span class='pagespeed-html-ttl' data-html-expiry='",
+              Integer64ToString(row.expires_ms), "'>",
+              row.expires_ms > timer_->NowMs() ? "Within TTL" : "TTL elapsed",
+              "</span></td></tr>");
+    fetch->Write(html, message_handler_);
+  }
+  fetch->Write(
+      "</tbody></table></div><p id='pagespeed-html-results' "
+      "class='pagespeed-dashboard-footnote' role='status' aria-live='polite'>"
+      "</p></section></section><script>(function(){"
+      "var search=document.getElementById('pagespeed-html-search'),"
+      "device=document.getElementById('pagespeed-html-device'),"
+      "format=document.getElementById('pagespeed-html-format'),"
+      "rows=document.getElementById('pagespeed-html-rows').rows,"
+      "result=document.getElementById('pagespeed-html-results');"
+      "function filter(){var q=search.value.toLowerCase(),n=0;"
+      "for(var i=0;i<rows.length;i++){var r=rows[i],show="
+      "(r.textContent+' '+r.getAttribute('data-variant')).toLowerCase()."
+      "indexOf(q)!==-1&&"
+      "(device.value==='all'||r.getAttribute('data-device')===device.value)&&"
+      "(format.value==='all'||r.getAttribute('data-format')===format.value);"
+      "r.hidden=!show;if(show)n++;}result.textContent=n+' of '+rows.length+"
+      "' recorded variants shown. Refresh to load new publications.';}"
+      "function times(){var now=Date.now(),nodes=document.querySelectorAll("
+      "'[data-html-time]');for(var i=0;i<nodes.length;i++){var t=Number("
+      "nodes[i].getAttribute('data-html-time'));nodes[i].textContent="
+      "new Date(t).toLocaleString();}nodes=document.querySelectorAll("
+      "'[data-html-age]');for(var j=0;j<nodes.length;j++)nodes[j].textContent="
+      "Math.max(0,Math.floor((now-Number(nodes[j].getAttribute('data-html-age')))"
+      "/1000))+'s';nodes=document.querySelectorAll('[data-html-expiry]');"
+      "for(var k=0;k<nodes.length;k++){var n=nodes[k],valid=now<Number("
+      "n.getAttribute('data-html-expiry'));n.textContent=valid?'Within TTL':"
+      "'TTL elapsed';n.setAttribute('data-elapsed',valid?'false':'true');}}"
+      "search.addEventListener('input',filter);device.addEventListener('change',"
+      "filter);format.addEventListener('change',filter);times();filter();"
+      "window.setInterval(times,1000);})();</script>", message_handler_);
 }
 
 void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch) {
@@ -1305,6 +1513,8 @@ void AdminSite::AdminPage(
       DashboardHandler(kPageSpeedAdmin, fetch, stats);
     } else if (leaf == "images") {
       ImagesHandler(kPageSpeedAdmin, fetch);
+    } else if (leaf == "html_cache") {
+      HtmlCacheHandler(kPageSpeedAdmin, fetch, stats, *options);
     } else if (leaf == "statistics") {
       StatisticsHandler(*options, kPageSpeedAdmin, fetch, stats);
     } else if (leaf == "stats_json") {

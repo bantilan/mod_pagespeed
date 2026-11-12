@@ -53,7 +53,8 @@ http {
   gzip_min_length 1;
   gzip_proxied any;
   pagespeed FileCachePath "%s/cache";
-  pagespeed MessageBufferSize 0;
+  pagespeed MessageBufferSize 100000;
+  pagespeed AdminPath /pagespeed_admin;
   pagespeed HtmlCache on;
   pagespeed HtmlCacheTtlSec 4;
   pagespeed ShowCacheTimestamp on;
@@ -184,6 +185,28 @@ http {
         for status, headers, body in results:
             self.assertEqual(200, status)
             self.assertEqual(b'HIT', self.info(body)[0])
+
+    def test_html_cache_admin_history_and_dashboard(self):
+        path = '/?admin-history-check=1'
+        self.assertEqual(b'MISS', self.info(self.fetch(path)[2])[0])
+        self.assertEqual(b'HIT', self.info(self.fetch(path)[2])[0])
+        self.assertEqual(b'BYPASS', self.info(self.fetch(
+            '/?private-admin-check=1', {'Cookie': 'session=private'})[2])[0])
+        status, headers, body = self.fetch('/pagespeed_admin/html_cache')
+        self.assertEqual(200, status)
+        self.assertIn(b'Recent HTML publications', body)
+        self.assertIn(b'admin-history-check=1', body)
+        self.assertIn(b'data-variant=', body)
+        self.assertIn(b'pagespeed-html-device', body)
+        self.assertIn(b'not a live cache inventory', body)
+        self.assertIn(b'HTML CACHE HITS', body)
+        self.assertIn('no-store', headers.get('Cache-Control', ''))
+        self.assertNotIn(b'private-admin-check=1', body)
+        self.assertNotIn(b'Public HTML caching fixture', body)
+        self.assertNotIn(b'<!-- PageSpeed Cache:', body)
+        dashboard = self.fetch('/pagespeed_admin/dashboard')[2]
+        self.assertIn(b'Browse HTML history', dashboard)
+        self.assertIn(b'html_cache', dashboard)
 
 
 if __name__ == '__main__':

@@ -88,6 +88,35 @@ browser-specific HTML incorrectly. It does not disable the internal body cache,
 whose eligibility uses the original origin policy. Do not override this delivery
 policy at a CDN. Origin TTL and browser/CDN TTL are deliberately separate here.
 
+## Admin dashboard and HTML history
+
+The dashboard includes HTML cache hit, lookup-miss, bypassed-lookup and
+publication counters, a hit rate, and bytes served from cached HTML. Served
+bytes measure reuse, not compression savings. Counters use the existing
+PageSpeed statistics infrastructure and reset with those statistics.
+
+Open `/pagespeed_admin/html_cache` (or `html_cache` under your configured admin
+path) to search recent HTML publications by URL or variant and filter by device
+and image capability. Rows include body size, creation time, age and expiry.
+Device and capability labels describe the request, not every image in the body;
+the variant fingerprint represents the full cache identity, including headers.
+
+Like Images, the list requires a nonzero `MessageBufferSize` and uses the bounded
+shared message buffer. Only cache publication attempts are recorded, not each
+hit, private requests, raw headers or HTML bodies. At most 100 latest distinct
+variants still retained in the buffer are displayed, newest first. This is
+history, not a live backend inventory: eviction, purging or changed beacon
+evidence can invalidate entries before the displayed TTL. Opening a listed URL
+makes a normal new browser request; it does not retrieve that exact variant's
+cached body. Existing admin access controls must remain in place.
+
+The counters are `html_cache_hits`, `html_cache_misses`, `html_cache_bypasses`,
+`html_cache_inserts` and `html_cache_bytes_served`. Misses count unsuccessful
+lookups even if a subsequent rewrite cannot be stored. Bypasses count skipped
+lookups while HtmlCache is enabled. Inserts count best-effort publication
+attempts, not guaranteed backend retention. No backend scans or additional
+per-request cache reads are introduced by the admin history.
+
 ## Tests
 
 The GYP/Bazel `HtmlPageCacheTest` cases cover creation/age, hits, expiration,

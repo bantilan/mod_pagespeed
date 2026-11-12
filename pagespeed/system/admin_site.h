@@ -120,6 +120,10 @@ class AdminSite {
   // Lists recently rewritten images from the bounded PageSpeed message buffer.
   void ImagesHandler(AdminSource source, AsyncFetch* fetch);
 
+  // Recent HTML cache publications; not a live backend inventory.
+  void HtmlCacheHandler(AdminSource source, AsyncFetch* fetch,
+                        Statistics* stats, const RewriteOptions& options);
+
   // Responds to 'fetch' with data used on statistics page and graphs page
   // in JSON format.
   void StatisticsJsonHandler(AsyncFetch* fetch, Statistics* stats);

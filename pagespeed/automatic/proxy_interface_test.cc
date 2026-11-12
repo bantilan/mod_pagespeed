@@ -3679,6 +3679,20 @@ class HtmlPageCacheTest : public ProxyInterfaceTestBase {
   }
 };
 
+TEST_F(HtmlPageCacheTest, AdminCountersTrackLookupsPublicationsAndBypasses) {
+  ExpectStatus(Fetch(), "MISS");
+  ExpectStatus(Fetch(), "HIT");
+  RequestHeaders private_request;
+  private_request.set_method(RequestHeaders::kGet);
+  private_request.Add("Cookie", "session=secret");
+  ExpectStatus(Fetch(private_request), "BYPASS");
+  EXPECT_EQ(1, statistics()->GetVariable("html_cache_hits")->Get());
+  EXPECT_EQ(1, statistics()->GetVariable("html_cache_misses")->Get());
+  EXPECT_EQ(1, statistics()->GetVariable("html_cache_bypasses")->Get());
+  EXPECT_EQ(1, statistics()->GetVariable("html_cache_inserts")->Get());
+  EXPECT_GT(statistics()->GetVariable("html_cache_bytes_served")->Get(), 0);
+}
+
 TEST_F(HtmlPageCacheTest, MissHitPreservesCreationAndDynamicAge) {
   GoogleString first = Fetch();
   ExpectStatus(first, "MISS");

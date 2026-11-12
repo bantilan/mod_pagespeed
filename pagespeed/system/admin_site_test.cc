@@ -33,6 +33,8 @@
 #include "pagespeed/kernel/base/gmock.h"
 #include "pagespeed/kernel/base/gtest.h"
 #include "pagespeed/kernel/base/message_handler.h"
+#include "pagespeed/kernel/base/base64_util.h"
+#include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/string.h"
@@ -66,6 +68,8 @@ class AdminSiteTest : public CustomRewriteTestBase<SystemRewriteOptions> {
 
   virtual void SetUp() {
     CustomRewriteTestBase<SystemRewriteOptions>::SetUp();
+    // Message-dump parsing discards the first potentially partial line.
+    message_handler()->Message(kInfo, "Start admin test message buffer.");
     server_context_.reset(SetupServerContext(options_.release()));
   }
 
@@ -159,13 +163,102 @@ TEST_F(AdminSiteTest, ImagesPageShowsRecordedRewriteAndComparison) {
   EXPECT_THAT(buffer, ::testing::HasSubstr("Recently optimized images"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("https://example.com/photo.jpg"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("image/webp"));
-  EXPECT_THAT(buffer, ::testing::HasSubstr("6.0 KB"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("5.8 KB"));
   EXPECT_THAT(buffer,
               ::testing::HasSubstr("pagespeed-image-preview-button"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-image-modal"));
   EXPECT_THAT(buffer, ::testing::HasSubstr("Image comparison"));
 }
 // TODO(xqyin): Add unit tests for other methods in AdminSite.
+
+TEST_F(AdminSiteTest, HtmlCacheEmptyPageAndDashboardMetrics) {
+  factory()->statistics()->GetVariable("html_cache_hits")->Add(3);
+  factory()->statistics()->GetVariable("html_cache_misses")->Add(1);
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->HtmlCacheHandler(AdminSite::kPageSpeedAdmin, &fetch,
+      factory()->statistics(), *rewrite_driver()->options());
+  EXPECT_THAT(buffer, ::testing::HasSubstr("No HTML rewrites recorded"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("Hit rate: 75%"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("HTML cache: <strong>Disabled"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("not a live cache inventory"));
+  GoogleString dashboard;
+  StringAsyncFetch dashboard_fetch(rewrite_driver()->request_context(),
+                                   &dashboard);
+  admin_site_->DashboardHandler(AdminSite::kPageSpeedAdmin, &dashboard_fetch,
+                                 factory()->statistics());
+  EXPECT_THAT(dashboard, ::testing::HasSubstr("href='html_cache'"));
+  EXPECT_THAT(dashboard, ::testing::HasSubstr("HTML CACHE HITS"));
+}
+
+TEST_F(AdminSiteTest, HtmlCacheRecordsAreEscapedAndDeduplicated) {
+  GoogleString encoded_url;
+  Web64Encode("https://example.com/blog/?x=1&y=<script>", &encoded_url);
+  for (int bytes : {1000, 2000}) {
+    message_handler()->Message(kInfo,
+        "PS_HTML_DETAIL\t1000\t5000\t%d\tmobile\tWebP capable\t"
+        "optimized-html-v1:abcdefghijklmnopqrst\t%s", bytes,
+        encoded_url.c_str());
+  }
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->HtmlCacheHandler(AdminSite::kPageSpeedAdmin, &fetch,
+      factory()->statistics(), *rewrite_driver()->options());
+  EXPECT_THAT(buffer, ::testing::HasSubstr("data-device='mobile'"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("WebP capable"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("1.9 KB"));
+  EXPECT_THAT(buffer, ::testing::Not(::testing::HasSubstr("&y=<script>")));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("&amp;y=&lt;script&gt;"));
+  size_t first = buffer.find("<tr data-device=");
+  ASSERT_NE(GoogleString::npos, first);
+  EXPECT_EQ(GoogleString::npos, buffer.find("<tr data-device=", first + 1));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-html-search"));
+  EXPECT_THAT(buffer, ::testing::HasSubstr("pagespeed-html-format"));
+}
+
+TEST_F(AdminSiteTest, HtmlCacheRejectsMalformedAndNonWebRecords) {
+  GoogleString encoded_url;
+  Web64Encode("javascript:alert(1)", &encoded_url);
+  message_handler()->Message(kInfo,
+      "PS_HTML_DETAIL\t1000\t5000\t100\tdesktop\tAVIF capable\t"
+      "optimized-html-v1:abcdefghijklmnopqrst\t%s", encoded_url.c_str());
+  message_handler()->Message(kInfo, "PS_HTML_DETAIL\tbroken");
+  message_handler()->Message(kInfo,
+      "PS_HTML_DETAIL\t1000\t500\t-1\tdesktop\tAVIF capable\t"
+      "optimized-html-v1:abcdefghijklmnopqrst\tbad-base64");
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->HtmlCacheHandler(AdminSite::kPageSpeedAdmin, &fetch,
+      factory()->statistics(), *rewrite_driver()->options());
+  EXPECT_THAT(buffer, ::testing::HasSubstr("No HTML rewrites recorded"));
+  EXPECT_THAT(buffer, ::testing::Not(::testing::HasSubstr("javascript:alert")));
+}
+
+TEST_F(AdminSiteTest, HtmlCacheHistoryIsBoundedAndNewestFirst) {
+  GoogleString encoded_url;
+  Web64Encode("https://example.com/blog/", &encoded_url);
+  for (int i = 0; i < 105; ++i) {
+    message_handler()->Message(kInfo,
+        "PS_HTML_DETAIL\t1000\t5000\t100\tdesktop\tAVIF capable\t"
+        "optimized-html-v1:variant-%03d\t%s", i, encoded_url.c_str());
+  }
+  GoogleString buffer;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &buffer);
+  admin_site_->HtmlCacheHandler(AdminSite::kPageSpeedAdmin, &fetch,
+      factory()->statistics(), *rewrite_driver()->options());
+  size_t position = 0;
+  int rows = 0;
+  while ((position = buffer.find("<tr data-device=", position)) !=
+         GoogleString::npos) {
+    ++rows;
+    ++position;
+  }
+  EXPECT_EQ(100, rows);
+  EXPECT_LT(buffer.find("optimized-html-v1:variant-104"),
+            buffer.find("optimized-html-v1:variant-005"));
+  EXPECT_EQ(GoogleString::npos,
+            buffer.find("optimized-html-v1:variant-004"));
+}
 
 }  // namespace
 

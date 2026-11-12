@@ -1086,6 +1086,25 @@ mod rules
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
 }
+.pagespeed-html-cache-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.pagespeed-html-cache-page > .pagespeed-dashboard-footnote { margin: 0; }
+.pagespeed-html-cache-page .pagespeed-dashboard-panel >
+.pagespeed-dashboard-footnote { margin: 16px 20px; }
+.pagespeed-html-cache-table { min-width: 1060px; }
+.pagespeed-html-cache-table td { vertical-align: top; }
+#pagespeed-html-rows tr[hidden] { display: none; }
+.pagespeed-html-ttl {
+  display: block;
+  margin-top: 6px;
+  color: #176b57;
+  font-size: var(--pagespeed-type-meta);
+}
+.pagespeed-html-ttl[data-elapsed='true'] { color: #718077; }
 .pagespeed-dashboard-card {
   min-width: 0;
   padding: 20px;

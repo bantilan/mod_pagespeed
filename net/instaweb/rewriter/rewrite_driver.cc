@@ -866,6 +866,11 @@ void RewriteDriver::Initialize() {
 }
 
 void RewriteDriver::InitStats(Statistics* statistics) {
+  statistics->AddVariable("html_cache_hits");
+  statistics->AddVariable("html_cache_misses");
+  statistics->AddVariable("html_cache_bypasses");
+  statistics->AddVariable("html_cache_inserts");
+  statistics->AddVariable("html_cache_bytes_served");
   AddInstrumentationFilter::InitStats(statistics);
   CacheExtender::InitStats(statistics);
   CriticalCssBeaconFilter::InitStats(statistics);
