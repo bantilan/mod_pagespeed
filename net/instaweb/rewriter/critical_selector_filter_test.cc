@@ -289,6 +289,80 @@ TEST_F(CriticalSelectorFilterTest, StylesInBody) {
   ValidateRewriterLogging(RewriterHtmlApplication::ACTIVE);
 }
 
+// String escapes are preserved verbatim by serialization, so an escaped
+// closing tag is safe inside an HTML <style> element and stays inlined.
+TEST_F(CriticalSelectorFilterTest,
+       EscapedClosingStyleTagIsInlinedVerbatimInHtml) {
+  SetResponseWithDefaultHeaders(
+      "c.css", kContentTypeCss,
+      "div{content:\"\\3C/style\\3E\"}", 100);
+  Parse("escaped_closing_style_html", StrCat("<head>", CssLinkHref("c.css"),
+                                             "</head>"
+                                             "<body><div>Stuff</div></body>"));
+  const char kInlined[] = "<style>div{content:\"\\3C/style\\3E\"}</style>";
+  EXPECT_NE(GoogleString::npos, output_buffer_.find(kInlined))
+      << output_buffer_;
+}
+
+// In XHTML a kept rule containing '<' keeps the link: the conservative check
+// applies to the whole document.
+TEST_F(CriticalSelectorFilterTest,
+       LessThanInKeptRuleKeepsTheLinkInXhtml) {
+  SetXhtmlMimetype();
+  SetResponseWithDefaultHeaders(
+      "c.css", kContentTypeCss,
+      "div{content:\"<main\"}", 100);
+  ValidateNoChanges("lt_kept_rule_xhtml",
+                    StrCat("<head>", CssLinkHref("c.css"),
+                           "</head>"
+                           "<body><div>Stuff</div></body>"));
+}
+
+// XHTML keeps a stylesheet with any '<' external.
+TEST_F(CriticalSelectorFilterTest, XhtmlWithLessThanSignKeepsTheLink) {
+  SetXhtmlMimetype();
+  SetResponseWithDefaultHeaders(
+      "c.css", kContentTypeCss,
+      "@property --x{syntax:\"<length>\";inherits:false;initial-value:0px}"
+      "*{color:red}",
+      100);
+  ValidateNoChanges("xhtml_lt", StrCat("<head>", CssLinkHref("c.css"),
+                                       "</head>"
+                                       "<body><div>Stuff</div></body>"));
+}
+
+// In HTML the same escape is plain CSS text inside the inline style.
+TEST_F(CriticalSelectorFilterTest, EscapedLessThanBeforeLetterIsInlinedInHtml) {
+  SetResponseWithDefaultHeaders(
+      "c.css", kContentTypeCss,
+      "*{color:red}label[for=\"\\3Cmain\"]{text-decoration:underline}", 100);
+  Parse("escaped_lt_letter_html", StrCat("<head>", CssLinkHref("c.css"),
+                                         "</head>"
+                                         "<body><div>Stuff</div></body>"));
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("<style>*{color:red}"))
+      << output_buffer_;
+}
+
+// A '<' that is ordinary CSS (a registered property's syntax descriptor, a
+// media query range) must not keep the critical rules from being inlined.
+TEST_F(CriticalSelectorFilterTest, LessThanSignInCssIsInlined) {
+  SetResponseWithDefaultHeaders(
+      "c.css", kContentTypeCss,
+      "@property --x{syntax:\"<length>\";inherits:false;initial-value:0px}"
+      "@media (width < 600px){div{margin:0}}"
+      "*{color:red}",
+      100);
+  Parse("lt_in_css", StrCat("<head>", CssLinkHref("c.css"),
+                            "</head>"
+                            "<body><div>Stuff</div></body>"));
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("<style>"))
+      << output_buffer_;
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("<length>"))
+      << output_buffer_;
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("(width < 600px)"))
+      << output_buffer_;
+}
+
 TEST_F(CriticalSelectorFilterTest, EmptyBlock) {
   // Do not insert empty <style> blocks. Our critical selector sets do not
   // talk about 'i' so this should do nothing..

@@ -38,6 +38,7 @@
 #include "pagespeed/kernel/html/html_element.h"
 #include "pagespeed/kernel/html/html_name.h"
 #include "pagespeed/kernel/html/html_node.h"
+#include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/google_url.h"
 #include "pagespeed/kernel/util/gzip_inflater.h"
 
@@ -58,16 +59,21 @@ class CssInlineFilter::Context : public InlineRewriteContext {
       attrs_charset_ = GoogleString(charset);
     }
     filter->driver()->containing_charset().CopyToString(&htmls_charset_);
+    conservative_check_ =
+        CssInlineFilter::NeedsConservativeMarkupCheck(filter->driver());
   }
 
   bool ShouldInline(const ResourcePtr& resource,
                     GoogleString* reason) const override {
     return filter_->ShouldInline(resource, attrs_charset_, htmls_charset_,
-                                 reason);
+                                 conservative_check_, reason);
   }
 
   GoogleString CacheKeySuffix() const override {
-    GoogleString charsets = StrCat(htmls_charset_, "/", attrs_charset_);
+    // The decision also depends on the kind of document (see
+    // NeedsConservativeMarkupCheck()).
+    GoogleString charsets = StrCat(htmls_charset_, "/", attrs_charset_,
+                                   conservative_check_ ? "" : "/n");
     LowerString(&charsets);
     return FindServerContext()->lock_hasher()->Hash(charsets);
   }
@@ -106,6 +112,7 @@ class CssInlineFilter::Context : public InlineRewriteContext {
   GoogleUrl base_url_;
   GoogleString attrs_charset_;
   GoogleString htmls_charset_;
+  bool conservative_check_;
 
   DISALLOW_COPY_AND_ASSIGN(Context);
 };
@@ -214,12 +221,31 @@ ResourcePtr CssInlineFilter::CreateResource(const char* url,
 }
 
 bool CssInlineFilter::HasClosingStyleTag(StringPiece contents) {
+  return MayCloseStyleElement(contents);
+}
+
+bool CssInlineFilter::MayContainMarkup(StringPiece contents) {
+  return contents.find('<') != StringPiece::npos;
+}
+
+bool CssInlineFilter::MayCloseStyleElement(StringPiece contents) {
   return FindIgnoreCase(contents, "</style") != StringPiece::npos;
+}
+
+bool CssInlineFilter::NeedsConservativeMarkupCheck(RewriteDriver* driver) {
+  if (driver->server_context()->response_headers_finalized()) {
+    return driver->MimeTypeXhtmlStatus() != RewriteDriver::kIsNotXhtml;
+  }
+  // Some servers never finalize the response headers (MimeTypeXhtmlStatus()
+  // then stays unknown), and may not have the content type in them at all.
+  // Use the narrow check only when the parse was started as plain HTML.
+  return driver->content_type().type() != ContentType::kHtml;
 }
 
 bool CssInlineFilter::ShouldInline(const ResourcePtr& resource,
                                    const StringPiece& attrs_charset,
                                    const StringPiece& htmls_charset,
+                                   bool conservative_check,
                                    GoogleString* reason) const {
   // If the contents are bigger than our threshold, don't inline.
   StringPiece contents(resource->ExtractUncompressedContents());
@@ -233,11 +259,13 @@ bool CssInlineFilter::ShouldInline(const ResourcePtr& resource,
     *reason = "CSS not inlined because it appears to be gzip-encoded";
     return false;
   }
-  // And also not if the contents contain "</style>" anywhere. If we inline an
-  // external stylesheet containing a "</style>", the <style> tag will be ended
-  // early.
-  if (HasClosingStyleTag(contents)) {
-    *reason = "CSS not inlined since it contains style closing tag";
+  // And also not if the contents could end the <style> element early, as a
+  // "</style>" would. HTML documents only need to rule out a closing style
+  // tag; XHTML keeps the conservative check for any '<'.
+  if (MayBreakInlineStyle(contents, conservative_check)) {
+    *reason = conservative_check
+                  ? "CSS not inlined since it contains a less-than sign"
+                  : "CSS not inlined since it contains a closing style tag";
     return false;
   }
 

@@ -48,6 +48,7 @@
 #include "pagespeed/kernel/html/html_parse_test_base.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/google_url.h"
+#include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/opt/logging/log_record.h"
 #include "webutil/css/parser.h"
 
@@ -217,6 +218,19 @@ class CssFilterTest : public CssRewriteTestBase {
     if (async_fetch.content_length_known()) {
       EXPECT_EQ(content.size(), async_fetch.content_length());
     }
+  }
+
+  // Clears per-parse driver state (including the memoized document kind) so
+  // the next parse sees a new Content-Type. The metadata cache on the server
+  // context is intentionally kept, so the next parse exercises warm-cache
+  // reuse of the previous parse's rewrite decision.
+  void ClearDriverAndSetMimetype(const char* mimetype) {
+    output_buffer_.clear();
+    rewrite_driver()->Clear();
+    rewrite_driver()->set_request_context(
+        RequestContext::NewTestRequestContext(factory()->thread_system()));
+    response_headers_.RemoveAll(HttpAttributes::kContentType);
+    SetMimetype(mimetype);
   }
 };
 
@@ -599,6 +613,9 @@ TEST_F(CssFilterTest, NoWrongExtCorruption) {
 }
 
 TEST_F(CssFilterTest, RewriteVariousCss) {
+  // These examples exercise the minifier, including quirky media queries with
+  // '<' that are plain CSS text in HTML.
+  SetHtmlMimetype();
   // TODO(sligocki): Get these tests to pass with setlocale.
   // EXPECT_TRUE(setlocale(LC_ALL, "tr_TR.utf8"));
   // Distilled examples.
@@ -778,6 +795,10 @@ TEST_F(CssFilterTest, RewriteVariousCss) {
   };
 
   for (int i = 0; i < arraysize(good_examples); ++i) {
+    // FetchResourceUrl() clears the driver (including its response headers),
+    // so re-assert the HTML document kind for every example.
+    response_headers_.RemoveAll(HttpAttributes::kContentType);
+    SetHtmlMimetype();
     GoogleString id = StringPrintf("distilled_css_good%d", i);
     ValidateRewrite(id, good_examples[i], good_examples[i], kExpectSuccess);
   }
@@ -2514,6 +2535,86 @@ TEST_F(CssFilterTest, InlineCspIrrelevant) {
       "inline_css",
       StrCat(kCsp, kCss, kStyledDiv),
       StrCat(kCsp, kMinCss, kMinStyledDiv));
+}
+
+// In XHTML, CSS that could read as markup after a rewrite is left as it was:
+// serialization decodes these escapes to '<', which would break XML parsing.
+TEST_F(CssFilterTest, InlineStyleDoesNotGainLiteralMarkup) {
+  SetXhtmlMimetype();
+  ValidateNoChanges("selector",
+                    "<style>li[title=\"1\\3C 2\\3E 0\"]{color:blue}</style>");
+  ValidateNoChanges("charset", "<style>@charset \"\\3Cpre\";</style>");
+  ValidateNoChanges("id_start_escape", "<style>#\\3Cnav{margin:2px}</style>");
+}
+
+// In HTML only a closing style tag is kept out of an inline <style>.
+// Serialization decodes this escape to a literal "</style>", which would end
+// the element early, so the rewrite is declined.
+TEST_F(CssFilterTest, InlineStyleWithClosingTagEscapeIsLeftAlone) {
+  SetHtmlMimetype();
+  ValidateNoChanges(
+      "closing_tag",
+      "<style>a[title=\"\\3C/style\\3E\"] { color: blue; }</style>");
+}
+
+// A '<' that is plain CSS (Tailwind 4 @property, media query ranges) does not
+// stop an inline <style> from being minified in HTML, but does in XHTML.
+TEST_F(CssFilterTest, InlineStyleWithLessThanSign) {
+  static const char kCss[] =
+      "<style>@property --x { syntax: \"<length>\"; inherits: false; "
+      "initial-value: 0px }\n@media (width < 600px) { p { margin: 0 } }"
+      "</style>";
+  SetHtmlMimetype();
+  ValidateExpected(
+      "html", kCss,
+      "<style>@property --x { syntax: \"<length>\"; inherits: false; "
+      "initial-value: 0px }@media (width < 600px) { p { margin: 0 } }</style>");
+}
+
+TEST_F(CssFilterTest, InlineStyleWithLessThanSignInXhtml) {
+  SetXhtmlMimetype();
+  ValidateNoChanges(
+      "xhtml",
+      "<style>@property --x { syntax: \"<length>\"; inherits: false; "
+      "initial-value: 0px }\n@media (width < 600px) { p { margin: 0 } }"
+      "</style>");
+}
+
+// An inline <style> without markup characters is still minified.
+TEST_F(CssFilterTest, InlineStyleWithoutMarkupIsMinified) {
+  SetHtmlMimetype();
+  ValidateExpected("plain",
+                   "<style>p { margin: 0; }</style>",
+                   "<style>p{margin:0}</style>");
+}
+
+// The same inline <style> bytes on an HTML page and then an XHTML page: the
+// XHTML parse must not reuse the HTML parse's warm-cache rewrite.
+TEST_F(CssFilterTest, WarmCacheHtmlThenXhtmlLeavesInlineStyleAlone) {
+  static const char kCss[] =
+      "<style>div { color: red; } @media (width < 600px) { p { margin: 0 } }"
+      "</style>";
+  static const char kMinCss[] =
+      "<style>div{color:red}@media (width < 600px) { p { margin: 0 } }</style>";
+  SetHtmlMimetype();
+  ValidateExpected("html_first", kCss, kMinCss);
+
+  ClearDriverAndSetMimetype("application/xhtml+xml");
+  ValidateNoChanges("xhtml_warm", kCss);
+}
+
+// Same as above in the opposite warm-cache order.
+TEST_F(CssFilterTest, WarmCacheXhtmlThenHtmlMinifiesInlineStyle) {
+  static const char kCss[] =
+      "<style>div { color: red; } @media (width < 600px) { p { margin: 0 } }"
+      "</style>";
+  static const char kMinCss[] =
+      "<style>div{color:red}@media (width < 600px) { p { margin: 0 } }</style>";
+  SetXhtmlMimetype();
+  ValidateNoChanges("xhtml_first", kCss);
+
+  ClearDriverAndSetMimetype("text/html");
+  ValidateExpected("html_warm", kCss, kMinCss);
 }
 
 class CssFilterTestUrlNamer : public CssFilterTest {

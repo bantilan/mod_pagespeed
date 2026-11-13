@@ -33,6 +33,7 @@
 #include "net/instaweb/rewriter/public/css_flatten_imports_context.h"
 #include "net/instaweb/rewriter/public/css_hierarchy.h"
 #include "net/instaweb/rewriter/public/css_image_rewriter.h"
+#include "net/instaweb/rewriter/public/css_inline_filter.h"
 #include "net/instaweb/rewriter/public/css_minify.h"
 #include "net/instaweb/rewriter/public/css_tag_scanner.h"
 #include "net/instaweb/rewriter/public/css_url_counter.h"
@@ -183,6 +184,7 @@ CssFilter::Context::Context(CssFilter* filter, RewriteDriver* driver,
       rewrite_inline_char_node_(nullptr),
       rewrite_inline_attribute_(nullptr),
       rewrite_inline_css_kind_(kInsideStyleTag),
+      conservative_markup_check_(true),
       in_text_size_(-1) {
   initial_css_base_gurl_.Reset(filter_->decoded_base_url());
   DCHECK(initial_css_base_gurl_.IsWebValid());
@@ -323,6 +325,8 @@ void CssFilter::Context::SetupInlineRewrite(HtmlElement* style_element,
   rewrite_inline_element_ = style_element;
   rewrite_inline_char_node_ = text;
   rewrite_inline_css_kind_ = kInsideStyleTag;
+  conservative_markup_check_ =
+      CssInlineFilter::NeedsConservativeMarkupCheck(Driver());
 }
 
 void CssFilter::Context::SetupAttributeRewrite(HtmlElement* element,
@@ -666,13 +670,24 @@ void CssFilter::Context::Harvest() {
       ServerContext* server_context = FindServerContext();
       server_context->MergeNonCachingResponseHeaders(input_resource_,
                                                      output_resource_);
+    } else if (CssInlineFilter::MayBreakInlineStyle(
+                   out_text, conservative_markup_check_)) {
+      // Leave the element unchanged when the serialized CSS could read as
+      // markup (or, in an HTML <style>, end the element early).
+      ok = false;
+      mutable_output_partition(0)->add_debug_message(
+          conservative_markup_check_
+              ? "CSS not rewritten since it contains a less-than sign"
+              : "CSS not rewritten since it contains a closing style tag");
     } else {
       mutable_output_partition(0)->set_inlined_data(out_text);
       mutable_output_partition(0)->set_is_inline_output_resource(true);
     }
-    ok = Driver()->Write(ResourceVector(1, input_resource_), out_text,
-                         &kContentTypeCss, input_resource_->charset(),
-                         output_resource_.get());
+    if (ok) {
+      ok = Driver()->Write(ResourceVector(1, input_resource_), out_text,
+                           &kContentTypeCss, input_resource_->charset(),
+                           output_resource_.get());
+    }
   }
 
   if (!hierarchy_.flattening_failure_reason().empty()) {
@@ -797,6 +812,9 @@ GoogleString CssFilter::Context::CacheKeySuffix() const {
         const Hasher* hasher = FindServerContext()->lock_hasher();
         StrAppend(&suffix, "_@",
                   hasher->Hash(initial_css_base_gurl_.AllExceptLeaf()));
+        if (!conservative_markup_check_) {
+          StrAppend(&suffix, "_n");
+        }
         break;
       }
 

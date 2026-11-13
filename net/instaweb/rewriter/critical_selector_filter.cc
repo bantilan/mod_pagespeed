@@ -28,6 +28,7 @@
 
 #include "base/logging.h"
 #include "net/instaweb/rewriter/public/critical_selector_finder.h"
+#include "net/instaweb/rewriter/public/css_inline_filter.h"
 #include "net/instaweb/rewriter/public/css_minify.h"
 #include "net/instaweb/rewriter/public/css_tag_scanner.h"
 #include "net/instaweb/rewriter/public/css_util.h"
@@ -231,6 +232,13 @@ void CriticalSelectorFilter::RenderSummary(int pos, HtmlElement* element,
             driver()->message_handler()) == RewriteDriver::kSuccess) {
       css_to_use = &resolved_css;
     }
+  }
+
+  // Check the bytes that are actually written, whatever produced them.
+  if (CssInlineFilter::MayBreakInlineStyle(
+          *css_to_use,
+          CssInlineFilter::NeedsConservativeMarkupCheck(driver()))) {
+    return;
   }
 
   // Update the DOM --- either an existing style element, or replace link
