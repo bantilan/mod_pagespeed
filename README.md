@@ -1,36 +1,70 @@
 # mod_pagespeed
 ![logo](https://www.gstatic.com/images/branding/product/2x/pagespeed_32dp.png)
 
-|CI|Status|
-|---|---|
-|Travis|[![Build Status](https://travis-ci.org/apache/incubator-pagespeed-mod.svg?branch=master)](https://travis-ci.org/apache/incubator-pagespeed-mod)|
+**A continuation of PageSpeed for modern image delivery, browser-aware HTML
+rewriting, and better optimization visibility.**
 
-`mod_pagespeed` is an open-source Apache module created by Google to help Make the Web Faster by rewriting web pages to reduce latency and bandwidth.
+This fork builds on Google's original `mod_pagespeed` and the Apache PageSpeed
+codebase. It automatically optimizes HTML and associated images, CSS, and
+JavaScript at the server, without requiring application templates to be
+rewritten. Its focus is keeping PageSpeed usable on modern toolchains while
+extending image delivery, reducing repeated rewrite work, and making the
+optimization pipeline easier to inspect.
 
-## Fork Mission
+The project retains its Apache module heritage and provides the PageSpeed
+Optimization Libraries (PSOL) used by the companion
+[ngx_pagespeed fork](https://github.com/bantilan/ngx_pagespeed). The Nginx
+examples below require that integration; this repository alone is not an Nginx
+module or a complete Nginx distribution.
 
-This fork exists to rebuild and revive mod_pagespeed for modern environments.
-The upstream/original project has seen long periods without active maintenance,
-while many production stacks still benefit from PageSpeed's optimization model.
+## What This Fork Adds
 
-Primary objective of this fork:
-- Keep PageSpeed usable and buildable on modern toolchains.
-- Continue feature updates for current web performance needs.
-- Preserve backward compatibility where practical.
+- **Modern image delivery.** AVIF conversion through `convert_to_avif`, with
+  browser-aware AVIF/WebP/original-format selection. Existing image elements,
+  attributes, and CSS remain intact; format negotiation does not require
+  introducing `<picture>` elements or extra wrappers.
+- **LCP-oriented optimization.** The `prioritize_lcp_images` filter and
+  critical-image beacon feedback help identify and prioritize important images.
+- **Optional HTML rewrite caching.** Reuse completed HTML rewrites to avoid
+  repeated parsing and filter work. Request and browser variants remain
+  isolated, while cache eligibility and invalidation account for origin policy
+  and learned beacon evidence.
+- **An expanded admin console.** A sidebar-based dashboard, image comparisons,
+  HTML publication history, grouped message logs, and updated statistics,
+  histogram, cache, console, and graph views make optimization activity easier
+  to investigate.
+- **Optional historical archiving.** Background snapshots preserve existing
+  shared-buffer records and merge them with live history. A dedicated archive
+  page reports storage, retention, snapshot health, and detected gaps.
+- **Updated analytics insertion.** The `insert_ga` filter supports Google tag
+  IDs (`GT-...`) and GA4 measurement IDs (`G-...`) through `gtag.js`, while
+  retaining legacy Universal Analytics (`UA-...`) insertion behavior.
+- **Build and profiling work.** Compatibility fixes and tools in
+  [`benchmark/`](benchmark/) support investigating rewrite latency, cache
+  behavior, and archival overhead on the target environment.
 
-### Added in this fork
+The existing PageSpeed filter model remains available, including image
+compression and resizing, CSS/JavaScript minification and inlining, and resource
+cache optimizations. Backward compatibility is preserved where practical;
+new features should be enabled and tested explicitly for each deployment.
 
-- AVIF image conversion support (`convert_to_avif`) for modern image delivery.
-- LCP-oriented image prioritization filter to improve discoverability and fetch
-  priority for above-the-fold/LCP candidates.
-- Optional HTML rewrite-output caching with AVIF/WebP/original browser-variant
-  isolation, beacon-aware invalidation, and per-request cache diagnostics.
-- Updated Google Analytics insertion support:
-  - Supports modern Google tag IDs (`GT-...`) and GA4 measurement IDs (`G-...`)
-    via `gtag.js`.
-  - Preserves legacy Universal Analytics behavior for `UA-...` IDs.
+## Deployment Notes
 
-### Usage
+- Build PSOL and the Nginx module with matching source and headers. Updating the
+  repository does not update an installed module; rebuild and install the
+  resulting artifacts before testing changes.
+- HTML rewrite caching is not a full-page reverse-proxy cache. The origin or
+  static handler is still consulted, and personalized or non-cacheable responses
+  must not become shared HTML entries.
+- Dashboard savings, rewrite counts, cached bytes served, and history records
+  measure different things. In particular, HTML cache delivery bytes are not
+  HTML compression savings, and diagnostic archives cannot reconstruct missing
+  aggregate counters.
+- Optional caching and archiving are disabled by default. Benchmark the
+  enabled features under representative traffic rather than assuming a
+  universal performance improvement.
+
+## Usage
 
 Nginx example:
 
@@ -38,8 +72,8 @@ Nginx example:
 pagespeed on;
 pagespeed FileCachePath /var/cache/ngx_pagespeed;
 
-# AVIF conversion
-pagespeed EnableFilters convert_to_avif;
+# Image optimization with AVIF and WebP fallback where supported
+pagespeed EnableFilters rewrite_images,convert_to_avif,convert_jpeg_to_webp;
 
 # Prioritize likely LCP images
 pagespeed EnableFilters prioritize_lcp_images;
@@ -136,9 +170,10 @@ Expect `MISS` followed by `HIT` once the response is eligible and beacon/resourc
 learning has settled. See [HTML cache documentation](doc/html_cache.md) for
 invalidation, limitations, and integration-test commands.
 
-The PageSpeed admin dashboard shows HTML-cache hit/miss/bypass counters, hit
-rate, publication attempts, and cached HTML bytes served. Open
-`/pagespeed_admin/html_cache` for recent publication history with URL search,
+The dashboard includes HTML publication activity and cached bytes served;
+HTML compression savings are marked as unmeasured. Open
+`/pagespeed_admin/html_cache` for HTML-cache hit/miss/bypass counters, hit rate,
+publication attempts, cached HTML bytes served, and publication history with URL search,
 device/capability filters, variant IDs, sizes, creation times, and expiry.
 Like Images, history requires a nonzero `pagespeed MessageBufferSize` and shows
 up to 100 recent distinct variants retained in the bounded shared message
@@ -163,44 +198,38 @@ Snapshots use a single elected writer and store each existing record once under
 `<FileCachePath>/history/`, independently of normal resource-cache cleanup.
 When enabled, Message History, Images, HTML Cache, JavaScript, and CSS combine
 the live buffer with retained archive records in their existing views, with UTC
-date filtering and older-record pagination. JavaScript/CSS show existing
+date query filtering and older-record pagination. JavaScript/CSS show existing
 diagnostics only, not complete per-resource rewrite histories. Archive health
 and gaps are shown at `/pagespeed_admin/history`; the dashboard keeps its
 performance overview, merges retained image records into its recent-image
-section, and links to that page. Dashboard aggregate counters still reflect
-the running statistics instance and reset according to its statistics
-configuration; they are not reconstructed from diagnostic history.
-StatisticsLogger, Console and Graphs are otherwise unchanged.
+section, and links to that page. Aggregate counters are separate from diagnostic
+history: with `StatisticsLogging on` and a configured `LogDir`, the dashboard
+and HTML Cache page can combine available earlier-generation statistics samples
+with current live counters. The archive worker also triggers due statistics
+samples and a final sample during graceful shutdown. Unsampled or trimmed data
+cannot be recovered from publication records. Console and Graphs continue to
+use StatisticsLogger's time-series data.
 
 Periodic snapshots can miss overwritten records or an unsaved restart tail;
 these gaps are reported rather than hidden. There is some background CPU,
 memory and disk overhead. See [archive design, limits and benchmarks](doc/history_archive.md).
 A full PSOL/module rebuild and restart are required.
 
-mod_pagespeed releases are available as [precompiled linux packages](https://modpagespeed.com/doc/download) or as [source](https://modpagespeed.com/doc/build_mod_pagespeed_from_source). (See [Release Notes](https://modpagespeed.com/doc/release_notes) for information about bugs fixed)
+## Documentation And Heritage
 
-mod_pagespeed is an open-source Apache module which automatically applies web performance best practices to pages, and associated assets (CSS, JavaScript, images) without requiring that you modify your existing content or workflow.
+- [HTML rewrite cache](doc/html_cache.md): eligibility, browser isolation,
+  invalidation, and testing.
+- [Historical archive](doc/history_archive.md): shared-buffer snapshots,
+  retention, restart recovery, and operational limits.
+- [Benchmark tools and results](benchmark/): profiling and performance checks.
+- [Companion ngx_pagespeed fork](https://github.com/bantilan/ngx_pagespeed):
+  Nginx integration using PSOL from this project.
 
-mod_pagespeed is built on PageSpeed Optimization Libraries, deployed across 100,000+ web-sites, and provided by popular hosting and CDN providers such as DreamHost, GoDaddy, EdgeCast, and others. There are 40+ available optimizations filters, which include:
+This fork builds on work by the original Google PageSpeed team, Apache
+contributors, and the wider PageSpeed community. The original
+[PageSpeed documentation](https://developers.google.com/speed/pagespeed/module)
+is useful background for inherited filters and configuration. Upstream
+documentation and packages do not necessarily include this fork's changes.
 
-- Image optimization, compression, and resizing
-- CSS & JavaScript concatenation, minification, and inlining
-- Cache extension, domain sharding, and domain rewriting
-- Deferred loading of JavaScript and image resources
-- and many others...
-
-[![Demo](http://img.youtube.com/vi/8moGR2qf994/0.jpg)](http://www.youtube.com/watch?v=8moGR2qf994)
-
-|  Try it 	|   [modpagespeed.com](https://modpagespeed.com)	|
-|---	|---	|
-| Slack | https://the-asf.slack.com/archives/CJTG9RH9U |
-| Read about it  |https://developers.google.com/speed/pagespeed/module   |
-| Download it  | https://modpagespeed.com/doc/download  |
-| Check announcements  |https://groups.google.com/group/mod-pagespeed-announce   |
-| Discuss it  | https://groups.google.com/group/mod-pagespeed-discuss  |
-|FAQ   | https://modpagespeed.com/doc/faq  |
-
-
-Curious to learn more about mod_pagespeed? Check out our GDL episode below, which covers the history of the project, an architectural overview of how mod_pagespeed works under the hood, and a number of operational tips and best practices for deploying mod_pagespeed.
-
-[![GDL Episode](http://img.youtube.com/vi/6uCAdQSHhmA/0.jpg)](http://www.youtube.com/watch?v=6uCAdQSHhmA)
+The project retains the Apache License 2.0; see [LICENSE](LICENSE) and
+[NOTICE](NOTICE) for licensing and attribution.
