@@ -105,6 +105,33 @@ class DomainRewriteFilterTest : public RewriteTestBase {
   int prev_num_rewrites_;
 };
 
+TEST_F(DomainRewriteFilterTest, RewriteClassicScript) {
+  // Control: ordinary scripts are still rewritten.
+  ValidateExpected("classic",
+                   StrCat("<script src='", kFrom1Domain, "app.js'></script>"),
+                   StrCat("<script src='", kTo1Domain, "app.js'></script>"));
+  EXPECT_EQ(1, DeltaRewrites());
+}
+
+TEST_F(DomainRewriteFilterTest, DontRewriteModuleScript) {
+  // Modules fetch with CORS mode: moving the host can break the fetch when
+  // the new host lacks ACAO, so module URLs are left alone.
+  ValidateNoChanges(
+      "module",
+      StrCat("<script type=\"module\" src='", kFrom1Domain, "app.js'>",
+             "</script>"));
+  EXPECT_EQ(0, DeltaRewrites());
+}
+
+TEST_F(DomainRewriteFilterTest, DontRewriteCrossoriginScript) {
+  // Same for explicitly CORS-fetched scripts: the new host may not send
+  // the ACAO header the original host sends.
+  ValidateNoChanges(
+      "crossorigin",
+      StrCat("<script crossorigin src='", kFrom1Domain, "lib.js'></script>"));
+  EXPECT_EQ(0, DeltaRewrites());
+}
+
 TEST_F(DomainRewriteFilterTest, DontTouch) {
   ExpectNoChange("", "");
   ExpectNoChange("relative", "relative.css");

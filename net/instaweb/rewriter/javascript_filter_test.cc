@@ -1565,6 +1565,98 @@ TEST_P(JavascriptFilterTest, CspBaseUri) {
              ScriptSrc("http://test.com/scripts/a.js.pagespeed.jm.0.js")));
 }
 
+// An integrity-pinned script keeps its bytes: minifying would break the
+// browser's subresource-integrity check and the script would not run.
+TEST_P(JavascriptFilterTest, DontRewriteIntegrityScript) {
+  InitFiltersAndTest(100);
+  ValidateNoChanges(
+      "integrity",
+      StrCat("<script src=\"", kOrigJsName,
+             "\" integrity=\"sha256-abc\"></script>"));
+}
+
+// Modules, import maps and data blocks are never minified or rewritten.
+TEST_P(JavascriptFilterTest, DontRewriteModuleScript) {
+  InitFiltersAndTest(100);
+  ValidateNoChanges(
+      "module",
+      StrCat("<script type=\"module\" src=\"", kOrigJsName, "\"></script>"));
+}
+
+TEST_P(JavascriptFilterTest, DontRewriteImportMap) {
+  InitFilters();
+  ValidateNoChanges(
+      "importmap",
+      "<script type=\"importmap\">"
+      "{\"imports\":{\"/app.js\":\"/app-v2.js\"}}"
+      "</script>");
+}
+
+TEST_P(JavascriptFilterTest, DontRewriteDataBlock) {
+  InitFilters();
+  ValidateNoChanges(
+      "datablock",
+      "<script type=\"application/json\">{\"a\":  1}</script>");
+  ValidateNoChanges(
+      "speculationrules",
+      "<script type=\"speculationrules\">"
+      "{\"prerender\":[{\"source\":\"list\",\"urls\":[\"/next\"]}]}"
+      "</script>");
+}
+
+// nomodule classic scripts minify normally with the attribute preserved.
+TEST_P(JavascriptFilterTest, MinifyNomoduleScript) {
+  InitFiltersAndTest(100);
+  ValidateExpected(
+      "nomodule",
+      StrCat("<script nomodule src=\"", kOrigJsName, "\"></script>"),
+      StrCat("<script nomodule src=\"", expected_rewritten_path_.c_str(),
+             "\"></script>"));
+}
+
+// Modern syntax must either minify correctly or pass through untouched;
+// it must never be corrupted. Template literals are the sharp edge: their
+// newlines and interpolations are significant string content.
+TEST_P(JavascriptFilterTest, ModernSyntaxTemplateLiteral) {
+  InitFilters();
+  static const char kTemplate[] =
+      "<script>var t = `hello ${name},\nwelcome!`;</script>";
+  // Fail-closed until the minifier understands template literals: byte
+  // identical output. If a minifier learns them, this expectation should
+  // become the (verified correct) minified form instead.
+  ValidateNoChanges("template_literal", kTemplate);
+}
+
+TEST_P(JavascriptFilterTest, ModernSyntaxOperators) {
+  InitFilters();
+  // Optional chaining, nullish coalescing and spread minify to whitespace
+  // removal only, which preserves semantics.
+  ValidateExpected(
+      "modern_operators",
+      "<script>var x = a?.b ?? c; var y = [...d, ...e];</script>",
+      GetParam() ? "<script>var x = a?.b ?? c; var y = [...d, ...e];</script>"
+                 : "<script>var x=a?.b??c;var y=[...d,...e];</script>");
+}
+
+TEST_P(JavascriptFilterTest, ModernSyntaxClassAsync) {
+  InitFilters();
+  // Classes, fields, async/await and arrows minify to whitespace removal.
+  static const char kInput[] =
+      "<script>class C { f = async () => { await g(); }; }</script>";
+  static const char kMinified[] =
+      "<script>class C{f=async()=>{await g();};}</script>";
+  ValidateExpected("modern_class_async", kInput,
+                   GetParam() ? kInput : kMinified);
+}
+
+// Unparseable input passes through and records a failure.
+TEST_P(JavascriptFilterTest, MinifyFailurePassthrough) {
+  InitFilters();
+  static const char kBroken[] = "<script>var x = \"oops;</script>";
+  ValidateNoChanges("minify_failure", kBroken);
+  EXPECT_EQ(1, minification_failures_->Get());
+}
+
 // We test with use_experimental_minifier == GetParam() as both true and false.
 INSTANTIATE_TEST_CASE_P(JavascriptFilterTestInstance, JavascriptFilterTest,
                         ::testing::Bool());

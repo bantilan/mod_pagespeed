@@ -487,6 +487,14 @@ void JavascriptFilter::RewriteInlineScript(HtmlCharactersNode* body_node) {
 // External script; minify and replace with rewritten version (also external).
 void JavascriptFilter::RewriteExternalScript(
     HtmlElement* script_in_progress, HtmlElement::Attribute* script_src) {
+  // A script carrying integrity= pins its bytes: minifying would break the
+  // browser's subresource-integrity check and the script would not run.
+  if (ScriptTagScanner::HasIntegrityAttribute(script_in_progress)) {
+    driver()->InsertDebugComment(
+        "JS not rewritten: integrity attribute pins the script bytes",
+        script_in_progress);
+    return;
+  }
   const StringPiece script_url(script_src->DecodedValueOrNull());
   ResourcePtr resource(CreateInputResourceOrInsertDebugComment(
       script_url, RewriteDriver::InputRole::kScript, script_in_progress));

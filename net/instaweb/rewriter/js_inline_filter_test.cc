@@ -534,6 +534,48 @@ TEST_F(JsInlineFilterTest, BasicCsp) {
       StrCat(kCspYesInline, "<script>function id(x) { return x; }\n</script>"));
 }
 
+// Inlining is synchronous: async/defer scripts stay external so execution
+// order and timing do not change.
+TEST_F(JsInlineFilterTest, NoInlineAsyncScript) {
+  AddFilter(RewriteOptions::kInlineJavascript);
+  static const char kJs[] = "function id(x) { return x; }\n";
+  SetResponseWithDefaultHeaders("script.js", kContentTypeJavascript, kJs, 3000);
+  ValidateNoChanges("no_inline_async",
+                    "<script async src=script.js></script>");
+}
+
+TEST_F(JsInlineFilterTest, NoInlineDeferScript) {
+  AddFilter(RewriteOptions::kInlineJavascript);
+  static const char kJs[] = "function id(x) { return x; }\n";
+  SetResponseWithDefaultHeaders("script.js", kContentTypeJavascript, kJs, 3000);
+  ValidateNoChanges("no_inline_defer",
+                    "<script defer src=script.js></script>");
+}
+
+// Inlined scripts keep every attribute; only src is removed.
+TEST_F(JsInlineFilterTest, InlinePreservesAttributes) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+  static const char kJs[] = "function id(x) { return x; }\n";
+  SetResponseWithDefaultHeaders("script.js", kContentTypeJavascript, kJs, 3000);
+  ValidateExpected(
+      "inline_attrs",
+      "<script src=script.js nonce=\"n\" crossorigin=\"anonymous\" "
+      "referrerpolicy=\"no-referrer\" fetchpriority=\"high\" "
+      "nomodule></script>",
+      "<script nonce=\"n\" crossorigin=\"anonymous\" "
+      "referrerpolicy=\"no-referrer\" fetchpriority=\"high\" "
+      "nomodule>function id(x) { return x; }\n</script>");
+}
+
+TEST_F(JsInlineFilterTest, NoInlineModuleScript) {
+  AddFilter(RewriteOptions::kInlineJavascript);
+  static const char kJs[] = "import x from '/x.js';\n";
+  SetResponseWithDefaultHeaders("mod.js", kContentTypeJavascript, kJs, 3000);
+  ValidateNoChanges("no_inline_module",
+                    "<script type=\"module\" src=mod.js></script>");
+}
+
 }  // namespace
 
 }  // namespace net_instaweb

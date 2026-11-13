@@ -620,6 +620,14 @@ TEST_F(JsMinifyTest, SourceMapsSimple) {
   EXPECT_EQ(expected_map, MappingsToString(mappings));
 }
 
+TEST_F(JsMinifyTest, TemplateLiteralFailsClosed) {
+  // Template newlines and interpolations are significant string content
+  // that whitespace handling cannot be trusted with (see WG-05). Both
+  // minifiers must fail rather than corrupt; callers keep the original.
+  CheckOldError("var t = `hello ${name},\nwelcome!`;");
+  CheckNewError("var t = `hello ${name},\nwelcome!`;");
+}
+
 TEST_F(JsMinifyTest, SourceMapsComplex) {
   GoogleString output;
   net_instaweb::source_map::MappingVector mappings;

@@ -125,6 +125,25 @@ TEST_F(JsDisableFilterTest, DisablesScript) {
   FAIL();
 }
 
+TEST_F(JsDisableFilterTest, SkipsModulesAndDataBlocks) {
+  const GoogleString input_html = StrCat(
+      "<body>",
+      "<script type=\"module\" src=\"mod.js\"></script>",
+      "<script type=\"importmap\">{\"imports\":{}}</script>",
+      "<script type=\"application/json\">{\"a\":1}</script>",
+      "<script src=\"plain.js\"></script>",
+      "</body>");
+  const GoogleString expected = StrCat(
+      "<body>",
+      "<script type=\"module\" src=\"mod.js\"></script>",
+      "<script type=\"importmap\">{\"imports\":{}}</script>",
+      "<script type=\"application/json\">{\"a\":1}</script>",
+      "<script src=\"plain.js\" type=\"text/psajs\" "
+      "data-pagespeed-orig-index=\"0\"></script>",
+      "</body>");
+  ValidateExpectedUrl("http://example.com/", input_html, expected);
+}
+
 TEST_F(JsDisableFilterTest, InvalidUserAgent) {
   SetCurrentUserAgent("BlackListUserAgent");
   const char script[] = "<head>"

@@ -471,6 +471,12 @@ void Minifier<OutputConsumer>::Minify() {
       ChangeToken(kMinusMinusToken);
       output_.append("--");
       index_ += 2;
+    } else if (ch == '`') {
+      // Template literals can span lines and interpolate (${...}): their
+      // newlines are significant string content, so whitespace handling
+      // here cannot be trusted. Fail closed (callers keep the original)
+      // rather than risk changing the string value.
+      error_ = true;
     } else {
       // Copy other characters over verbatim, but make sure not to join two +
       // tokens into ++ or two - tokens into --, or to join ++ and + into +++

@@ -255,6 +255,23 @@ TEST_F(ScriptTagScannerTest, TypeScripts) {
   }
 }
 
+TEST_F(ScriptTagScannerTest, ModernScriptTypes) {
+  // Modules, import maps, speculation rules and data blocks are not classic
+  // scripts: every consumer must see kUnknownScript and leave them alone.
+  ValidateNoChanges("modern types",
+      ScriptWithType("module") +
+      ScriptWithType("importmap") +
+      ScriptWithType("speculationrules") +
+      ScriptWithType("application/json") +
+      ScriptWithType("application/ld+json"));
+
+  ASSERT_EQ(5, collector_.Size());
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(GoogleString(), collector_.UrlAt(i));
+    EXPECT_EQ(ScriptTagScanner::kUnknownScript, collector_.ClassificationAt(i));
+  }
+}
+
 TEST_F(ScriptTagScannerTest, TypeScriptsNormalize) {
   // For type, we need to support removal of leading/trailing whitespace
   // and case folding

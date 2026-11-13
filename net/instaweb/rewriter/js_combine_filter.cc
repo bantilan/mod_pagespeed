@@ -629,6 +629,17 @@ void JsCombineFilter::ConsiderJsForCombination(HtmlElement* element,
     return;
   }
 
+  if (!driver()->content_security_policy().PermitsInlineScript()) {
+    // The combination executes through inline eval() stubs without nonces,
+    // which a nonce/hash CSP (or one without unsafe-inline) would block,
+    // breaking the combined scripts. Combining requires both permissions.
+    driver()->InsertDebugComment(
+        "Not considering JS combining since CSP forbids inline scripts",
+        element);
+    context_->Reset();
+    return;
+  }
+
   // Worst-case scenario is if we somehow ended up with nested scripts.
   // In this case, we just give up entirely.
   if (script_depth_ > 0) {
@@ -662,6 +673,13 @@ void JsCombineFilter::ConsiderJsForCombination(HtmlElement* element,
   // Don't combine scripts with the data-pagespeed-no-defer attribute.
   if (element->FindAttribute(HtmlName::kDataPagespeedNoDefer) != nullptr ||
       element->FindAttribute(HtmlName::kPagespeedNoDefer) != nullptr) {
+    NextCombination();
+    return;
+  }
+
+  // A script carrying integrity= pins its bytes: combining would execute
+  // different bytes without the author's hash. Barrier, like CSS.
+  if (ScriptTagScanner::HasIntegrityAttribute(element)) {
     NextCombination();
     return;
   }
@@ -724,7 +742,8 @@ JsCombineFilter::JsCombiner* JsCombineFilter::combiner() const {
 // In sync flow, just write out what we have so far, and then
 // reset the context.
 void JsCombineFilter::NextCombination() {
-  if (!context_->empty() && driver()->content_security_policy().PermitsEval()) {
+  if (!context_->empty() && driver()->content_security_policy().PermitsEval() &&
+      driver()->content_security_policy().PermitsInlineScript()) {
     driver()->InitiateRewrite(context_.release());
     context_.reset(MakeContext());
   }

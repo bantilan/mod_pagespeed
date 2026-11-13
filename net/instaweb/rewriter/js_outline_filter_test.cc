@@ -218,6 +218,53 @@ TEST_F(JsOutlineFilterTest, EmptyScript) {
   ValidateNoChanges("empty_script", "<script></script>");
 }
 
+// An integrity attribute is meaningless inline but would be enforced (and
+// wrong) on the outlined external script: leave it inline.
+TEST_F(JsOutlineFilterTest, OutlineSkipsIntegrity) {
+  SetupOutliner();
+  ValidateNoChanges(
+      "outline_integrity",
+      "<script integrity=\"sha256-abc\">alert('foo');</script>");
+}
+
+// async/defer are ignored on inline scripts but meaningful externally:
+// copying them would defer code that runs synchronously today.
+TEST_F(JsOutlineFilterTest, OutlineStripsAsyncDefer) {
+  SetupOutliner();
+  GoogleString hash = hasher()->Hash("alert('foo');");
+  GoogleString outline_url =
+      Encode(kTestDomain, JsOutlineFilter::kFilterId, hash, "_", "js");
+  ValidateExpected(
+      "outline_strip_async",
+      "<script async defer>alert('foo');</script>",
+      StrCat("<script src=\"", outline_url, "\"></script>"));
+}
+
+// Other attributes survive outlining verbatim.
+TEST_F(JsOutlineFilterTest, OutlinePreservesAttributes) {
+  SetupOutliner();
+  GoogleString hash = hasher()->Hash("alert('foo');");
+  GoogleString outline_url =
+      Encode(kTestDomain, JsOutlineFilter::kFilterId, hash, "_", "js");
+  ValidateExpected(
+      "outline_attrs",
+      "<script nonce=\"n\" crossorigin=\"anonymous\" "
+      "referrerpolicy=\"no-referrer\" "
+      "fetchpriority=\"high\">alert('foo');</script>",
+      StrCat("<script nonce=\"n\" crossorigin=\"anonymous\" "
+             "referrerpolicy=\"no-referrer\" "
+             "fetchpriority=\"high\" src=\"",
+             outline_url, "\"></script>"));
+}
+
+// Modules are never outlined.
+TEST_F(JsOutlineFilterTest, OutlineSkipsModule) {
+  SetupOutliner();
+  ValidateNoChanges(
+      "outline_module",
+      "<script type=\"module\">import x from '/x.js';</script>");
+}
+
 // http://github.com/apache/incubator-pagespeed-mod/issues/416
 TEST_F(JsOutlineFilterTest, RewriteDomain) {
   SetupOutliner();

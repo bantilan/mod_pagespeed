@@ -622,6 +622,35 @@ TEST_F(JsCombineFilterTest, TestBarriers) {
                     StrCat("<script src=", kJsUrl1, "></script>"
                            "<script defer src=", kJsUrl2, "></script>"));
 
+  // Integrity-pinned scripts are barriers: combining would discard the hash.
+  ValidateNoChanges("integrity",
+                    StrCat("<script src=", kJsUrl1,
+                           " integrity=\"sha256-abc\"></script>"
+                           "<script src=", kJsUrl2,
+                           " integrity=\"sha256-def\"></script>"));
+
+  // Modules, import maps and data blocks are never combined.
+  ValidateNoChanges("module",
+                    StrCat("<script type=\"module\" src=", kJsUrl1,
+                           "></script>"
+                           "<script src=", kJsUrl2, "></script>"));
+  ValidateNoChanges("importmap",
+                    StrCat("<script type=\"importmap\">",
+                           "{\"imports\":{\"/app.js\":\"/app-v2.js\"}}",
+                           "</script>"
+                           "<script src=", kJsUrl1, "></script>"));
+  ValidateNoChanges("datablock",
+                    StrCat("<script type=\"application/json\">",
+                           "{\"a\":1}",
+                           "</script>"
+                           "<script src=", kJsUrl1, "></script>"));
+  ValidateNoChanges("speculationrules",
+                    StrCat("<script type=\"speculationrules\">",
+                           "{\"prerender\":[{\"source\":\"list\","
+                           "\"urls\":[\"/next\"]}]}",
+                           "</script>"
+                           "<script src=", kJsUrl1, "></script>"));
+
   // IE conditional comments
   ValidateNoChanges("iec",
                     StrCat("<script src=", kJsUrl1, "></script>",
@@ -1328,7 +1357,10 @@ TEST_F(JsCombineFilterTest, Csp2) {
   options()->SoftEnableFilterForTesting(RewriteOptions::kDebug);
   server_context()->ComputeSignature(options());
 
-  // This one has unsafe-eval, so we can work.
+  // WG-05 contract change: unsafe-eval alone is not enough, because the
+  // inline eval() stubs combine emits are blocked without unsafe-inline
+  // (or a nonce the stubs do not carry). The old expectation combined here
+  // and produced scripts the browser would refuse to run.
   static const char kCsp[] = "<meta http-equiv=\"Content-Security-Policy\" "
                              "content=\"script-src * 'unsafe-eval'\">";
   ValidateExpected(
@@ -1337,9 +1369,53 @@ TEST_F(JsCombineFilterTest, Csp2) {
              "<script src=", kJsUrl1, "></script>",
              "<script src=", kJsUrl2, "></script>"),
       StrCat(kCsp,
-             "<script src=\"a.js+b.js.pagespeed.jc.g2Xe9o4bQ2.js\"></script>",
-             "<script>eval(mod_pagespeed_KecOGCIjKt);</script>",
-             "<script>eval(mod_pagespeed_dzsx6RqvJJ);</script>"));
+             "<script src=", kJsUrl1, "></script>",
+             "<!--Not considering JS combining since CSP forbids inline "
+             "scripts-->",
+             "<script src=", kJsUrl2, "></script>",
+             "<!--Not considering JS combining since CSP forbids inline "
+             "scripts-->"));
+}
+
+// WG-05 contract change: the eval() stubs combine emits are inline scripts
+// without nonces, so a nonce policy (even with 'unsafe-eval') would block
+// them and break the page. Combining now requires inline-script permission
+// too. The old Csp2 expectation above (combine under * + unsafe-eval, where
+// inline scripts are likewise blocked) asserted the same broken output.
+TEST_F(JsCombineFilterTest, CspNonceSkipsCombining) {
+  // Can't use EnableDebug since fixture uses SoftEnableFilterForTesting.
+  options()->ClearSignatureForTesting();
+  options()->SoftEnableFilterForTesting(RewriteOptions::kDebug);
+  server_context()->ComputeSignature(options());
+
+  static const char kCsp[] = "<meta http-equiv=\"Content-Security-Policy\" "
+                             "content=\"script-src 'nonce-abc123' "
+                             "'unsafe-eval'\">";
+  ValidateExpected(
+      "csp-nonce",
+      StrCat(kCsp,
+             "<script src=", kJsUrl1, "></script>",
+             "<script src=", kJsUrl2, "></script>"),
+      StrCat(kCsp,
+             "<script src=", kJsUrl1, "></script>",
+             "<!--Not considering JS combining since CSP forbids inline "
+             "scripts-->",
+             "<script src=", kJsUrl2, "></script>",
+             "<!--Not considering JS combining since CSP forbids inline "
+             "scripts-->"));
+}
+
+// An integrity script splits combinations without being touched itself.
+TEST_F(JsCombineFilterTest, IntegrityScriptUntouched) {
+  Parse("integrity-split",
+        StrCat("<script src=", kJsUrl1, "></script>",
+               "<script src=", kJsUrl2,
+               " integrity=\"sha256-def\"></script>"));
+  EXPECT_NE(GoogleString::npos,
+            output_buffer_.find(StrCat(
+                "<script src=", kJsUrl2,
+                " integrity=\"sha256-def\"></script>")))
+      << output_buffer_;
 }
 
 }  // namespace net_instaweb

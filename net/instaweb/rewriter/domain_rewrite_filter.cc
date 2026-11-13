@@ -404,9 +404,21 @@ void DomainRewriteFilter::StartElementImpl(HtmlElement* element) {
        element->keyword() == HtmlName::kIframe);
   // Preserve subresource integrity by not changing script or stylesheet URLs.
   const bool has_integrity = ScriptTagScanner::HasIntegrityAttribute(element);
+  // Module scripts fetch with CORS mode, as do scripts with an explicit
+  // crossorigin attribute: moving them to another host can break the fetch
+  // when the new host lacks ACAO, so their URLs are left alone.
+  const bool is_script = (element->keyword() == HtmlName::kScript);
+  const char* script_type =
+      is_script ? element->AttributeValue(HtmlName::kType) : NULL;
+  const bool is_cors_script =
+      (script_type != NULL && StringCaseEqual(script_type, "module")) ||
+      (is_script && element->FindAttribute("crossorigin") != NULL);
   for (int i = 0, n = attributes.size(); i < n; ++i) {
     if (has_integrity && (attributes[i].category == semantic_type::kScript ||
                           attributes[i].category == semantic_type::kStylesheet)) {
+      continue;
+    }
+    if (is_cors_script && attributes[i].category == semantic_type::kScript) {
       continue;
     }
     // Only rewrite attributes that are resource-tags.  If hyperlinks

@@ -69,6 +69,16 @@ void JsOutlineFilter::StartElementImpl(HtmlElement* element) {
   // We only deal with Javascript
   if (script_tag_scanner_.ParseScriptElement(element, &src) ==
       ScriptTagScanner::kJavaScript) {
+    // Browsers ignore integrity= on an inline <script>, but outlining copies
+    // the attribute onto the new external script, where it would be enforced
+    // against bytes it does not match. Leave it inline.
+    if (ScriptTagScanner::HasIntegrityAttribute(element)) {
+      driver()->InsertDebugComment(
+          "JS not outlined: integrity attribute would become enforced on "
+          "the outlined script",
+          element);
+      return;
+    }
     inline_element_ = element;
     inline_chars_ = nullptr;
     // script elements which already have a src should not be outlined.
@@ -131,6 +141,10 @@ void JsOutlineFilter::OutlineScript(HtmlElement* inline_element,
       driver()->InsertDebugComment(failure_reason, inline_element);
     } else if (WriteResource(content, resource.get(), handler)) {
       HtmlElement* outline_element = driver()->CloneElement(inline_element);
+      // async/defer are ignored on inline scripts but meaningful externally:
+      // copying them would defer code that runs synchronously today.
+      outline_element->DeleteAttribute("async");
+      outline_element->DeleteAttribute("defer");
       driver()->AddAttribute(outline_element, HtmlName::kSrc, resource->url());
       // Add <script src=...> element to DOM.
       driver()->InsertNodeBeforeNode(inline_element, outline_element);

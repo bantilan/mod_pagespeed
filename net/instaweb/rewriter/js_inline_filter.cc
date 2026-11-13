@@ -124,6 +124,17 @@ void JsInlineFilter::StartElementImpl(HtmlElement* element) {
       driver()->InsertDebugComment(
           "JS not inlined because of the integrity attribute", element);
     }
+    // Inlining is synchronous: it would change the execution timing of
+    // async/defer scripts, which run after parsing and possibly out of
+    // order. for/event scripts are unaffected (their trigger is preserved).
+    if (should_inline_ &&
+        (script_tag_scanner_.ExecutionMode(element) &
+         (ScriptTagScanner::kExecuteAsync | ScriptTagScanner::kExecuteDefer)) !=
+            0) {
+      should_inline_ = false;
+      driver()->InsertDebugComment(
+          "JS not inlined because of async/defer execution mode", element);
+    }
   }
 }
 
@@ -137,9 +148,7 @@ void JsInlineFilter::EndElementImpl(HtmlElement* element) {
         << "should_inline_ should be false if attr val is null";
 
     // StartInlining() transfers ownership of ctx to RewriteDriver, or deletes
-    // it on failure.
-    // TODO(morlovich): Consider async/defer here; it may not be a good
-    // idea to inline async scripts in particular.
+    // it on failure. async/defer scripts never reach here (see above).
     Context* ctx = new Context(this, element, attr);
     ctx->StartInlining();
   }
