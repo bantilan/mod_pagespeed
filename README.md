@@ -20,7 +20,9 @@ module or a complete Nginx distribution.
 ## What This Fork Adds
 
 - **Modern image delivery.** AVIF conversion through `convert_to_avif`, with
-  browser-aware AVIF/WebP/original-format selection. Existing image elements,
+  browser-supported fallback: prefer AVIF for compatible browsers, fall back
+  to WebP for WebP-only browsers, and retain the original image format when
+  neither is supported. Existing image elements,
   attributes, and CSS remain intact; format negotiation does not require
   introducing `<picture>` elements or extra wrappers.
 - **LCP-oriented optimization.** The `prioritize_lcp_images` filter and
@@ -47,6 +49,25 @@ The existing PageSpeed filter model remains available, including image
 compression and resizing, CSS/JavaScript minification and inlining, and resource
 cache optimizations. Backward compatibility is preserved where practical;
 new features should be enabled and tested explicitly for each deployment.
+
+### Browser-Aware Image Fallback
+
+When AVIF conversion and the relevant image rewrite filters are enabled, format
+selection uses HTTP `Accept` together with User-Agent and browser-version
+capability checks. This also supports initial HTML requests whose `Accept`
+header does not explicitly advertise image formats.
+
+| Browser capability | Preferred image delivery |
+| --- | --- |
+| AVIF supported | AVIF, when conversion is eligible and beneficial |
+| AVIF unsupported, WebP supported | WebP fallback |
+| Neither AVIF nor WebP supported | Original format, with applicable optimizations |
+
+Unknown or partial AVIF support is handled conservatively rather than assuming
+every Chromium-based browser supports it. Format selection does not guarantee
+conversion for every image: content, size savings, enabled filters, and rewrite
+limits still apply. Browser-dependent HTML cache variants remain isolated so an
+AVIF-capable browser's cached page is not reused for an incompatible browser.
 
 ## Deployment Notes
 
