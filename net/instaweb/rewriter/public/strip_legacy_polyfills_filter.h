@@ -26,20 +26,22 @@
 namespace net_instaweb {
 class HtmlElement;
 class HtmlParse;
+class RewriteOptions;
 
-// Removes external script tags that point to legacy polyfill bundles.
+// Removes explicitly approved external classic polyfill scripts. URL names
+// alone never authorize removal unless explicitly allowlisted by the operator.
 class StripLegacyPolyfillsFilter : public EmptyHtmlFilter {
  public:
-  explicit StripLegacyPolyfillsFilter(HtmlParse* html_parse);
+  explicit StripLegacyPolyfillsFilter(HtmlParse* html_parse,
+                                      const RewriteOptions* options = nullptr);
   ~StripLegacyPolyfillsFilter() override;
 
   void EndElement(HtmlElement* element) override;
   const char* Name() const override { return "StripLegacyPolyfills"; }
 
  private:
-  bool IsLegacyPolyfillUrl(const char* src) const;
-
   HtmlParse* html_parse_;
+  const RewriteOptions* options_;
 
   DISALLOW_COPY_AND_ASSIGN(StripLegacyPolyfillsFilter);
 };

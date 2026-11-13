@@ -302,6 +302,8 @@ const char RewriteOptions::kForbidFilters[] = "ForbidFilters";
 const char RewriteOptions::kInlineResourcesWithoutExplicitAuthorization[] =
     "InlineResourcesWithoutExplicitAuthorization";
 const char RewriteOptions::kRetainComment[] = "RetainComment";
+const char RewriteOptions::kStripLegacyPolyfillFilename[] =
+    "StripLegacyPolyfillFilename";
 const char RewriteOptions::kPermitIdsForCssCombining[] =
     "PermitIdsForCssCombining";
 const char RewriteOptions::kAddResourceHeader[] = "AddResourceHeader";
@@ -2236,6 +2238,11 @@ void RewriteOptions::AddProperties() {
       "\"Auto\", \"None\", or comma separated list of strings chosen from "
       "\"Save-Data\", \"User-Agent\", and \"Accept\".", true);
 
+  AddBaseProperty(StringSet(), &RewriteOptions::strip_legacy_polyfill_filenames_,
+      "slpf", kStripLegacyPolyfillFilename, kDirectoryScope,
+      "Explicitly approve an exact polyfill filename for removal. Repeatable; "
+      "inherited entries are additive. Requires strip_legacy_polyfills.", true);
+
   // Test-only, so no enum.
   AddRequestProperty(false,
                      &RewriteOptions::test_instant_fetch_rewrite_deadline_,
@@ -3090,6 +3097,46 @@ RewriteOptions::OptionSettingResult RewriteOptions::FormatSetOptionMessage(
       break;
   }
   return result;
+}
+
+bool RewriteOptions::PolyfillFilenameOption::SetFromString(
+    StringPiece filename, GoogleString* error_detail) {
+  bool valid = !filename.empty() && filename.size() <= 255 &&
+      filename != "." && filename != "..";
+  for (char c : filename) {
+    valid = valid && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-');
+  }
+  if (!valid) {
+    *error_detail = "Expected one exact filename (1-255 ASCII letters, digits, "
+                    "dots, underscores or hyphens); no paths, URLs or wildcards";
+    return false;
+  }
+  mutable_value().insert(filename.as_string());
+  return true;
+}
+
+void RewriteOptions::PolyfillFilenameOption::Merge(const OptionBase* src) {
+  DCHECK(option_name() == src->option_name());
+  const auto* other = static_cast<const PolyfillFilenameOption*>(src);
+  if (other->was_set())
+    mutable_value().insert(other->value().begin(), other->value().end());
+}
+
+GoogleString RewriteOptions::PolyfillFilenameOption::ToString() const {
+  GoogleString result;
+  for (const auto& filename : value()) {
+    if (!result.empty()) result += ", ";
+    result += filename;
+  }
+  return result;
+}
+
+GoogleString RewriteOptions::PolyfillFilenameOption::Signature(
+    const Hasher* hasher) const {
+  // Valid filenames cannot contain commas; sorted/deduplicated entries give
+  // an unambiguous, order-independent cache identity.
+  return RewriteOptions::OptionSignature(ToString(), hasher);
 }
 
 RewriteOptions::OptionSettingResult RewriteOptions::ParseAndSetOptionFromName1(
@@ -3986,6 +4033,10 @@ void RewriteOptions::ComputeSignatureLockHeld() {
     if ((filter != kDebug) && Enabled(filter)) {
       StrAppend(&signature_, "_", FilterId(filter));
     }
+  }
+  if (Enabled(kStripLegacyPolyfills)) {
+    // Do not replay cached HTML produced by filename-only polyfill removal.
+    StrAppend(&signature_, "_slp_explicit_v1");
   }
   signature_ += "O";
   for (int i = 0, n = all_options_.size(); i < n; ++i) {

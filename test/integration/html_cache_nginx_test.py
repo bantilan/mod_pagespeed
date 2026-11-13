@@ -207,7 +207,8 @@ http {
         self.assertNotIn(b'Public HTML caching fixture', body)
         self.assertNotIn(b'<!-- PageSpeed Cache:', body)
         dashboard = self.fetch('/pagespeed_admin/dashboard')[2]
-        self.assertIn(b'Browse HTML history', dashboard)
+        self.assertNotIn(b'HTML CACHE HITS', dashboard)
+        self.assertIn(b'Savings by resource', dashboard)
         self.assertIn(b'html_cache', dashboard)
 
 

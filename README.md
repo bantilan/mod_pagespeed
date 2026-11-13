@@ -87,6 +87,30 @@ AVIF-capable browser's cached page is not reused for an incompatible browser.
 
 ## Usage
 
+### Explicit Polyfill Removal
+
+The optional `strip_legacy_polyfills` filter requires explicit approval, rather
+than guessing from familiar filenames. For WordPress-generated script tags,
+configure one quoted filename per line:
+
+```nginx
+pagespeed EnableFilters strip_legacy_polyfills;
+pagespeed StripLegacyPolyfillFilename "wp-polyfill.min.js";
+pagespeed StripLegacyPolyfillFilename "polyfill.min.js";
+pagespeed StripLegacyPolyfillFilename "polyfills.min.js";
+```
+
+Matching uses the exact case-sensitive URL filename, ignoring query strings
+such as `?ver=123`. Approval applies across hosts and versions; it is not a
+wildcard or substring match. Alternatively, approve a script in HTML using
+`data-pagespeed-remove-polyfill="true"`. Verify that each bundle is unnecessary
+for every browser your application supports before approving it, and review
+the list after WordPress/plugin updates. Modules, data blocks, inline scripts,
+`nomodule` fallbacks and no-transform instructions remain protected. See
+[polyfill removal and migration](doc/polyfill_removal.md).
+
+### Basic Nginx Configuration
+
 Nginx example:
 
 ```nginx

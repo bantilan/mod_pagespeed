@@ -300,6 +300,91 @@ TEST_F(RewriteOptionsTest, ForceEnableFilter) {
   EXPECT_TRUE(options_.Enabled(RewriteOptions::kHtmlWriterFilter));
 }
 
+TEST_F(RewriteOptionsTest, PolyfillRemovalRequiresExplicitEnablement) {
+  const RewriteOptions::RewriteLevel levels[] = {
+      RewriteOptions::kPassThrough, RewriteOptions::kCoreFilters,
+      RewriteOptions::kOptimizeForBandwidth, RewriteOptions::kAllFilters};
+  for (auto level : levels) {
+    options_.SetRewriteLevel(level);
+    EXPECT_FALSE(options_.Enabled(RewriteOptions::kStripLegacyPolyfills));
+  }
+  options_.EnableFilter(RewriteOptions::kStripLegacyPolyfills);
+  EXPECT_TRUE(options_.Enabled(RewriteOptions::kStripLegacyPolyfills));
+}
+
+TEST_F(RewriteOptionsTest, ExplicitPolyfillRemovalVersionsCacheIdentity) {
+  options_.ComputeSignature();
+  EXPECT_EQ(GoogleString::npos, options_.signature().find("_slp_explicit_v1"));
+  options_.ClearSignatureForTesting();
+  options_.EnableFilter(RewriteOptions::kStripLegacyPolyfills);
+  options_.ComputeSignature();
+  EXPECT_NE(GoogleString::npos, options_.signature().find("_slp_explicit_v1"));
+}
+
+TEST_F(RewriteOptionsTest, PolyfillFilenameListIsRepeatableAndValidated) {
+  GoogleString message;
+  NullMessageHandler handler;
+  const char* name = RewriteOptions::kStripLegacyPolyfillFilename;
+  EXPECT_FALSE(options_.HasApprovedPolyfillFilenames());
+  for (const char* filename : {"wp-polyfill.min.js", "polyfill.min.js", "wp-polyfill.min.js"}) {
+    EXPECT_EQ(RewriteOptions::kOptionOk,
+              options_.ParseAndSetOptionFromName1(name, filename, &message, &handler));
+  }
+  EXPECT_TRUE(options_.IsApprovedPolyfillFilename("wp-polyfill.min.js"));
+  EXPECT_TRUE(options_.IsApprovedPolyfillFilename("polyfill.min.js"));
+  EXPECT_FALSE(options_.IsApprovedPolyfillFilename("WP-polyfill.min.js"));
+  EXPECT_FALSE(options_.IsApprovedPolyfillFilename("prefix-wp-polyfill.min.js"));
+  const char* id;
+  bool was_set;
+  GoogleString value;
+  ASSERT_TRUE(options_.OptionValue(name, &id, &was_set, &value));
+  EXPECT_TRUE(was_set);
+  EXPECT_EQ("polyfill.min.js, wp-polyfill.min.js", value);
+  const char* invalid[] = {"", ".", "..", "*.js", "/wp-polyfill.min.js",
+      "https://site.test/polyfill.js", "polyfill.js?ver=1", "file.js#hash",
+      "a.js,b.js", "a.js b.js", " file.js", "file.js ", "a\\b.js", "%66ile.js"};
+  for (const char* filename : invalid) {
+    EXPECT_EQ(RewriteOptions::kOptionValueInvalid,
+              options_.ParseAndSetOptionFromName1(name, filename, &message, &handler))
+        << filename;
+  }
+  EXPECT_EQ(RewriteOptions::kOptionValueInvalid,
+      options_.ParseAndSetOptionFromName1(name, GoogleString(256, 'a'), &message, &handler));
+}
+
+TEST_F(RewriteOptionsTest, PolyfillFilenamesCloneMergeAndCacheSignatures) {
+  GoogleString message;
+  NullMessageHandler handler;
+  const char* name = RewriteOptions::kStripLegacyPolyfillFilename;
+  RewriteOptions child(&thread_system_);
+  ASSERT_EQ(RewriteOptions::kOptionOk,
+      options_.ParseAndSetOptionFromName1(name, "parent.js", &message, &handler));
+  ASSERT_EQ(RewriteOptions::kOptionOk,
+      child.ParseAndSetOptionFromName1(name, "child.js", &message, &handler));
+  options_.Merge(child);
+  scoped_ptr<RewriteOptions> copy(options_.Clone());
+  EXPECT_TRUE(copy->IsApprovedPolyfillFilename("parent.js"));
+  EXPECT_TRUE(copy->IsApprovedPolyfillFilename("child.js"));
+  copy->ComputeSignature();
+  options_.ComputeSignature();
+  EXPECT_EQ(copy->signature(), options_.signature());
+  RewriteOptions reversed(&thread_system_);
+  reversed.ParseAndSetOptionFromName1(name, "child.js", &message, &handler);
+  reversed.ParseAndSetOptionFromName1(name, "parent.js", &message, &handler);
+  reversed.ParseAndSetOptionFromName1(name, "child.js", &message, &handler);
+  reversed.ComputeSignature();
+  EXPECT_EQ(copy->signature(), reversed.signature());
+  reversed.ClearSignatureForTesting();
+  reversed.ParseAndSetOptionFromName1(name, "additional.js", &message, &handler);
+  reversed.ComputeSignature();
+  EXPECT_NE(copy->signature(), reversed.signature());
+  EXPECT_NE(GoogleString::npos, copy->OptionsToString().find("StripLegacyPolyfillFilename"));
+  EXPECT_NE(GoogleString::npos, copy->OptionsToString().find("child.js, parent.js"));
+  EXPECT_EQ(RewriteOptions::kOptionNameUnknown,
+      options_.ParseAndSetOptionFromNameWithScope(name, "unsafe.js",
+          RewriteOptions::kQueryScope, &message, &handler));
+}
+
 TEST_F(RewriteOptionsTest, NumFilterInLevels) {
   const RewriteOptions::RewriteLevel levels[] = {
       RewriteOptions::kOptimizeForBandwidth,
@@ -1063,6 +1148,7 @@ TEST_F(RewriteOptionsTest, LookupOptionByNameTest) {
     RewriteOptions::kServeStaleIfFetchError,
     RewriteOptions::kServeStaleWhileRevalidateThresholdSec,
     RewriteOptions::kServeWebpToAnyAgent,
+    RewriteOptions::kStripLegacyPolyfillFilename,
     RewriteOptions::kServeXhrAccessControlHeaders,
     RewriteOptions::kStickyQueryParameters,
     RewriteOptions::kSupportNoScriptEnabled,

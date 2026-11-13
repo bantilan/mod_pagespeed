@@ -1072,8 +1072,8 @@ void RewriteDriver::AddPreRenderFilters() {
     AppendOwnedPreRenderFilter(new StripScriptsFilter(this));
   }
   if (rewrite_options->Enabled(RewriteOptions::kStripLegacyPolyfills)) {
-    // Remove legacy polyfill script tags while keeping normal scripts.
-    AppendOwnedPreRenderFilter(new StripLegacyPolyfillsFilter(this));
+    // Remove only explicitly approved external classic polyfill scripts.
+    AppendOwnedPreRenderFilter(new StripLegacyPolyfillsFilter(this, rewrite_options));
   }
   if (is_critical_images_beacon_enabled()) {
     // This filter should be enabled early, at least before image rewriting,

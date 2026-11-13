@@ -3693,6 +3693,43 @@ TEST_F(HtmlPageCacheTest, AdminCountersTrackLookupsPublicationsAndBypasses) {
   EXPECT_GT(statistics()->GetVariable("html_cache_bytes_served")->Get(), 0);
 }
 
+TEST_F(HtmlPageCacheTest, PolyfillFilenameApprovalSeparatesCachedHtml) {
+  SetResponseWithDefaultHeaders("http://www.example.com/wp-polyfill.min.js?ver=1",
+      kContentTypeJavascript, "window.required = true;", 100);
+  RewriteOptions* opts = server_context()->global_options();
+  opts->ClearSignatureForTesting();
+  opts->EnableFilter(RewriteOptions::kStripLegacyPolyfills);
+  opts->DisableFilter(RewriteOptions::kRewriteJavascriptExternal);
+  opts->DisableFilter(RewriteOptions::kCombineJavascript);
+  opts->DisableFilter(RewriteOptions::kInlineJavascript);
+  server_context()->ComputeSignature(opts);
+  SetResponseWithDefaultHeaders("http://www.example.com/html-cache.html",
+      kContentTypeHtml, "<html><head><script id='required' "
+      "src='/wp-polyfill.min.js?ver=1'></script></head><body>Policy</body></html>", 100);
+  GoogleString unapproved = Fetch();
+  ExpectStatus(unapproved, "MISS");
+  EXPECT_NE(GoogleString::npos, unapproved.find("wp-polyfill.min.js"));
+  ExpectStatus(Fetch(), "HIT");
+
+  opts->ClearSignatureForTesting();
+  GoogleString message;
+  ASSERT_EQ(RewriteOptions::kOptionOk, opts->ParseAndSetOptionFromName1(
+      RewriteOptions::kStripLegacyPolyfillFilename, "wp-polyfill.min.js",
+      &message, message_handler()));
+  server_context()->ComputeSignature(opts);
+  GoogleString approved = Fetch();
+  ExpectStatus(approved, "MISS");
+  EXPECT_EQ(GoogleString::npos, approved.find("wp-polyfill.min.js"));
+  ExpectStatus(Fetch(), "HIT");
+
+  opts->ClearSignatureForTesting();
+  opts->DisableFilter(RewriteOptions::kStripLegacyPolyfills);
+  server_context()->ComputeSignature(opts);
+  GoogleString disabled = Fetch();
+  ExpectStatus(disabled, "MISS");
+  EXPECT_NE(GoogleString::npos, disabled.find("wp-polyfill.min.js"));
+}
+
 TEST_F(HtmlPageCacheTest, MissHitPreservesCreationAndDynamicAge) {
   GoogleString first = Fetch();
   ExpectStatus(first, "MISS");

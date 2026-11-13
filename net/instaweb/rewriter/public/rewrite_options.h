@@ -421,6 +421,14 @@ class RewriteOptions {
   static const char kForbidFilters[];
   static const char kInlineResourcesWithoutExplicitAuthorization[];
   static const char kRetainComment[];
+  static const char kStripLegacyPolyfillFilename[];
+
+  bool HasApprovedPolyfillFilenames() const {
+    return !strip_legacy_polyfill_filenames_.value().empty();
+  }
+  bool IsApprovedPolyfillFilename(StringPiece filename) const {
+    return strip_legacy_polyfill_filenames_.value().count(filename.as_string()) != 0;
+  }
   static const char kPermitIdsForCssCombining[];
   // 2-argument ones:
   static const char kAddResourceHeader[];
@@ -3182,6 +3190,16 @@ class RewriteOptions {
     DISALLOW_COPY_AND_ASSIGN(Option);
   };
 
+  // Repeatable exact filenames; repeated directives and inherited scopes are
+  // additive. Registration supplies normal validation, printing and signatures.
+  class PolyfillFilenameOption : public OptionTemplateBase<StringSet> {
+   public:
+    bool SetFromString(StringPiece value, GoogleString* error_detail) override;
+    void Merge(const OptionBase* src) override;
+    GoogleString Signature(const Hasher* hasher) const override;
+    GoogleString ToString() const override;
+  };
+
  protected:
   // Adds a new Property to 'properties' (the last argument).
   template<class RewriteOptionsSubclass, class OptionClass>
@@ -4211,6 +4229,7 @@ class RewriteOptions {
   CopyOnWrite<FastWildcardGroup> allow_resources_;
   CopyOnWrite<FastWildcardGroup> allow_when_inlining_resources_;
   CopyOnWrite<FastWildcardGroup> retain_comments_;
+  PolyfillFilenameOption strip_legacy_polyfill_filenames_;
   CopyOnWrite<FastWildcardGroup> lazyload_enabled_classes_;
   CopyOnWrite<FastWildcardGroup> css_combining_permitted_ids_;
 
