@@ -151,20 +151,25 @@ GoogleString HistoryControls(const SystemRewriteOptions& options,
             StringPiece(memory).substr(newline + 1), begin, end);
     }
   }
-  GoogleString controls =
-      "<section class='pagespeed-history-controls'><form method='get'>"
-      "<label>From (UTC) <input type='date' name='from' value='";
-  controls += EscapeHistory(from) + "'></label><label>Through (UTC) "
-      "<input type='date' name='until' value='" + EscapeHistory(until) +
-      "'></label><button type='submit'>Browse history</button></form><p>";
-  controls += "One chronological history combines current memory with archived "
-      "records. Archive pages are bounded to 100 matching records; older links "
-      "continue into retained history. Existing view filters still apply.</p>";
+  bool show_panel = kind != "images" && kind != "html_cache" &&
+                    kind != "javascript" && kind != "css";
+  GoogleString controls;
+  if (show_panel) {
+    controls =
+        "<section class='pagespeed-history-controls'><form method='get'>"
+        "<label>From (UTC) <input type='date' name='from' value='";
+    controls += EscapeHistory(from) + "'></label><label>Through (UTC) "
+        "<input type='date' name='until' value='" + EscapeHistory(until) +
+        "'></label><button type='submit'>Browse history</button></form><p>";
+    controls += "One chronological history combines current memory with archived "
+        "records. Archive pages are bounded to 100 matching records; older links "
+        "continue into retained history. Existing view filters still apply.</p>";
+  }
   if (!error.empty()) controls += "<p role='alert'>" + EscapeHistory(error) + "</p>";
-  if (!page.next.empty()) controls += "<a href='?from=" +
+  if (!page.next.empty()) controls += "<nav aria-label='History pagination'><a href='?from=" +
       EscapeHistory(from) + "&amp;until=" + EscapeHistory(until) + "&amp;cursor=" +
-      EscapeHistory(page.next) + "'>Older records &rarr;</a>";
-  controls += "</section>";
+      EscapeHistory(page.next) + "'>Older records &rarr;</a></nav>";
+  if (show_panel) controls += "</section>";
   return controls;
 }
 

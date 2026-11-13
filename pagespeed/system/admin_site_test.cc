@@ -155,6 +155,8 @@ TEST_F(AdminSiteTest, ArchiveReadDoesNotRequireLiveSnapshot) {
       nullptr, nullptr, server_context_.get(), factory()->statistics(),
       factory()->statistics(), &archive_options);
   EXPECT_THAT(body, ::testing::HasSubstr("https://archive.example/no-live.js"));
+  EXPECT_THAT(body, ::testing::Not(::testing::HasSubstr("<section class='pagespeed-history-controls'>")));
+  EXPECT_THAT(body, ::testing::Not(::testing::HasSubstr("Browse history")));
   unlink((path + "/history/checkpoint").c_str());
   unlink((path + "/history/segment-00000000000000000001.psh").c_str());
   rmdir((path + "/history").c_str());

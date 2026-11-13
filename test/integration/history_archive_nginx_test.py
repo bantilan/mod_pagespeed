@@ -103,12 +103,16 @@ class HistoryArchiveNginxTest(base.HtmlCacheNginxTest):
         status, headers, body = self.fetch('/pagespeed_admin/html_cache?history=1')
         self.assertEqual(200, status)
         self.assertIn(b'archived-page-check=1', body)
-        self.assertIn(b'One chronological history', body)
+        self.assertNotIn(b'One chronological history', body)
         self.assertIn('no-store', headers.get('Cache-Control', ''))
         for view in ['message_history', 'images', 'html_cache', 'javascript', 'css']:
             status, _, page = self.fetch('/pagespeed_admin/' + view + '?history=1')
             self.assertEqual(200, status)
-            self.assertIn(b'Browse history', page)
+            if view == 'message_history':
+                self.assertIn(b'Browse history', page)
+            else:
+                self.assertNotIn(b'Browse history', page)
+                self.assertNotIn(b"<section class='pagespeed-history-controls'>", page)
             if view in ['javascript', 'css']:
                 self.assertIn(b'not a complete per-resource rewrite history', page)
         empty = self.fetch('/pagespeed_admin/html_cache?history=1&from=1970-01-01&until=1970-01-02')[2]
