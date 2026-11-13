@@ -29,14 +29,18 @@
 
 namespace net_instaweb {
 
-// Rewriter that heuristically prioritizes an early in-viewport image and
-// applies native lazy loading for later images:
-// 1) for the first candidate image, removes loading="lazy"
-// 2) adds fetchpriority="high"
-// 3) inserts <link rel="preload" as="image" href="..." fetchpriority="high">
-//    in <head>
-// 4) adds pagespeed_no_defer/data-pagespeed-no-defer to avoid defer filters
-// 5) for later candidate images, adds loading="lazy" unless explicitly eager
+// Rewriter that prioritizes the likely LCP image and applies native lazy
+// loading for later images. Hero selection prefers accepted LCP evidence
+// (the critical-images finder, fed by the LCP beacon) over document position:
+// 1) a learned-critical image takes the single hero slot wherever it appears
+// 2) with no evidence at all, the first eligible image is the heuristic hero
+// 3) with evidence that matches nothing (e.g. a changed variant), the first
+//    image is left alone rather than guess-preloaded
+// The hero gets loading="lazy" removed, fetchpriority="high", a preload hint
+// in <head>, and pagespeed_no_defer/data-pagespeed-no-defer to avoid defer
+// filters. Later images get loading="lazy" except learned-critical images
+// and explicit author eager/high-priority choices, which are never lazy.
+// Hidden images, tiny trackers, and data URLs are skipped entirely.
 class PrioritizeLcpImagesFilter : public CommonFilter {
  public:
   explicit PrioritizeLcpImagesFilter(RewriteDriver* driver);
@@ -50,17 +54,19 @@ class PrioritizeLcpImagesFilter : public CommonFilter {
   void StartElementImpl(HtmlElement* element) override;
   void EndElementImpl(HtmlElement* element) override;
 
-  bool IsEligibleImage(HtmlElement* element, GoogleString* src_out) const;
+  bool IsEligibleImage(HtmlElement* element, GoogleString* src_out,
+                       GoogleString* absolute_url_out) const;
   void InsertPreloadHint(HtmlElement* element, const GoogleString& src);
   void PrioritizeImage(HtmlElement* element, const GoogleString& src);
   void AddLazyLoadingHint(HtmlElement* element);
-  bool IsHiddenByStyle(HtmlElement* element) const;
+  bool IsHidden(HtmlElement* element) const;
   bool LooksLikeTinyTracker(HtmlElement* element) const;
 
   HtmlElement* head_element_;
   bool in_head_;
   bool in_body_;
   int prioritized_count_;
+  bool saw_eligible_image_;
   std::set<GoogleString> preloaded_hrefs_;
 
   DISALLOW_COPY_AND_ASSIGN(PrioritizeLcpImagesFilter);

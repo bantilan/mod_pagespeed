@@ -19,8 +19,10 @@
 
 #include "net/instaweb/rewriter/public/prioritize_lcp_images_filter.h"
 
+#include "net/instaweb/rewriter/public/critical_images_finder.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
+#include "net/instaweb/rewriter/public/server_context.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/html/html_element.h"
@@ -38,6 +40,46 @@ const int kMaxPrioritizedImages = 1;
 
 namespace net_instaweb {
 
+namespace {
+
+// Case-insensitive ASCII whitespace-tolerant check for hiding declarations.
+// Matches e.g. "display:none", "display: none", "VISIBILITY : HIDDEN", with
+// optional "!important". Only display/visibility are considered; hiding via
+// stylesheets cannot be resolved server-side.
+bool InlineStyleHidesElement(StringPiece style_value) {
+  StringPieceVector declarations;
+  SplitStringPieceToVector(style_value, ";", &declarations, true);
+  for (int i = 0, n = declarations.size(); i < n; ++i) {
+    StringPiece declaration(declarations[i]);
+    StringPiece::size_type colon = declaration.find(':');
+    if (colon == StringPiece::npos) {
+      continue;
+    }
+    StringPiece name(declaration.data(), colon);
+    StringPiece value(declaration.data() + colon + 1,
+                      declaration.size() - colon - 1);
+    TrimWhitespace(&name);
+    TrimWhitespace(&value);
+    // Strip a trailing "!important", which does not change hiding.
+    static const char kImportant[] = "!important";
+    if (value.size() >= sizeof(kImportant) - 1 &&
+        StringCaseEqual(value.substr(value.size() - (sizeof(kImportant) - 1)),
+                        kImportant)) {
+      value.remove_suffix(sizeof(kImportant) - 1);
+      TrimWhitespace(&value);
+    }
+    if ((StringCaseEqual(name, "display") &&
+         StringCaseEqual(value, "none")) ||
+        (StringCaseEqual(name, "visibility") &&
+         StringCaseEqual(value, "hidden"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 PrioritizeLcpImagesFilter::PrioritizeLcpImagesFilter(RewriteDriver* driver)
     : CommonFilter(driver) {
   StartDocumentImpl();
@@ -54,6 +96,7 @@ void PrioritizeLcpImagesFilter::StartDocumentImpl() {
   in_head_ = false;
   in_body_ = false;
   prioritized_count_ = 0;
+  saw_eligible_image_ = false;
   preloaded_hrefs_.clear();
 }
 
@@ -75,14 +118,37 @@ void PrioritizeLcpImagesFilter::StartElementImpl(HtmlElement* element) {
   }
 
   GoogleString src;
-  if (!IsEligibleImage(element, &src)) {
+  GoogleString absolute_url;
+  if (!IsEligibleImage(element, &src, &absolute_url)) {
     return;
   }
-  if (prioritized_count_ < kMaxPrioritizedImages) {
+  // Prefer accepted LCP evidence over document position. The finder data is
+  // memoized per request, so these lookups are cheap after the first image.
+  CriticalImagesFinder* finder =
+      driver()->server_context()->critical_images_finder();
+  const bool evidence_available =
+      finder != NULL &&
+      finder->Available(driver()) == CriticalImagesFinder::kAvailable;
+  const bool learned_critical =
+      evidence_available &&
+      finder->IsHtmlCriticalImage(absolute_url, driver());
+  if (learned_critical) {
+    if (prioritized_count_ < kMaxPrioritizedImages) {
+      PrioritizeImage(element, src);
+    }
+    // Learned-critical images past the hero slot are left alone, never lazy.
+  } else if (!saw_eligible_image_ && !evidence_available) {
+    // No evidence at all: the first eligible image is the heuristic hero.
     PrioritizeImage(element, src);
+  } else if (!saw_eligible_image_) {
+    // Evidence exists but names other images (e.g. a changed variant): leave
+    // the first image alone rather than spending the single preload on a
+    // guess the evidence contradicts, and rather than lazy-loading a
+    // possibly-visible image.
   } else {
     AddLazyLoadingHint(element);
   }
+  saw_eligible_image_ = true;
 }
 
 void PrioritizeLcpImagesFilter::EndElementImpl(HtmlElement* element) {
@@ -93,15 +159,28 @@ void PrioritizeLcpImagesFilter::EndElementImpl(HtmlElement* element) {
   }
 }
 
-bool PrioritizeLcpImagesFilter::IsHiddenByStyle(HtmlElement* element) const {
-  HtmlElement::Attribute* style_attr = element->FindAttribute(HtmlName::kStyle);
-  if (style_attr == NULL || style_attr->DecodedValueOrNull() == NULL) {
-    return false;
+bool PrioritizeLcpImagesFilter::IsHidden(HtmlElement* element) const {
+  // Hiding propagates from ancestors. Only the hidden attribute and inline
+  // styles are considered: hiding via stylesheets cannot be resolved
+  // server-side.
+  for (HtmlElement* node = element; node != NULL;
+       node = node->parent()) {
+    // The hidden attribute applies unless overridden, which only stylesheets
+    // or an un-hiding inline style could do. Stylesheets are invisible here;
+    // hidden-plus-unhiding-inline-style on an LCP candidate is pathological,
+    // and skipping it is fail-safe (no wrong preload, and hidden images are
+    // never lazy-loaded either).
+    if (node->FindAttribute("hidden") != NULL) {
+      return true;
+    }
+    const HtmlElement::Attribute* style_attr =
+        node->FindAttribute(HtmlName::kStyle);
+    if (style_attr != NULL && style_attr->DecodedValueOrNull() != NULL &&
+        InlineStyleHidesElement(style_attr->DecodedValueOrNull())) {
+      return true;
+    }
   }
-  GoogleString style = style_attr->DecodedValueOrNull();
-  LowerString(&style);
-  return (style.find("display:none") != GoogleString::npos ||
-          style.find("visibility:hidden") != GoogleString::npos);
+  return false;
 }
 
 bool PrioritizeLcpImagesFilter::LooksLikeTinyTracker(HtmlElement* element) const {
@@ -117,8 +196,9 @@ bool PrioritizeLcpImagesFilter::LooksLikeTinyTracker(HtmlElement* element) const
 }
 
 bool PrioritizeLcpImagesFilter::IsEligibleImage(
-    HtmlElement* element, GoogleString* src_out) const {
-  if (IsHiddenByStyle(element) || LooksLikeTinyTracker(element)) {
+    HtmlElement* element, GoogleString* src_out,
+    GoogleString* absolute_url_out) const {
+  if (IsHidden(element) || LooksLikeTinyTracker(element)) {
     return false;
   }
   HtmlElement::Attribute* src_attr = element->FindAttribute(HtmlName::kSrc);
@@ -136,6 +216,7 @@ bool PrioritizeLcpImagesFilter::IsEligibleImage(
     return false;
   }
   src.CopyToString(src_out);
+  gurl.Spec().CopyToString(absolute_url_out);
   return true;
 }
 
@@ -191,6 +272,15 @@ void PrioritizeLcpImagesFilter::PrioritizeImage(
 }
 
 void PrioritizeLcpImagesFilter::AddLazyLoadingHint(HtmlElement* element) {
+  // Respect an explicit author priority signal: lazy-loading an image the
+  // author marked high-priority contradicts their intent.
+  const HtmlElement::Attribute* fetchpriority_attr =
+      element->FindAttribute(HtmlName::kFetchpriority);
+  if (fetchpriority_attr != NULL &&
+      fetchpriority_attr->DecodedValueOrNull() != NULL &&
+      StringCaseEqual(fetchpriority_attr->DecodedValueOrNull(), "high")) {
+    return;
+  }
   HtmlElement::Attribute* loading_attr = element->FindAttribute("loading");
   if (loading_attr != NULL && loading_attr->DecodedValueOrNull() != NULL) {
     // Respect explicit eager loading from origin/app code.
