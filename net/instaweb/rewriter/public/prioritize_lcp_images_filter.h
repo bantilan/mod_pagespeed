@@ -20,6 +20,7 @@
 #ifndef NET_INSTAWEB_REWRITER_PUBLIC_PRIORITIZE_LCP_IMAGES_FILTER_H_
 #define NET_INSTAWEB_REWRITER_PUBLIC_PRIORITIZE_LCP_IMAGES_FILTER_H_
 
+#include <map>
 #include <set>
 
 #include "net/instaweb/rewriter/public/common_filter.h"
@@ -41,6 +42,10 @@ namespace net_instaweb {
 // filters. Later images get loading="lazy" except learned-critical images
 // and explicit author eager/high-priority choices, which are never lazy.
 // Hidden images, tiny trackers, and data URLs are skipped entirely.
+// The preload names the as-observed (post-rewrite) URL, mirrors responsive
+// selection via imagesrcset/imagesizes (and single-source media/type),
+// copies the img's crossorigin mode, and is skipped when the author already
+// preloaded the hero or when selection needs viewport-dependent choice.
 class PrioritizeLcpImagesFilter : public CommonFilter {
  public:
   explicit PrioritizeLcpImagesFilter(RewriteDriver* driver);
@@ -56,11 +61,27 @@ class PrioritizeLcpImagesFilter : public CommonFilter {
 
   bool IsEligibleImage(HtmlElement* element, GoogleString* src_out,
                        GoogleString* absolute_url_out) const;
-  void InsertPreloadHint(HtmlElement* element, const GoogleString& src);
-  void PrioritizeImage(HtmlElement* element, const GoogleString& src);
+  void InsertPreloadHint(HtmlElement* element, const GoogleString& src,
+                         const GoogleString& absolute_url);
+  void PrioritizeImage(HtmlElement* element, const GoogleString& src,
+                       const GoogleString& absolute_url);
   void AddLazyLoadingHint(HtmlElement* element);
   bool IsHidden(HtmlElement* element) const;
   bool LooksLikeTinyTracker(HtmlElement* element) const;
+  void NotePictureSource(HtmlElement* element);
+  void NoteAuthorPreload(HtmlElement* element);
+  bool IsCoveredByAuthorPreload(const GoogleString& absolute_url);
+
+  // Usable <source srcset> siblings seen under one <picture> parent: the
+  // count plus the first source's mirrored attributes.
+  struct PictureSources {
+    PictureSources() : count(0) {}
+    int count;
+    GoogleString srcset;
+    GoogleString media;
+    GoogleString type;
+  };
+  typedef std::map<HtmlElement*, PictureSources> PictureSourceMap;
 
   HtmlElement* head_element_;
   bool in_head_;
@@ -68,6 +89,9 @@ class PrioritizeLcpImagesFilter : public CommonFilter {
   int prioritized_count_;
   bool saw_eligible_image_;
   std::set<GoogleString> preloaded_hrefs_;
+  std::set<GoogleString> author_preloaded_hrefs_;
+  bool link_headers_scanned_;
+  PictureSourceMap picture_sources_;
 
   DISALLOW_COPY_AND_ASSIGN(PrioritizeLcpImagesFilter);
 };

@@ -64,6 +64,34 @@ class PrioritizeLcpImagesFilterTest : public RewriteTestBase {
     server_context()->set_critical_images_finder(finder);
   }
 
+  // Extracts href="..." from the first auto preload link in output_.
+  GoogleString FirstPreloadHref() {
+    StringPiece out(output_);
+    StringPiece::size_type pos = out.find("<link rel=\"preload\"");
+    EXPECT_NE(StringPiece::npos, pos);
+    if (pos == StringPiece::npos) {
+      return "";
+    }
+    static const char kHref[] = "href=\"";
+    StringPiece::size_type start = out.find(kHref, pos) + sizeof(kHref) - 1;
+    StringPiece::size_type end = out.find("\"", start);
+    return out.substr(start, end - start).as_string();
+  }
+
+  // Extracts src="..." from the first img in output_.
+  GoogleString FirstImgSrc() {
+    StringPiece out(output_);
+    StringPiece::size_type pos = out.find("<img");
+    EXPECT_NE(StringPiece::npos, pos);
+    if (pos == StringPiece::npos) {
+      return "";
+    }
+    static const char kSrc[] = "src=\"";
+    StringPiece::size_type start = out.find(kSrc, pos) + sizeof(kSrc) - 1;
+    StringPiece::size_type end = out.find("\"", start);
+    return out.substr(start, end - start).as_string();
+  }
+
   GoogleString output_;
 
  private:
@@ -271,6 +299,9 @@ TEST_F(PrioritizeLcpImagesFilterTest, TrackersAndEmptySourcesAreSkipped) {
 }
 
 TEST_F(PrioritizeLcpImagesFilterTest, PrioritizesImgInsidePicture) {
+  // WG-04 contract change: the old expectation preloaded the img fallback
+  // src, but supporting browsers fetch the <source> candidate instead, so
+  // that preload could never match. The preload now mirrors the source.
   const GoogleString input =
       "<head></head><body>"
       "<picture><source srcset=\"/hero.webp\"><img src=\"/hero.jpg\" "
@@ -278,13 +309,204 @@ TEST_F(PrioritizeLcpImagesFilterTest, PrioritizesImgInsidePicture) {
       "</body>";
   const GoogleString expected =
       "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\" "
-      "fetchpriority=\"high\"></head><body>"
+      "fetchpriority=\"high\" imagesrcset=\"/hero.webp\"></head><body>"
       "<picture><source srcset=\"/hero.webp\">"
       "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
       "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
       "</picture>"
       "</body>";
   Parse("prioritize_picture_img", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// The preload must name the final rewritten URL, not the pre-rewrite one:
+// with cache extension on, both must carry the fingerprinted URL.
+class PrioritizeLcpImagesExtendCacheTest
+    : public PrioritizeLcpImagesFilterTest {
+ protected:
+  void SetUp() override {
+    options()->EnableFilter(RewriteOptions::kExtendCacheImages);
+    PrioritizeLcpImagesFilterTest::SetUp();
+  }
+};
+
+TEST_F(PrioritizeLcpImagesExtendCacheTest, PreloadMatchesRewrittenHeroUrl) {
+  AddFileToMockFetcher(StrCat(kTestDomain, "hero.jpg"), "Puzzle.jpg",
+                       kContentTypeJpeg, 100);
+  SetFetchResponse404("below.jpg");
+  Parse("preload_matches_rewritten",
+        "<head></head><body>"
+        "<img src=\"/hero.jpg\">"
+        "<img src=\"/below.jpg\">"
+        "</body>");
+  EXPECT_EQ(FirstImgSrc(), FirstPreloadHref()) << output_;
+  EXPECT_NE(GoogleString::npos, FirstPreloadHref().find(".pagespeed."))
+      << output_;
+}
+
+// A responsive hero preloads via imagesrcset/imagesizes copied from the img,
+// so the browser picks the same candidate; href stays as fallback.
+TEST_F(PrioritizeLcpImagesFilterTest, SrcsetHeroGetsImagesrcsetPreload) {
+  const GoogleString input =
+      "<head></head><body>"
+      "<img src=\"/hero.jpg\" "
+      "srcset=\"/hero-480.jpg 480w, /hero-800.jpg 800w\" "
+      "sizes=\"(max-width: 600px) 480px, 800px\">"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\" "
+      "fetchpriority=\"high\" "
+      "imagesrcset=\"/hero-480.jpg 480w, /hero-800.jpg 800w\" "
+      "imagesizes=\"(max-width: 600px) 480px, 800px\"></head><body>"
+      "<img src=\"/hero.jpg\" "
+      "srcset=\"/hero-480.jpg 480w, /hero-800.jpg 800w\" "
+      "sizes=\"(max-width: 600px) 480px, 800px\" fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</body>";
+  Parse("srcset_imagesrcset", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// A single usable <source> (format switching) mirrors onto the preload,
+// including media/type gating and the img's sizes.
+TEST_F(PrioritizeLcpImagesFilterTest, SingleSourcePictureGetsImagesrcset) {
+  const GoogleString input =
+      "<head></head><body>"
+      "<picture>"
+      "<source media=\"(min-width: 800px)\" srcset=\"/hero-large.jpg\" "
+      "type=\"image/jpeg\">"
+      "<img src=\"/hero.jpg\" sizes=\"(min-width: 800px) 800px, 100vw\">"
+      "</picture>"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\" "
+      "fetchpriority=\"high\" imagesrcset=\"/hero-large.jpg\" "
+      "imagesizes=\"(min-width: 800px) 800px, 100vw\" "
+      "media=\"(min-width: 800px)\" type=\"image/jpeg\"></head><body>"
+      "<picture>"
+      "<source media=\"(min-width: 800px)\" srcset=\"/hero-large.jpg\" "
+      "type=\"image/jpeg\">"
+      "<img src=\"/hero.jpg\" sizes=\"(min-width: 800px) 800px, 100vw\" "
+      "fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</picture>"
+      "</body>";
+  Parse("single_source_mirror", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// Multiple usable sources need viewport-dependent selection a single hint
+// cannot express: no preload, but the hero keeps its element priority.
+TEST_F(PrioritizeLcpImagesFilterTest, MultiSourcePictureSkipsPreload) {
+  const GoogleString input =
+      "<head></head><body>"
+      "<picture>"
+      "<source media=\"(min-width: 800px)\" srcset=\"/large.jpg\">"
+      "<source srcset=\"/small.jpg\">"
+      "<img src=\"/hero.jpg\">"
+      "</picture>"
+      "</body>";
+  const GoogleString expected =
+      "<head></head><body>"
+      "<picture>"
+      "<source media=\"(min-width: 800px)\" srcset=\"/large.jpg\">"
+      "<source srcset=\"/small.jpg\">"
+      "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</picture>"
+      "</body>";
+  Parse("multi_source_skip", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// A <source> without srcset contributes nothing: fall back to the img src.
+TEST_F(PrioritizeLcpImagesFilterTest, SourcelessPicturePreloadsImgSrc) {
+  const GoogleString input =
+      "<head></head><body>"
+      "<picture><source media=\"(min-width: 800px)\">"
+      "<img src=\"/hero.jpg\"></picture>"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\" "
+      "fetchpriority=\"high\"></head><body>"
+      "<picture><source media=\"(min-width: 800px)\">"
+      "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</picture>"
+      "</body>";
+  Parse("sourceless_picture", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// An author preload for the hero suppresses the automatic duplicate.
+TEST_F(PrioritizeLcpImagesFilterTest, AuthorPreloadDeduped) {
+  const GoogleString input =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\"></head>"
+      "<body>"
+      "<img src=\"/hero.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\"></head>"
+      "<body>"
+      "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</body>";
+  Parse("author_preload_dedup", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// Dedup compares absolutized URLs, not raw strings.
+TEST_F(PrioritizeLcpImagesFilterTest, AuthorPreloadAbsoluteUrlDeduped) {
+  const GoogleString input =
+      "<head><link rel=\"preload\" as=\"image\" "
+      "href=\"http://test.com/hero.jpg\"></head>"
+      "<body>"
+      "<img src=\"/hero.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" "
+      "href=\"http://test.com/hero.jpg\"></head>"
+      "<body>"
+      "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</body>";
+  Parse("author_preload_absolute_dedup", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// Author preloads via Link response headers dedup the same way.
+TEST_F(PrioritizeLcpImagesFilterTest, AuthorPreloadLinkHeaderDeduped) {
+  response_headers_.Add(
+      "Link", "</hero.jpg>; rel=\"preload\"; as=\"image\"; "
+      "fetchpriority=\"high\"");
+  SetHtmlMimetype();
+  Parse("author_link_header_dedup",
+        "<head></head><body>"
+        "<img src=\"/hero.jpg\">"
+        "</body>");
+  EXPECT_EQ(AddHtmlBody(
+                "<head></head><body>"
+                "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
+                "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+                "</body>"),
+            output_);
+}
+
+// Mismatched credentials would double-fetch: the img's crossorigin mode is
+// copied onto the preload.
+TEST_F(PrioritizeLcpImagesFilterTest, CrossoriginCopiedToPreload) {
+  const GoogleString input =
+      "<head></head><body>"
+      "<img crossorigin=\"anonymous\" src=\"/hero.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\" "
+      "fetchpriority=\"high\" crossorigin=\"anonymous\"></head><body>"
+      "<img crossorigin=\"anonymous\" src=\"/hero.jpg\" "
+      "fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</body>";
+  Parse("crossorigin_copied", input);
   EXPECT_EQ(AddHtmlBody(expected), output_);
 }
 
