@@ -24,6 +24,10 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <errno.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 extern "C" {
@@ -236,11 +240,53 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
   if (ok) {
     int clamped_quality = std::max(0, std::min(100, configured_quality));
     int cq_level = 63 - ((clamped_quality * 63) / 100);
+    // NOTE: system() forks, which is unsafe in multithreaded workers: a
+    // fork deadlock stalls image rewriting with no error. posix_spawnp
+    // avoids fork while resolving avifenc from PATH the same way (WG-07).
+    GoogleString level_str = StringPrintf("%d", cq_level);
+    char* const argv[] = {
+        const_cast<char*>("avifenc"),
+        const_cast<char*>("--jobs"),
+        const_cast<char*>("1"),
+        const_cast<char*>("--min"),
+        const_cast<char*>(level_str.c_str()),
+        const_cast<char*>("--max"),
+        const_cast<char*>(level_str.c_str()),
+        const_cast<char*>(input_path.c_str()),
+        const_cast<char*>(output_template),
+        NULL,
+    };
     // avifenc 1.0.x does not support --quiet; keep stdout/stderr redirected.
-    GoogleString cmd = StringPrintf(
-        "avifenc --jobs 1 --min %d --max %d \"%s\" \"%s\" >/dev/null 2>&1",
-        cq_level, cq_level, input_path.c_str(), output_template);
-    ok = (system(cmd.c_str()) == 0);
+    posix_spawn_file_actions_t actions;
+    bool spawned = (posix_spawn_file_actions_init(&actions) == 0);
+    if (spawned) {
+      spawned =
+          (posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO,
+                                            "/dev/null", O_WRONLY, 0) == 0) &&
+          (posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO,
+                                            STDERR_FILENO) == 0);
+    }
+    pid_t pid = -1;
+    int spawn_status = -1;
+    if (spawned) {
+      spawn_status =
+          posix_spawnp(&pid, "avifenc", &actions, NULL, argv, environ);
+      posix_spawn_file_actions_destroy(&actions);
+    }
+    int exit_status = -1;
+    if (spawn_status == 0) {
+      int wait_status = 0;
+      while (waitpid(pid, &wait_status, 0) < 0 && errno == EINTR) {
+      }
+      if (WIFEXITED(wait_status)) {
+        exit_status = WEXITSTATUS(wait_status);
+      }
+    }
+    ok = (exit_status == 0);
+    if (!ok) {
+      PS_LOG_WARN(handler, "AVIF encoder failed: spawn=%d exit=%d",
+                  spawn_status, exit_status);
+    }
   }
 
   if (ok) {

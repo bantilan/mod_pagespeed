@@ -122,6 +122,7 @@ DeviceProperties::DeviceProperties(UserAgentMatcher* matcher)
       accepts_webp_(kNotSet),
       accepts_avif_(kNotSet),
       avif_explicitly_rejected_(false),
+      webp_explicitly_rejected_(false),
       supports_webp_rewritten_urls_(kNotSet),
       supports_avif_rewritten_urls_(kNotSet),
       supports_webp_lossless_alpha_(kNotSet),
@@ -165,6 +166,8 @@ void DeviceProperties::ParseRequestHeaders(
                       ? kTrue : kFalse;
   avif_explicitly_rejected_ = ExplicitlyRejectsImageFormat(
       request_headers, kContentTypeAvif.mime_type());
+  webp_explicitly_rejected_ = ExplicitlyRejectsImageFormat(
+      request_headers, kContentTypeWebp.mime_type());
   accepts_gzip_ = request_headers.HasValue(HttpAttributes::kAcceptEncoding,
                                            HttpAttributes::kGzip)
                       ? kTrue
@@ -254,8 +257,9 @@ bool DeviceProperties::SupportsWebpInPlace() const {
 // by only checking the "accept" header.
 bool DeviceProperties::SupportsWebpRewrittenUrls() const {
   if (supports_webp_rewritten_urls_ == kNotSet) {
-    if ((accepts_webp_ == kTrue) ||
-        ua_matcher_->SupportsWebpRewrittenUrls(user_agent_)) {
+    if (!webp_explicitly_rejected_ &&
+        ((accepts_webp_ == kTrue) ||
+         ua_matcher_->SupportsWebpRewrittenUrls(user_agent_))) {
       supports_webp_rewritten_urls_ = kTrue;
     } else {
       supports_webp_rewritten_urls_ = kFalse;

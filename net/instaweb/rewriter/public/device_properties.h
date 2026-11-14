@@ -101,6 +101,7 @@ class DeviceProperties {
   mutable LazyBool accepts_webp_;
   mutable LazyBool accepts_avif_;
   bool avif_explicitly_rejected_;
+  bool webp_explicitly_rejected_;
   mutable LazyBool accepts_gzip_;
   mutable LazyBool supports_webp_rewritten_urls_;
   mutable LazyBool supports_avif_rewritten_urls_;

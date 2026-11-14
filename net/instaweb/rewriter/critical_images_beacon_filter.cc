@@ -78,6 +78,7 @@ void CriticalImagesBeaconFilter::DetermineEnabled(
   DCHECK_EQ(kDoNotBeacon, beacon_metadata_.status);
   DCHECK(beacon_metadata_.nonce.empty());
   DCHECK(!insert_beacon_js_);
+  DCHECK(!stamp_hashes_);
 
   if (driver()->request_properties()->SupportsCriticalImagesBeacon()) {
     // Check whether we need to beacon, and store the nonce we get.
@@ -85,6 +86,9 @@ void CriticalImagesBeaconFilter::DetermineEnabled(
         driver()->server_context()->critical_images_finder();
     beacon_metadata_ = finder->PrepareForBeaconInsertion(driver());
     insert_beacon_js_ = (beacon_metadata_.status != kDoNotBeacon);
+    stamp_hashes_ =
+        insert_beacon_js_ ||
+        finder->Available(driver()) == CriticalImagesFinder::kAvailable;
   }
 }
 
@@ -150,6 +154,7 @@ void CriticalImagesBeaconFilter::Clear() {
   beacon_metadata_.nonce.clear();
   image_url_hashes_.clear();
   insert_beacon_js_ = false;
+  stamp_hashes_ = false;
   added_beacon_js_ = false;
 }
 
@@ -173,10 +178,12 @@ void CriticalImagesBeaconFilter::EndElementImpl(HtmlElement* element) {
             gurl.spec_c_str(), strlen(gurl.spec_c_str()));
         GoogleString hash_str = UintToString(hash_val);
         image_url_hashes_.insert(hash_str);
-        if (insert_beacon_js_) {
+        if (stamp_hashes_) {
           driver()->AddAttribute(element, HtmlName::kDataPagespeedUrlHash,
                                  hash_str);
-          MaybeAddBeaconJavascript(element);
+          if (insert_beacon_js_) {
+            MaybeAddBeaconJavascript(element);
+          }
         }
       }
     }

@@ -240,9 +240,26 @@ void PrioritizeLcpImagesFilter::StartElementImpl(HtmlElement* element) {
   const bool evidence_available =
       finder != NULL &&
       finder->Available(driver()) == CriticalImagesFinder::kAvailable;
-  const bool learned_critical =
-      evidence_available &&
-      finder->IsHtmlCriticalImage(absolute_url, driver());
+  // The beacon reports hashes of ORIGINAL image URLs, but this filter runs
+  // post-rewrite: a rewritten src hashes differently, so comparing it would
+  // silently unlearn every hero once image rewriting kicks in (WG-07).
+  // Prefer the stamped original hash; fall back to the current src.
+  bool learned_critical = false;
+  if (evidence_available) {
+    const HtmlElement::Attribute* hash_attr =
+        element->FindAttribute(HtmlName::kDataPagespeedUrlHash);
+    const char* stamped =
+        hash_attr != NULL ? hash_attr->DecodedValueOrNull() : NULL;
+    if (stamped != NULL) {
+      const StringSet& critical =
+          finder->GetHtmlCriticalImages(driver());
+      learned_critical =
+          critical.find(GoogleString(stamped)) != critical.end();
+    } else {
+      learned_critical =
+          finder->IsHtmlCriticalImage(absolute_url, driver());
+    }
+  }
   if (learned_critical) {
     if (prioritized_count_ < kMaxPrioritizedImages) {
       PrioritizeImage(element, src, absolute_url);

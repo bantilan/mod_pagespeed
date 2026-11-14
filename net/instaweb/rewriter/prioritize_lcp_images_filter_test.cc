@@ -154,6 +154,32 @@ TEST_F(PrioritizeLcpImagesFilterTest, LearnedLcpBeatsFirstImage) {
   EXPECT_EQ(AddHtmlBody(expected), output_);
 }
 
+// The beacon reports original-URL hashes but this filter runs post-rewrite:
+// the stamped original hash must match evidence even when the current src
+// is rewritten (WG-07). Without this the learned hero is left unpreloaded
+// and lazy-loaded once image rewriting kicks in.
+TEST_F(PrioritizeLcpImagesFilterTest, LearnedEvidenceMatchesBeaconHashOnRewrittenSrc) {
+  SetLearnedCriticalImages("http://test.com/hero.jpg");
+  const GoogleString input =
+      "<head></head><body>"
+      "<img src=\"/logo.png\" width=\"120\" height=\"40\">"
+      "<img src=\"/hero.jpg.pagespeed.ic.HASH.webp\" "
+      "data-pagespeed-url-hash=\"http://test.com/hero.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" "
+      "href=\"/hero.jpg.pagespeed.ic.HASH.webp\" "
+      "fetchpriority=\"high\"></head><body>"
+      "<img src=\"/logo.png\" width=\"120\" height=\"40\">"
+      "<img src=\"/hero.jpg.pagespeed.ic.HASH.webp\" "
+      "data-pagespeed-url-hash=\"http://test.com/hero.jpg\" "
+      "fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</body>";
+  Parse("learned_evidence_matches_beacon_hash", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
 // Learned-critical images are never lazy-loaded, even past the hero slot.
 TEST_F(PrioritizeLcpImagesFilterTest, LearnedCriticalImagesAreNeverLazyLoaded) {
   SetLearnedCriticalImages("http://test.com/hero.jpg",

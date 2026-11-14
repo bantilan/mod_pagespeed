@@ -25,6 +25,7 @@
 #include "net/instaweb/public/global_constants.h"
 #include "net/instaweb/rewriter/public/beacon_critical_images_finder.h"
 #include "net/instaweb/rewriter/public/critical_images_finder.h"
+#include "net/instaweb/rewriter/public/mock_critical_images_finder.h"
 #include "net/instaweb/rewriter/public/lazyload_images_filter.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
@@ -265,6 +266,30 @@ TEST_F(CriticalImagesBeaconFilterTest,
   options()->EnableFilter(RewriteOptions::kPrioritizeLcpImages);
   RunInjection();
   VerifyInjection(1);
+  VerifyWithNoImageRewrite();
+}
+
+// Finder stub reporting learned evidence with nothing due: script must
+// stay out while original-URL hashes are still stamped for consumers.
+class StampOnlyCriticalImagesFinder : public MockCriticalImagesFinder {
+ public:
+  explicit StampOnlyCriticalImagesFinder(Statistics* stats)
+      : MockCriticalImagesFinder(stats) {}
+  BeaconMetadata PrepareForBeaconInsertion(RewriteDriver* driver) override {
+    BeaconMetadata result;
+    result.status = kDoNotBeacon;
+    return result;
+  }
+};
+
+TEST_F(CriticalImagesBeaconFilterTest, StampsHashesWithoutScriptWhenLearned) {
+  // WG-07: post-rewrite evidence consumers need original-URL hashes even
+  // when no new beacon is due. Learned pages stamp hashes, inject no
+  // script, and bump no beacon counter.
+  server_context()->set_critical_images_finder(
+      new StampOnlyCriticalImagesFinder(statistics()));
+  RunInjection();
+  VerifyNoInjection(0);
   VerifyWithNoImageRewrite();
 }
 

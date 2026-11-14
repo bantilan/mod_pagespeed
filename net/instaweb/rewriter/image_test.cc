@@ -927,6 +927,24 @@ TEST_F(ImageTest, JpegTest) {
       241260, true);
 }
 
+TEST_F(ImageTest, JpegToAvifTest) {
+  // Regression lock for the external-encoder spawn path (WG-07): the
+  // encoder must produce decodable AVIF with correct dimensions. Passes
+  // both before and after the system()-to-posix_spawn swap; the swap
+  // itself fixes fork-safety, which a unit test cannot fail first
+  // without hanging the suite.
+  if (RunningOnValgrind()) {
+    return;
+  }
+  options_->jpeg_quality = 85;
+  CheckImageFromFile(
+      kPuzzle, IMAGE_JPEG, IMAGE_AVIF,
+      8,  // Min bytes to bother checking file type at all.
+      6468,  // Specific to this test
+      1023, 766,
+      241260, true);
+}
+
 TEST_F(ImageTest, ProgressiveJpegTest) {
   options_->recompress_jpeg = true;
   options_->progressive_jpeg = true;

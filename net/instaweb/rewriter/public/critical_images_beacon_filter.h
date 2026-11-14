@@ -72,6 +72,9 @@ class CriticalImagesBeaconFilter : public CommonFilter {
   BeaconMetadata beacon_metadata_;
   StringSet image_url_hashes_;
   bool insert_beacon_js_;
+  // Stamp original-URL hashes even when no script is due, so post-rewrite
+  // evidence consumers can match learned beacon data on every render.
+  bool stamp_hashes_;
   // The total number of times the beacon is added.
   Variable* critical_images_beacon_added_count_;
 

@@ -85,6 +85,28 @@ TEST_F(DevicePropertiesTest, WebpUserAgentIdentificationNoAccept) {
   EXPECT_TRUE(device_properties_.SupportsWebpLosslessAlpha());
 }
 
+TEST_F(DevicePropertiesTest, WebpExplicitRejectionVetoesUserAgentMatch) {
+  // WG-07: explicit format rejection is authoritative. A UA that supports
+  // WebP must not get WebP URLs when it sends image/webp;q=0.
+  RequestHeaders reject_headers;
+  reject_headers.Add(HttpAttributes::kAccept,
+                     "text/html,image/webp;q=0,image/avif;q=0");
+  DeviceProperties rejected(&user_agent_matcher_);
+  rejected.ParseRequestHeaders(reject_headers);
+  rejected.SetUserAgent("Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36");
+  EXPECT_FALSE(rejected.SupportsWebpRewrittenUrls());
+  EXPECT_FALSE(rejected.SupportsAvifRewrittenUrls());
+
+  // Omitting the token is not a rejection: UA match still applies.
+  RequestHeaders nav_headers;
+  nav_headers.Add(HttpAttributes::kAccept, "text/html,*/*;q=0.8");
+  DeviceProperties nav_only(&user_agent_matcher_);
+  nav_only.ParseRequestHeaders(nav_headers);
+  nav_only.SetUserAgent("Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36");
+  EXPECT_TRUE(nav_only.SupportsWebpRewrittenUrls());
+  EXPECT_TRUE(nav_only.SupportsAvifRewrittenUrls());
+}
+
 TEST_F(DevicePropertiesTest, Firefox92UsesWebpWithoutHtmlAcceptHeader) {
   RequestHeaders headers;
   device_properties_.ParseRequestHeaders(headers);
