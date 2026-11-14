@@ -5,6 +5,7 @@ import http.client
 import importlib.util
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -16,6 +17,10 @@ spec = importlib.util.spec_from_file_location(
     'html_cache_tests', Path(__file__).with_name('html_cache_nginx_test.py'))
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
+cdp_spec = importlib.util.spec_from_file_location(
+    'cdp_chrome', Path(__file__).with_name('cdp_chrome.py'))
+cdp_chrome = importlib.util.module_from_spec(cdp_spec)
+cdp_spec.loader.exec_module(cdp_chrome)
 
 # Image bytes are deliberately absent (404 fixtures): selection, lazy hints
 # and beacon hashing operate on tags, while unrewritten sources keep preload
@@ -56,9 +61,19 @@ class LcpCandidateSelectionNginxTest(base.HtmlCacheNginxTest):
             '<img src="/beacon-logo.png" width="120" height="40">'
             '<img src="/beacon-hero.jpg">'
             '</body></html>')
+        testdata = (Path(__file__).resolve().parents[2] / 'net' / 'instaweb' /
+                    'rewriter' / 'testdata')
+        shutil.copyfile(testdata / 'BikeCrashIcn.png', www / 'lcp-logo.png')
+        shutil.copyfile(testdata / 'Puzzle.jpg', www / 'lcp-hero.jpg')
+        (www / 'lcp-real.html').write_text(
+            '<!DOCTYPE html><html><head><title>real beacon</title></head>'
+            '<body>'
+            '<img src="/lcp-logo.png" width="120" height="40">'
+            '<img src="/lcp-hero.jpg">'
+            '</body></html>')
         # CriticalImagesBeaconEnabled must be set at server scope or below:
         # the http-scope value does not propagate (pre-existing quirk). It is
-        # scoped to the beacon page so the inherited cache tests keep the
+        # scoped to the beacon pages so the inherited cache tests keep the
         # default beacon-off behavior (beacon responses bypass the HTML cache
         # by design, which would break their MISS/HIT expectations).
         cls.stop()
@@ -68,25 +83,24 @@ class LcpCandidateSelectionNginxTest(base.HtmlCacheNginxTest):
             '    location = /lcp-beacon.html {\n'
             '      pagespeed CriticalImagesBeaconEnabled on;\n'
             '    }\n'
+            '    location = /lcp-real.html {\n'
+            # PassThrough keeps lazyload off so the beacon fires at onload
+            # (with lazyload it waits for the lazy-settle path), and keeps
+            # inline_images off so the logo stays a URL for the heuristic.
+            '      pagespeed RewriteLevel PassThrough;\n'
+            '      pagespeed EnableFilters prioritize_lcp_images;\n'
+            '      pagespeed CriticalImagesBeaconEnabled on;\n'
+            '    }\n'
             '    location = /off.html {', 1)
+        config = config.replace(
+            'access_log off;',
+            'log_format beacon_body \'$remote_addr "$request" $status '
+            '"$request_body"\';\n'
+            '  access_log "%s/logs/access.log" beacon_body;' % cls.root, 1)
         config_path.write_text(config)
         cls.process = subprocess.Popen(
             [base.OPTIONS.nginx, '-p', str(cls.root) + '/', '-c',
              str(config_path), '-e', str(cls.root / 'logs/error.log')],
-            stdout=cls.log, stderr=cls.log)
-        for _ in range(100):
-            if cls.process.poll() is not None:
-                raise RuntimeError((cls.root / 'logs/error.log').read_text())
-            try:
-                cls.fetch('/style.css')
-                return
-            except OSError:
-                time.sleep(.05)
-        raise RuntimeError('Isolated Nginx did not start')
-        cls.process = subprocess.Popen(
-            [base.OPTIONS.nginx, '-p', str(cls.root) + '/', '-c',
-             str(cls.root / 'nginx.conf'),
-             '-e', str(cls.root / 'logs/error.log')],
             stdout=cls.log, stderr=cls.log)
         for _ in range(100):
             if cls.process.poll() is not None:
@@ -124,6 +138,12 @@ class LcpCandidateSelectionNginxTest(base.HtmlCacheNginxTest):
             if src in match.group(0):
                 return match.group(0)
         self.fail('img %r not found in %r' % (src, body[-500:]))
+
+    @classmethod
+    def beacon_posts(cls):
+        log = (cls.root / 'logs/access.log').read_text()
+        return [line for line in log.splitlines()
+                if 'POST /' in line and '_pagespeed_beacon' in line]
 
     def test_first_image_heuristic_without_evidence(self):
         _, _, body = self.fetch('/lcp-logo.html')
@@ -179,12 +199,74 @@ class LcpCandidateSelectionNginxTest(base.HtmlCacheNginxTest):
         self.assertIn(b'fetchpriority="high"', hero)
         self.assertNotIn(b'loading=', hero)
 
+    def test_real_beacon_lcp_round_trip(self):
+        # End-to-end LCP learning with a real browser beacon (not forged).
+        # Chrome's load must be the page's first touch: the beacon is
+        # once-per-rebeacon-interval, so a python prefetch would consume the
+        # slot and the browser load would get no beacon script.
+        if not getattr(base.OPTIONS, 'browser', None):
+            raise unittest.SkipTest('Pass --browser /path/to/chrome')
+        chrome = cdp_chrome.CdpChrome(base.OPTIONS.browser)
+        try:
+            chrome.load('http://127.0.0.1:%d/lcp-real.html' % self.port)
+            dom = chrome.cdp.evaluate('document.documentElement.outerHTML')
+            # Pre-evidence: the heuristic preloads the logo.
+            preload = re.search(r'<link rel="preload"[^>]*>', dom)
+            self.assertIsNotNone(preload, dom[-500:])
+            self.assertIn('href="/lcp-logo.png"', preload.group(0))
+            self.assertIn('CriticalImages.Run(', dom)
+            hero_tag = re.search(r'<img[^>]*lcp-hero\.jpg[^>]*>', dom)
+            self.assertIsNotNone(hero_tag, dom[-500:])
+            hero_hash = re.search(
+                r'data-pagespeed-url-hash="(\d+)"',
+                hero_tag.group(0)).group(1)
+            # Wait until the browser actually observes the hero as LCP,
+            # then navigate away: pagehide flushes the deferred beacon.
+            hero_lcp = (
+                '(function(){try{var o=new PerformanceObserver('
+                'function(){});o.observe({type:"largest-contentful-paint",'
+                'buffered:true});var e=o.takeRecords();o.disconnect();'
+                'for(var i=0;i<e.length;i++){var el=e[i].element;'
+                'if(el&&el.getAttribute&&el.getAttribute('
+                '"data-pagespeed-url-hash")=="%s")return true;}'
+                'return false;}catch(err){return "ERR:"+err;}})()'
+                % hero_hash)
+            for _ in range(150):
+                if chrome.cdp.evaluate(hero_lcp) is True:
+                    break
+                time.sleep(.1)
+            else:
+                self.fail('browser never observed hero LCP')
+            chrome.cdp.call('Page.navigate', {'url': 'about:blank'})
+            chrome.cdp.wait_for('Page.loadEventFired')
+            posts = []
+            for _ in range(40):
+                posts = self.beacon_posts()
+                if any('lcp=' in line for line in posts):
+                    break
+                time.sleep(.5)
+            self.assertTrue(
+                any('lcp=%s' % hero_hash in line for line in posts),
+                '\n'.join(posts[-5:]) or 'no beacon posts logged')
+        finally:
+            chrome.stop()
+        # The beacon write lands asynchronously; poll for the learned page.
+        learned = None
+        for _ in range(40):
+            _, _, learned = self.fetch('/lcp-real.html')
+            if b'href="/lcp-hero.jpg"' in learned:
+                break
+            time.sleep(.5)
+        self.assertIn(b'href="/lcp-hero.jpg"', learned)
+        self.assertEqual(1, learned.count(PRELOAD))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--nginx', required=True)
     parser.add_argument('--module', required=True)
-    parser.add_argument('--browser', help='Unused; kept for runner parity')
+    parser.add_argument('--browser',
+                        help='Chrome/Chromium binary (real-beacon test only)')
     options, remaining = parser.parse_known_args()
     options.extra_config = (
         '\n  pagespeed EnableFilters prioritize_lcp_images;\n')

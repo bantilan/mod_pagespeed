@@ -256,6 +256,18 @@ TEST_F(CriticalImagesBeaconFilterTest, ScriptInjectionWithImageInlining) {
   EXPECT_EQ(-1, logging_info()->num_css_critical_images());
 }
 
+TEST_F(CriticalImagesBeaconFilterTest,
+         ScriptInjectionWithPrioritizeLcpImagesOnly) {
+  // prioritize_lcp_images consumes beacon results, so it must also trigger
+  // beacon insertion on its own: without any image-rewriting filter the
+  // beacon used to stay out and LCP learning could never happen (WG-06).
+  options()->DisableFilter(RewriteOptions::kDelayImages);
+  options()->EnableFilter(RewriteOptions::kPrioritizeLcpImages);
+  RunInjection();
+  VerifyInjection(1);
+  VerifyWithNoImageRewrite();
+}
+
 TEST_F(CriticalImagesBeaconFilterTest, NoScriptInjectionWithNoScript) {
   PrepareInjection();
   GoogleString html = "<head></head><body><noscript>";

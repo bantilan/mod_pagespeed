@@ -90,6 +90,9 @@ pagespeed.CriticalImages.Beacon_.prototype.setupLcpObserver_ = function() {
     }
     beacon.lcpObserver_.disconnect();
     beacon.lcpObserver_ = null;
+    // Complete a send deferred past window load. checkCriticalImages_ is
+    // one-shot, so this is a no-op when the beacon already went out.
+    beacon.checkCriticalImages_();
   };
 
   try {
@@ -122,15 +125,12 @@ pagespeed.CriticalImages.Beacon_.prototype.checkCriticalImages_ = function() {
   if (this.beaconSent_) {
     return;
   }
-  this.beaconSent_ = true;
 
   if (this.lcpObserver_ && this.lcpObserver_.takeRecords) {
     var records = this.lcpObserver_.takeRecords();
     for (var i = 0; i < records.length; ++i) {
       this.trackLcpEntry_(records[i]);
     }
-    this.lcpObserver_.disconnect();
-    this.lcpObserver_ = null;
   }
 
   var data = 'oh=' + this.optionsHash_;
@@ -155,6 +155,19 @@ pagespeed.CriticalImages.Beacon_.prototype.checkCriticalImages_ = function() {
       isDataAvailable = true;
     }
   }
+
+  if (!isDataAvailable && this.lcpObserver_) {
+    // Window load fired before the first LCP entry was delivered (late
+    // first paint). Keep observing instead of giving up: the observer
+    // keeps tracking the latest LCP image and the page-hide finalize
+    // completes the send.
+    return;
+  }
+  if (this.lcpObserver_) {
+    this.lcpObserver_.disconnect();
+    this.lcpObserver_ = null;
+  }
+  this.beaconSent_ = true;
 
   pagespeed.CriticalImages.beaconData_ = data;
   if (isDataAvailable) {
