@@ -26,6 +26,8 @@
 #include "pagespeed/kernel/base/null_mutex.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/stdio_file_system.h"
+#include "pagespeed/kernel/base/string.h"
+#include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/util/nonce_generator_test_base.h"
 
 namespace net_instaweb {
@@ -56,6 +58,18 @@ TEST_F(InputFileNonceGeneratorTest, DifferentNonOverlap) {
 
 TEST_F(InputFileNonceGeneratorTest, AllBitsUsed) {
   AllBitsUsed();
+}
+
+// An entropy file that returns fewer bytes than requested must not surface
+// partially uninitialized bytes as a nonce: the generator fails closed and
+// returns 0.
+TEST_F(InputFileNonceGeneratorTest, ShortReadFailsClosed) {
+  GoogleString path = StrCat(GTestTempDir(), "/short_entropy_input");
+  ASSERT_TRUE(file_system_.WriteFile(path.c_str(), "abc", &handler_));
+  InputFileNonceGenerator generator(
+      file_system_.OpenInputFile(path.c_str(), &handler_), &file_system_,
+      new NullMutex, &handler_);
+  EXPECT_EQ(0, generator.NewNonce());
 }
 
 }  // namespace

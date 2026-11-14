@@ -2308,6 +2308,16 @@ void RewriteOptions::AddProperties() {
   // running_experiment_.DoNotUseForSignatureComputation();
   // x_header_value_.DoNotUseForSignatureComputation();
   // blocking_fetch_timeout_ms_.DoNotUseForSignatureComputation();
+
+  // Options that hold a key or credential: their values never appear in
+  // OptionsToString().  A new secret-bearing option is flagged the same way,
+  // right after it is registered.
+  MarkOptionSecret(properties_, kUrlSigningKey);
+  MarkOptionSecret(properties_, kXPsaBlockingRewrite);
+  MarkOptionSecret(properties_, kDownstreamCacheRebeaconingKey);
+  // Tokens that grant access to request-time option overrides.
+  MarkOptionSecret(properties_, kRequestOptionOverride);
+  MarkOptionSecret(properties_, kStickyQueryParameters);
 }  // NOLINT  (large function)
 
 RewriteOptions::~RewriteOptions() {
@@ -4262,6 +4272,20 @@ GoogleString RewriteOptions::SafeEnabledOptionsToString() const {
   return output;
 }
 
+const char RewriteOptions::kRedactedValue[] = "***";
+
+void RewriteOptions::MarkOptionSecret(Properties* properties,
+                                      StringPiece option_name) {
+  for (int i = 0, n = properties->size(); i < n; ++i) {
+    PropertyBase* property = properties->property(i);
+    if (property->option_name() == option_name) {
+      property->set_secret(true);
+      return;
+    }
+  }
+  LOG(DFATAL) << "MarkOptionSecret: no such option: " << option_name;
+}
+
 GoogleString RewriteOptions::OptionsToString() const {
   GoogleString output;
   StrAppend(&output, "Version: ", IntegerToString(kOptionsVersion), ": ");
@@ -4293,7 +4317,8 @@ GoogleString RewriteOptions::OptionsToString() const {
                                         " (", option->id(), ")");
       max_width = std::max(max_width, static_cast<int>(name_and_id.size()));
       names.push_back(name_and_id);
-      values.push_back(option->ToString());
+      values.push_back(option->is_secret() ? GoogleString(kRedactedValue)
+                                           : option->ToString());
     }
   }
   for (int i = 0, n = values.size(); i < n; ++i) {

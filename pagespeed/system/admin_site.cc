@@ -21,12 +21,13 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <ctime>
 #include <cstring>
 #include <set>
-#include <vector>
+#include <thread>
 #include <vector>
 
 #include "net/instaweb/http/public/async_fetch.h"
@@ -42,6 +43,7 @@
 #include "pagespeed/kernel/base/callback.h"
 #include "pagespeed/kernel/base/message_handler.h"
 #include "pagespeed/kernel/base/null_message_handler.h"
+#include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
@@ -536,6 +538,42 @@ class AdminHtml {
   MessageHandler* handler_;
 };
 
+// A 429 in plain text: HttpStatus has no constant for it, so the code is set
+// numerically the way the daemon proxy writes it.
+void WriteAdminBusy(AsyncFetch* fetch, MessageHandler* handler) {
+  ResponseHeaders* headers = fetch->response_headers();
+  headers->set_status_code(429);
+  headers->Add(HttpAttributes::kContentType,
+               kContentTypeText.mime_type());
+  headers->Add(HttpAttributes::kCacheControl, "no-store, private");
+  headers->Add("X-Content-Type-Options", "nosniff");
+  fetch->Write("busy: another expensive admin read is in flight; retry", handler);
+  fetch->Done(true);
+}
+
+// Frees the slot of a cache lookup when the lookup's response is complete.
+// The lookup may finish after the handler that started it has returned, so
+// the slot is held until the fetch is done rather than until the call ends.
+class SlotReleasingFetch : public SharedAsyncFetch {
+ public:
+  SlotReleasingFetch(AsyncFetch* base_fetch, AdminSite* site,
+                     ExpensiveLeaf leaf)
+      : SharedAsyncFetch(base_fetch), site_(site), leaf_(leaf) {}
+
+ protected:
+  void HandleDone(bool success) override {
+    SharedAsyncFetch::HandleDone(success);
+    site_->ReleaseExpensiveSlot(leaf_);
+    delete this;
+  }
+
+ private:
+  ~SlotReleasingFetch() override {}
+
+  AdminSite* site_;
+  ExpensiveLeaf leaf_;
+};
+
 }  // namespace
 
 AdminSite::AdminSite(StaticAssetManager* static_asset_manager, Timer* timer,
@@ -543,7 +581,11 @@ AdminSite::AdminSite(StaticAssetManager* static_asset_manager, Timer* timer,
     : message_handler_(message_handler),
       static_asset_manager_(static_asset_manager),
       timer_(timer),
-      start_time_ms_(timer->NowMs()) {}
+      start_time_ms_(timer->NowMs()) {
+  for (size_t i = 0; i < kNumLeaves; ++i) {
+    expensive_in_flight_[i].store(false, std::memory_order_relaxed);
+  }
+}
 
 // Handler which serves PSOL console.
 void AdminSite::ConsoleHandler(const SystemRewriteOptions& global_options,
@@ -1287,6 +1329,11 @@ void AdminSite::GraphsHandler(const RewriteOptions& options, AdminSource source,
 
 void AdminSite::ConsoleJsonHandler(const QueryParams& params, AsyncFetch* fetch,
                                    Statistics* statistics) {
+  ExpensiveSlot slot(this, kGraphs);
+  if (!slot.held()) {
+    WriteAdminBusy(fetch, message_handler_);
+    return;
+  }
   StatisticsLogger* console_logger = statistics->console_logger();
   if (console_logger == nullptr) {
     fetch->response_headers()->SetStatusAndReason(HttpStatus::kNotFound);
@@ -1308,41 +1355,10 @@ void AdminSite::ConsoleJsonHandler(const QueryParams& params, AsyncFetch* fetch,
     fetch->response_headers()->Add(HttpAttributes::kContentType,
                                    kContentTypeJson.mime_type());
 
-    std::set<GoogleString> var_titles;
-    // Default is to fetch data used on graphs page.
-    bool dump_for_graphs = true;
-
-    // Default values for start_time, end_time, and granularity_ms in case the
-    // query does not include these parameters.
-    int64 start_time = 0;
-    int64 end_time = timer_->NowMs();
-    // Granularity is the difference in ms between data points. If it is not
-    // specified by the query, the default value is 3000 ms, the same as the
-    // default logging granularity.
-    int64 granularity_ms = 3000;
-    for (int i = 0; i < params.size(); ++i) {
-      GoogleString value;
-      if (params.UnescapedValue(i, &value)) {
-        StringPiece name = params.name(i);
-        if (name == "start_time") {
-          StringToInt64(value, &start_time);
-        } else if (name == "end_time") {
-          StringToInt64(value, &end_time);
-        } else if (name == "var_titles") {
-          // Fetch specified data if users populate var_titles.
-          dump_for_graphs = false;
-          std::vector<StringPiece> variable_names;
-          SplitStringPieceToVector(value, ",", &variable_names, true);
-          for (size_t i = 0; i < variable_names.size(); ++i) {
-            var_titles.insert(variable_names[i].as_string());
-          }
-        } else if (name == "granularity") {
-          StringToInt64(value, &granularity_ms);
-        }
-      }
-    }
-    console_logger->DumpJSON(dump_for_graphs, var_titles, start_time, end_time,
-                             granularity_ms, fetch, message_handler_);
+    const GraphQuery query = ParseGraphQuery(params, timer_->NowMs());
+    console_logger->DumpJSON(query.dump_for_graphs, query.var_titles,
+                             query.start_time, query.end_time,
+                             query.granularity_ms, fetch, message_handler_);
   }
   fetch->Done(true);
 }
@@ -1463,6 +1479,55 @@ GoogleString CacheInfoHtmlSnippet(StringPiece label, StringPiece descriptor) {
 
 }  // namespace
 
+GraphQuery ParseGraphQuery(const QueryParams& params, int64 now_ms) {
+  GraphQuery query;
+  query.start_time = 0;
+  query.end_time = now_ms;
+  query.granularity_ms = 3000;
+  for (int i = 0; i < params.size(); ++i) {
+    GoogleString value;
+    if (!params.UnescapedValue(i, &value)) continue;
+    StringPiece name = params.name(i);
+    if (name == "start_time") {
+      StringToInt64(value, &query.start_time);
+    } else if (name == "end_time") {
+      StringToInt64(value, &query.end_time);
+    } else if (name == "var_titles") {
+      // Fetch specified data if users populate var_titles.
+      query.dump_for_graphs = false;
+      std::vector<StringPiece> variable_names;
+      SplitStringPieceToVector(value, ",", &variable_names, true);
+      for (size_t j = 0; j < variable_names.size(); ++j) {
+        if (query.var_titles.size() >= kMaxGraphVarTitles) break;
+        query.var_titles.insert(variable_names[j].as_string());
+      }
+    } else if (name == "granularity") {
+      StringToInt64(value, &query.granularity_ms);
+    }
+  }
+  query.granularity_ms =
+      std::min(std::max(query.granularity_ms, kMinGraphGranularityMs),
+               kMaxGraphGranularityMs);
+  const int64 latest_ms = now_ms + 86400000;
+  query.start_time = std::min(std::max<int64>(query.start_time, 0), latest_ms);
+  query.end_time = std::min(std::max<int64>(query.end_time, 0), latest_ms);
+  return query;
+}
+
+bool AdminSite::AcquireExpensiveSlot(ExpensiveLeaf leaf, int wait_ms) {
+  const int kPollMs = 5;
+  std::atomic<bool>& slot = expensive_in_flight_[static_cast<size_t>(leaf)];
+  for (int waited_ms = 0;; waited_ms += kPollMs) {
+    bool expected = false;
+    if (slot.compare_exchange_strong(expected, true,
+                                     std::memory_order_acq_rel)) {
+      return true;
+    }
+    if (waited_ms >= wait_ms) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+  }
+}
+
 void AdminSite::PrintCaches(
     bool is_global, AdminSource source, const GoogleUrl& stripped_gurl,
     const QueryParams& query_params, const RewriteOptions* options,
@@ -1473,6 +1538,20 @@ void AdminSite::PrintCaches(
   GoogleString url;
   if ((source == kPageSpeedAdmin) &&
       query_params.Lookup1Unescaped("url", &url)) {
+    // Deleting an entry is a cache-changing action like purge, so it is
+    // available only when cache purging is enabled.
+    if (query_params.Has("Delete") && !options->enable_cache_purge()) {
+      ResponseHeaders* response_headers = fetch->response_headers();
+      response_headers->SetStatusAndReason(HttpStatus::kForbidden);
+      response_headers->Add(HttpAttributes::kContentType, "text/html");
+      fetch->Write("Deleting not enabled: please add\n", message_handler_);
+      HtmlKeywords::WritePre(
+          StrCat("  ", server_context->FormatOption("EnableCachePurge", "on")),
+          "", fetch, message_handler_);
+      fetch->Write("\nto your configuration file.\n", message_handler_);
+      fetch->Done(true);
+      return;
+    }
     // Delegate to ShowCacheHandler to get the cached value for that
     // URL, which it may do asynchronously, so we cannot use the
     // AdminHtml abstraction which closes the connection in its
@@ -1484,8 +1563,20 @@ void AdminSite::PrintCaches(
     }
     GoogleString ua;
     query_params.Lookup1Unescaped("user_agent", &ua);
+    // Each lookup builds a rewrite driver: one at a time, until the answer
+    // has been written (it can complete after this call returns).  The slot
+    // is taken without waiting: a wait would block this thread, which can be
+    // the server's event loop, and the slot may be held by a lookup that is
+    // waiting for that same thread.
+    ExpensiveSlot slot(this, kCacheLookup, 0 /* no wait */);
+    if (!slot.held()) {
+      WriteAdminBusy(fetch, message_handler_);
+      return;
+    }
+    slot.Detach();
     server_context->ShowCacheHandler(
-        format, url, ua, query_params.Has("Delete"), fetch, options->Clone());
+        format, url, ua, query_params.Has("Delete"),
+        new SlotReleasingFetch(fetch, this, kCacheLookup), options->Clone());
   } else if ((source == kPageSpeedAdmin) &&
              query_params.Lookup1Unescaped("new_set", &url)) {
     ResponseHeaders* response_headers = fetch->response_headers();
@@ -1534,6 +1625,16 @@ void AdminSite::PrintCaches(
       }
     }
   } else {
+    // The whole-server listing asks each memcached/redis server for its
+    // status, so it runs one at a time.
+    scoped_ptr<ExpensiveSlot> status_slot;
+    if (is_global) {
+      status_slot.reset(new ExpensiveSlot(this, kCacheStatus));
+      if (!status_slot->held()) {
+        WriteAdminBusy(fetch, message_handler_);
+        return;
+      }
+    }
     GoogleString head_markup = StrCat("<style>", CSS_caches_css, "</style>\n");
     AdminHtml admin_html("cache", head_markup, source, timer_, fetch,
                          message_handler_);
@@ -1634,6 +1735,11 @@ void AdminSite::PrintCaches(
 void AdminSite::PrintConfig(
     AdminSource source, AsyncFetch* fetch,
     SystemRewriteOptions* global_system_rewrite_options) {
+  ExpensiveSlot slot(this, kConfig);
+  if (!slot.held()) {
+    WriteAdminBusy(fetch, message_handler_);
+    return;
+  }
   AdminHtml admin_html("config", "", source, timer_, fetch, message_handler_);
   WriteAdminPageHeading(fetch, message_handler_, "ACTIVE SETTINGS",
                         "Configuration",
@@ -1657,6 +1763,12 @@ void AdminSite::MessageHistoryHandler(const RewriteOptions& options,
                                       AdminSource source, AsyncFetch* fetch,
                                       const GoogleString* stored,
                                       StringPiece controls, StringPiece kind) {
+  // The answer walks the whole retained buffer: one read at a time.
+  ExpensiveSlot slot(this, kMessages);
+  if (!slot.held()) {
+    WriteAdminBusy(fetch, message_handler_);
+    return;
+  }
   // Request for page /mod_pagespeed_message.
   GoogleString log;
   StringWriter log_writer(&log);

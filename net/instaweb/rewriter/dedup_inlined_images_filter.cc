@@ -36,7 +36,7 @@
 
 namespace net_instaweb {
 
-const unsigned int DedupInlinedImagesFilter::kMinimumImageCutoff = 185;
+const unsigned int DedupInlinedImagesFilter::kMinimumImageCutoff = 241;
 
 const char DedupInlinedImagesFilter::kDiiInitializer[] =
     "pagespeed.dedupInlinedImagesInit();";
@@ -129,16 +129,19 @@ void DedupInlinedImagesFilter::EndElementImpl(HtmlElement* element) {
       GoogleString script_id =
           StrCat("pagespeed_script_", IntegerToString(++snippet_id_));
       // NOTE: If you change this you need to update kMinimumImageCutoff,
-      // which is currently set to 185, slightly less than this snippet:
+      // which is currently set to 241, slightly less than this snippet:
       //   <script type="text/javascript" id="pagespeed_script_1"
       //    data-pagespeed-no-defer>
+      //   if(window.pagespeed){if(pagespeed.dedupInlinedImages){
       //   pagespeed.dedupInlinedImages.inlineImg("pagespeed_img_12345678",
       //                                          "pagespeed_img_87654321",
-      //                                          "pagespeed_script_1");
+      //                                          "pagespeed_script_1");}}
       //   </script>
-      GoogleString snippet("pagespeed.dedupInlinedImages.");
+      GoogleString snippet(
+          "if(window.pagespeed){if(pagespeed.dedupInlinedImages){"
+          "pagespeed.dedupInlinedImages.");
       StrAppend(&snippet, "inlineImg('", from_img_id, "','", element_id, "','",
-                script_id, "');");
+                script_id, "');}}");
       HtmlElement* script = driver()->NewElement(element, HtmlName::kScript);
       driver()->InsertElementAfterElement(element, script);
       AddJsToElement(snippet, script);

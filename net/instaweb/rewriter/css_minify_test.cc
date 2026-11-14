@@ -20,12 +20,15 @@
 
 #include "net/instaweb/rewriter/public/css_minify.h"
 
+#include <limits>
+
 #include "pagespeed/kernel/base/google_message_handler.h"
 #include "pagespeed/kernel/base/gtest.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_writer.h"
 #include "webutil/css/parser.h"
+#include "webutil/css/value.h"
 
 
 namespace net_instaweb {
@@ -103,6 +106,20 @@ TEST_F(CssMinifyTest, MinifyImportStylesheeetCollectingUrls) {
   ASSERT_EQ(1, urls.size());
   EXPECT_STREQ("foo.png", urls[0]);
   EXPECT_STREQ("@import url(foo.png);", minified);
+}
+
+TEST_F(CssMinifyTest, OutOfRangeNumericValueSaturates) {
+  // Untrusted author CSS can carry numbers outside int's representable range
+  // (e.g. rgb(99999999999,0,0)); converting them must saturate rather than
+  // invoke undefined behavior. In-range values convert exactly.
+  Css::Value huge(1e11, Css::Value::PX);
+  EXPECT_EQ(std::numeric_limits<int>::max(), huge.GetIntegerValue());
+  Css::Value huge_neg(-1e11, Css::Value::PX);
+  EXPECT_EQ(std::numeric_limits<int>::min(), huge_neg.GetIntegerValue());
+  Css::Value normal(12.0, Css::Value::PX);
+  EXPECT_EQ(12, normal.GetIntegerValue());
+  Css::Value truncated(12.9, Css::Value::PX);
+  EXPECT_EQ(12, truncated.GetIntegerValue());
 }
 
 TEST_F(CssMinifyTest, MinifyInvalid) {

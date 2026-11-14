@@ -80,6 +80,7 @@ class RequestHeaders : public Headers<HttpRequestHeaders> {
   Method method() const;
   const char* method_string() const;
   void set_method(Method method);
+  static Method MethodFromString(StringPiece method);
 
   // This is encoded message body, a rewriter or fetcher
   // may opt to translate to entity-body only after removing

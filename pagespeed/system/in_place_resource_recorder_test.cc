@@ -31,6 +31,7 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/http_names.h"
@@ -489,6 +490,86 @@ TEST_F(InPlaceResourceRecorderTest, SplitOperationWithGzipWithCompressedCache) {
   // Test that gzip on non-prelim headers don't cause gunzip'ing.
   // This is to permit capture of headers after mod_deflate has run.
   TestWithGzip(kLateGzipHeader);
+}
+
+TEST_F(InPlaceResourceRecorderTest, BrotliResponseIsNotRecorded) {
+  // A response in a coding the inflater cannot undo must not be recorded:
+  // stored byte for byte, it would be served as the identity form of the URL
+  // to every later client.
+  ResponseHeaders prelim_headers;
+  prelim_headers.set_status_code(HttpStatus::kOK);
+  prelim_headers.Add(HttpAttributes::kContentEncoding, "br");
+
+  ResponseHeaders final_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &final_headers);
+  final_headers.Add(HttpAttributes::kContentEncoding, "br");
+  final_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &prelim_headers);
+  EXPECT_TRUE(recorder->failed());
+  // Stands in for a compressed body: bytes that are not the stylesheet.
+  recorder->Write("not the identity form of the resource", message_handler());
+  recorder.release()->DoneAndSetHeaders(&final_headers, true /* complete */);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  EXPECT_EQ(kNotFoundResult,
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
+  GoogleString log;
+  StringWriter writer(&log);
+  message_handler()->Dump(&writer);
+  EXPECT_NE(GoogleString::npos, log.find("unsupported Content-Encoding"))
+      << log;
+}
+
+TEST_F(InPlaceResourceRecorderTest, StackedContentCodingsAreNotRecorded) {
+  // The inflater undoes only a lone gzip or deflate, so a stacked list -- in
+  // one header value, one coding per header line, or two gzip layers -- is as
+  // unrecordable as a coding it does not know.
+  const char* const cases[][3] = {
+      {"br", nullptr, nullptr},
+      {"zstd", nullptr, nullptr},
+      {"gzip, br", nullptr, nullptr},
+      {"gzip", "br", nullptr},
+      {"gzip", "gzip", nullptr},
+      {"gzip, deflate", nullptr, nullptr},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    ResponseHeaders prelim_headers;
+    prelim_headers.set_status_code(HttpStatus::kOK);
+    for (int j = 0; cases[i][j] != nullptr; ++j) {
+      prelim_headers.Add(HttpAttributes::kContentEncoding, cases[i][j]);
+    }
+    scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+    recorder->ConsiderResponseHeaders(
+        InPlaceResourceRecorder::kPreliminaryHeaders, &prelim_headers);
+    EXPECT_TRUE(recorder->failed()) << cases[i][0];
+  }
+}
+
+TEST_F(InPlaceResourceRecorderTest, SingleGzipOrDeflateCodingStillRecords) {
+  // What the inflater does undo keeps recording: no coding, identity, a lone
+  // gzip or deflate, also when identity is stated on its own header line.
+  const char* const cases[][3] = {
+      {nullptr, nullptr, nullptr},
+      {"gzip", nullptr, nullptr},
+      {"deflate", nullptr, nullptr},
+      {"identity", nullptr, nullptr},
+      {"identity", "gzip", nullptr},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    ResponseHeaders prelim_headers;
+    prelim_headers.set_status_code(HttpStatus::kOK);
+    for (int j = 0; cases[i][j] != nullptr; ++j) {
+      prelim_headers.Add(HttpAttributes::kContentEncoding, cases[i][j]);
+    }
+    scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+    recorder->ConsiderResponseHeaders(
+        InPlaceResourceRecorder::kPreliminaryHeaders, &prelim_headers);
+    EXPECT_FALSE(recorder->failed());
+  }
 }
 
 TEST_F(InPlaceResourceRecorderTest, BailEarlyOnUnexpectedContentType) {

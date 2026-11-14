@@ -21,6 +21,9 @@
 #define PAGESPEED_SYSTEM_SYSTEM_MESSAGE_HANDLER_H_
 
 #include <cstdarg>
+#include <cstddef>
+#include <memory>
+#include <vector>
 
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/google_message_handler.h"
@@ -35,6 +38,11 @@ namespace net_instaweb {
 class AbstractMutex;
 class Timer;
 class Writer;
+
+// An identical info line is kept in the message buffer once per this long;
+// the repeats in between are counted and reported with the next one kept
+// ("(repeated N times)").
+const int64 kRepeatedInfoWindowMs = 60 * 1000;
 
 // Implementation of methods that are shared by both ApacheMessageHandler
 // and NgxMessageHandler.
@@ -63,6 +71,19 @@ class SystemMessageHandler : public GoogleMessageHandler {
   void AddMessageToBuffer(MessageType type, const char* file, int line,
                           StringPiece formatted_message);
 
+  // Decides whether an info line goes into the message buffer.  The first
+  // occurrence of a line does; further identical lines (same file, line and
+  // text) within kRepeatedInfoWindowMs do not, they are counted.  The first
+  // one after the window does, with *suppressed set to the number skipped
+  // since the last one kept.  Other severities always pass.
+  bool KeepInBuffer(MessageType type, const char* file, int line,
+                    StringPiece formatted_message, int64* suppressed);
+
+  // The hash that finds a line in recent_info_.  A match is confirmed by
+  // comparing the whole line, so this only needs to spread lines out; tests
+  // override it to force collisions.
+  virtual size_t HashRepeatedInfoKey(StringPiece key) const;
+
   // Since we subclass GoogleMessageHandler but want to format messages
   // internally we must provide overrides of these two logging methods.
   void MessageVImpl(MessageType type, const char* msg, va_list args) override;
@@ -83,6 +104,17 @@ class SystemMessageHandler : public GoogleMessageHandler {
   // loop.
   GoogleMessageHandler internal_handler_;
   GoogleString pid_string_;  // String "[pid]".
+
+  // The info lines seen lately, by hash, for KeepInBuffer.  Bounded: when it
+  // is full the oldest entry is dropped.  Guarded by mutex_.
+  struct RecentInfo {
+    size_t hash;
+    GoogleString key;  // file:line:text, compared on a hash match.
+    int64 window_start_ms;
+    int64 suppressed;
+  };
+  static const size_t kMaxRecentInfo = 32;
+  std::vector<RecentInfo> recent_info_;
   NullMessageHandler null_handler_;
 
   DISALLOW_COPY_AND_ASSIGN(SystemMessageHandler);

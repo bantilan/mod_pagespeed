@@ -320,4 +320,13 @@ TEST_F(SystemRewriteOptionsTest, HistoryArchiveDefaultsAndParsing) {
       "HistoryArchiveMaxSizeMb", "invalid", &msg, &handler_));
 }
 
+TEST_F(SystemRewriteOptionsTest, RedactsFetcherProxyInOptionsOutput) {
+  // The proxy address may carry credentials (user:pass@host).
+  options_.set_fetcher_proxy("http://user:pass-8d2f@proxy.example:8080");
+  GoogleString output = options_.OptionsToString();
+  EXPECT_EQ(GoogleString::npos, output.find("pass-8d2f")) << output;
+  EXPECT_NE(GoogleString::npos, output.find("FetchProxy")) << output;
+  EXPECT_NE(GoogleString::npos, output.find("***")) << output;
+}
+
 }  // namespace net_instaweb

@@ -21,6 +21,9 @@
 
 #include <unistd.h>
 
+#include <functional>
+#include <utility>
+
 #include "pagespeed/kernel/base/abstract_mutex.h"
 #include "pagespeed/kernel/base/null_message_handler.h"
 #include "pagespeed/kernel/base/string_util.h"
@@ -54,6 +57,10 @@ void SystemMessageHandler::AddMessageToBuffer(MessageType type,
   if (formatted_message.empty()) {
     return;
   }
+  int64 suppressed = 0;
+  if (!KeepInBuffer(type, file, line, formatted_message, &suppressed)) {
+    return;
+  }
   GoogleString message;
   GoogleString time;
   const char* type_str = MessageTypeToString(type);
@@ -68,7 +75,12 @@ void SystemMessageHandler::AddMessageToBuffer(MessageType type,
   if (file) {
     StrAppend(&message, "[", file, ":", IntegerToString(line), "] ");
   }
-  StrAppend(&message, lines[0], "\n");
+  StrAppend(&message, lines[0]);
+  if (suppressed > 0) {
+    StrAppend(&message, " (repeated ", Integer64ToString(suppressed),
+              suppressed == 1 ? " time)" : " times)");
+  }
+  StrAppend(&message, "\n");
   for (int i = 1, n = lines.size(); i < n; ++i) {
     StrAppend(&message, type_char, lines[i], "\n");
   }
@@ -80,6 +92,51 @@ void SystemMessageHandler::AddMessageToBuffer(MessageType type,
       buffer_->Write(message, &null_handler);
     }
   }
+}
+
+size_t SystemMessageHandler::HashRepeatedInfoKey(StringPiece key) const {
+  // std::hash<std::string>: no <string_view> under this build's C++11.
+  return std::hash<GoogleString>()(key.as_string());
+}
+
+bool SystemMessageHandler::KeepInBuffer(MessageType type, const char* file,
+                                        int line, StringPiece formatted_message,
+                                        int64* suppressed) {
+  *suppressed = 0;
+  if (type != kInfo) {
+    return true;
+  }
+  // The exact identity of the line: a hash match alone is not trusted.
+  GoogleString key = StrCat(file != nullptr ? file : "", ":",
+                            IntegerToString(line), ":", formatted_message);
+  const size_t hash = HashRepeatedInfoKey(key);
+  const int64 now_ms = timer_->NowMs();
+  ScopedMutex lock(mutex_.get());
+  if (buffer_ == nullptr) {
+    // The line is not going to be kept anywhere yet: nothing to deduplicate
+    // against, and it must not suppress the first copy after set-up.
+    return true;
+  }
+  for (RecentInfo& recent : recent_info_) {
+    if (recent.hash != hash || recent.key != key) {
+      continue;
+    }
+    if (now_ms - recent.window_start_ms < kRepeatedInfoWindowMs &&
+        now_ms >= recent.window_start_ms) {
+      ++recent.suppressed;
+      return false;
+    }
+    *suppressed = recent.suppressed;
+    recent.window_start_ms = now_ms;
+    recent.suppressed = 0;
+    return true;
+  }
+  if (recent_info_.size() >= kMaxRecentInfo) {
+    recent_info_.erase(recent_info_.begin());
+  }
+  RecentInfo fresh = {hash, key, now_ms, 0};
+  recent_info_.push_back(fresh);
+  return true;
 }
 
 void SystemMessageHandler::MessageVImpl(MessageType type, const char* msg,

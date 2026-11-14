@@ -28,6 +28,7 @@
 #include "net/instaweb/rewriter/public/domain_lawyer.h"
 #include "net/instaweb/rewriter/public/file_load_policy.h"
 #include "net/instaweb/rewriter/public/mock_resource_callback.h"
+#include "net/instaweb/rewriter/public/output_resource.h"
 #include "net/instaweb/rewriter/public/output_resource_kind.h"
 #include "net/instaweb/rewriter/public/request_properties.h"
 #include "net/instaweb/rewriter/public/resource.h"
@@ -51,6 +52,7 @@
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/cache/lru_cache.h"
 #include "pagespeed/kernel/html/empty_html_filter.h"
@@ -299,6 +301,36 @@ TEST_F(RewriteDriverTest, TestIgnoringUrlSignatures) {
       "http://signed-urls.example.com/mod_pagespeed_example/styles/"
       "A.all_styles.css.pagespeed.cf.U.css"))
       << "no signature, ignored";
+}
+
+// A rejected signature is logged for diagnostics, but the log line must name
+// only the URL and the provided signature: logging the computed signature
+// would hand anyone with log access a valid signed URL for that resource.
+TEST_F(RewriteDriverTest, InvalidSignatureLogOmitsComputedSignature) {
+  options()->set_url_signing_key("helloworld");
+  rewrite_driver()->AddFilters();
+
+  // Decode a correctly signed URL to learn the valid signature value.
+  GoogleUrl valid_gurl(
+      "http://signed-urls.example.com/mod_pagespeed_example/styles/"
+      "A.all_styles.css.pagespeed.cf.UQ_aP9rObnq.css");
+  RewriteFilter* filter;
+  OutputResourcePtr valid_resource(
+      rewrite_driver()->DecodeOutputResource(valid_gurl, &filter));
+  ASSERT_TRUE(valid_resource.get() != nullptr);
+  const GoogleString valid_signature =
+      valid_resource->full_name().signature().as_string();
+  ASSERT_FALSE(valid_signature.empty());
+
+  // A bad signature rejects the URL and logs the provided value only.
+  EXPECT_FALSE(CanDecodeUrl(
+      "http://signed-urls.example.com/mod_pagespeed_example/styles/"
+      "A.all_styles.css.pagespeed.cf.UAAAAAAAAAA.css"));
+  GoogleString log;
+  StringWriter writer(&log);
+  message_handler()->Dump(&writer);
+  EXPECT_NE(GoogleString::npos, log.find("UAAAAAAAAAA")) << log;
+  EXPECT_EQ(GoogleString::npos, log.find(valid_signature)) << log;
 }
 
 TEST_F(RewriteDriverTest, PagespeedObliviousPositiveTest) {
@@ -1228,6 +1260,20 @@ TEST_F(RewriteDriverTest, LoadResourcesContentType) {
   EXPECT_TRUE(resource.get() != NULL);
   EXPECT_EQ(&kContentTypeJavascript, resource->type());
 
+  // The type comes from the path alone: a fragment takes no part in it, with
+  // or without a '/' inside, just as the query takes none.
+  WriteFile("/htmlcontent/baz.css", "");
+  ResourcePtr fragment_resource(
+      rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+          "http://www.example.com/static/baz.css#v2.js"));
+  EXPECT_TRUE(fragment_resource.get() != NULL);
+  EXPECT_EQ(&kContentTypeCss, fragment_resource->type());
+  ResourcePtr slash_in_fragment_resource(
+      rewrite_driver()->CreateInputResourceAbsoluteUncheckedForTestsOnly(
+          "http://www.example.com/static/baz.css#part/two.js"));
+  EXPECT_TRUE(slash_in_fragment_resource.get() != NULL);
+  EXPECT_EQ(&kContentTypeCss, slash_in_fragment_resource->type());
+
   // Write file with bogus extension.
   WriteFile("/htmlcontent/bar.bogus", "");
   // Load it normally.
@@ -1236,6 +1282,26 @@ TEST_F(RewriteDriverTest, LoadResourcesContentType) {
           "http://www.example.com/static/bar.bogus"));
   EXPECT_TRUE(resource2.get() != NULL);
   EXPECT_TRUE(NULL == resource2->type());
+}
+
+// The name and the directory of a rewritten resource are read from the path.
+// A fragment, even one with a '/' in it, is not part of the name and does not
+// move the base, and a name that only appears after the '#' is no resource.
+TEST_F(RewriteDriverTest, ResourceNameAndBaseComeFromPathNotFragment) {
+  options()->EnableFilter(RewriteOptions::kExtendCacheCss);
+  rewrite_driver()->AddFilters();
+
+  RewriteFilter* filter;
+  GoogleUrl with_fragment(
+      "http://test.com/dir/a.css.pagespeed.ce.0.css#part/two");
+  OutputResourcePtr resource(
+      rewrite_driver()->DecodeOutputResource(with_fragment, &filter));
+  ASSERT_TRUE(resource.get() != nullptr);
+  EXPECT_EQ("http://test.com/dir/", resource->resolved_base());
+  EXPECT_STREQ("a.css", resource->name());
+
+  EXPECT_FALSE(CanDecodeUrl(
+      "http://test.com/dir/plain.css#part/a.css.pagespeed.ce.0.css"));
 }
 
 TEST_F(RewriteDriverTest, ResolveAnchorUrl) {

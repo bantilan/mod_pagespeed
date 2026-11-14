@@ -21,9 +21,11 @@
 
 #include "pagespeed/system/admin_site.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 
 #include "net/instaweb/http/public/async_fetch.h"
@@ -45,6 +47,7 @@
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/http/google_url.h"
+#include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/kernel/http/query_params.h"
 #include "pagespeed/kernel/util/platform.h"
 
@@ -332,6 +335,217 @@ TEST_F(AdminSiteTest, ExistingDiagnosticsAreFilteredWithoutInventingRewriteField
   EXPECT_THAT(buffer, ::testing::HasSubstr("https://diagnostic.example/fail.js"));
   EXPECT_THAT(buffer, ::testing::Not(::testing::HasSubstr("https://diagnostic.example/fail.css")));
   EXPECT_THAT(buffer, ::testing::HasSubstr("not a complete per-resource rewrite history"));
+}
+
+TEST_F(AdminSiteTest, DeleteRefusedWhenPurgeDisabled) {
+  // Cache purging is disabled by default, so a cache-entry delete is refused
+  // rather than performed.
+  ASSERT_FALSE(rewrite_driver()->options()->enable_cache_purge());
+  GoogleUrl gurl("http://localhost/pagespeed_admin/cache");
+  QueryParams query_params;
+  query_params.ParseFromUrl(GoogleUrl(
+      "http://localhost/pagespeed_admin/cache"
+      "?url=http://example.com/x.css&Delete"));
+  GoogleString body;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &body);
+  SystemRewriteOptions global_options(thread_system_.get());
+  admin_site_->AdminPage(false, gurl, query_params, rewrite_driver()->options(),
+                         nullptr, &fetch, nullptr, nullptr, nullptr, nullptr,
+                         nullptr, server_context_.get(), factory()->statistics(),
+                         factory()->statistics(), &global_options);
+  EXPECT_EQ(HttpStatus::kForbidden, fetch.response_headers()->status_code());
+  EXPECT_THAT(body, ::testing::HasSubstr("Deleting not enabled"));
+  EXPECT_THAT(body, ::testing::HasSubstr("EnableCachePurge"));
+}
+
+class GraphQueryTest : public ::testing::Test {
+ protected:
+  static const int64 kNowMs = 1700000000000LL;
+
+  GraphQuery Parse(StringPiece query) {
+    GoogleUrl gurl(
+        StrCat("http://example.com/pagespeed_admin/console?", query));
+    QueryParams params;
+    params.ParseFromUrl(gurl);
+    return ParseGraphQuery(params, kNowMs);
+  }
+};
+
+const int64 GraphQueryTest::kNowMs;
+
+TEST_F(GraphQueryTest, DefaultsAskForTheGraphsOverTheWholeLog) {
+  const GraphQuery q = Parse("json=1");
+  EXPECT_EQ(0, q.start_time);
+  EXPECT_EQ(kNowMs, q.end_time);
+  EXPECT_EQ(3000, q.granularity_ms);
+  EXPECT_TRUE(q.dump_for_graphs);
+  EXPECT_TRUE(q.var_titles.empty());
+}
+
+TEST_F(GraphQueryTest, GranularityIsHeldToTheBounds) {
+  EXPECT_EQ(kMinGraphGranularityMs, Parse("granularity=0").granularity_ms);
+  EXPECT_EQ(kMinGraphGranularityMs, Parse("granularity=1").granularity_ms);
+  EXPECT_EQ(kMinGraphGranularityMs, Parse("granularity=-5").granularity_ms);
+  EXPECT_EQ(kMinGraphGranularityMs, Parse("granularity=999").granularity_ms);
+  EXPECT_EQ(1000, Parse("granularity=1000").granularity_ms);
+  EXPECT_EQ(60000, Parse("granularity=60000").granularity_ms);
+  EXPECT_EQ(kMaxGraphGranularityMs,
+            Parse("granularity=999999999999999").granularity_ms);
+  // Not a number reads as 0, which is held to the lower bound.
+  EXPECT_EQ(kMinGraphGranularityMs, Parse("granularity=abc").granularity_ms);
+}
+
+TEST_F(GraphQueryTest, TimesAreNonNegativeAndNotFarInTheFuture) {
+  EXPECT_EQ(0, Parse("start_time=-100").start_time);
+  EXPECT_EQ(0, Parse("end_time=-100").end_time);
+  EXPECT_EQ(12345, Parse("start_time=12345").start_time);
+  EXPECT_EQ(kNowMs + 86400000, Parse("end_time=99999999999999999").end_time);
+  EXPECT_EQ(kNowMs + 86400000,
+            Parse("start_time=99999999999999999").start_time);
+  EXPECT_EQ(kNowMs - 1000, Parse("end_time=1699999999000").end_time);
+}
+
+TEST_F(GraphQueryTest, VariableNamesAreListedAndBounded) {
+  const GraphQuery named = Parse("var_titles=a,b,,c");
+  EXPECT_FALSE(named.dump_for_graphs);
+  EXPECT_EQ(3u, named.var_titles.size());
+  GoogleString many = "var_titles=";
+  for (size_t i = 0; i < 3 * kMaxGraphVarTitles; ++i) {
+    StrAppend(&many, i == 0 ? "" : ",", "v", IntegerToString(i));
+  }
+  const GraphQuery capped = Parse(many);
+  EXPECT_FALSE(capped.dump_for_graphs);
+  EXPECT_EQ(kMaxGraphVarTitles, capped.var_titles.size());
+  // Several var_titles parameters share the same bound.
+  GoogleString repeated;
+  for (size_t i = 0; i < 3 * kMaxGraphVarTitles; ++i) {
+    StrAppend(&repeated, i == 0 ? "" : "&", "var_titles=w", IntegerToString(i));
+  }
+  EXPECT_EQ(kMaxGraphVarTitles, Parse(repeated).var_titles.size());
+}
+
+class AdminSiteExpensiveReadsTest : public AdminSiteTest {
+ protected:
+  // Fetches an admin leaf through AdminPage; returns the status code.
+  int FetchLeaf(StringPiece path, StringPiece query, GoogleString* body,
+                bool is_global = false) {
+    GoogleUrl gurl(StrCat("http://localhost", path));
+    QueryParams query_params;
+    if (!query.empty()) {
+      query_params.ParseFromUntrustedString(query);
+    }
+    StringAsyncFetch fetch(rewrite_driver()->request_context(), body);
+    SystemRewriteOptions global_options(thread_system_.get());
+    admin_site_->AdminPage(is_global, gurl, query_params,
+                           rewrite_driver()->options(), nullptr, &fetch,
+                           nullptr, nullptr, nullptr, nullptr, nullptr,
+                           server_context(), factory()->statistics(),
+                           factory()->statistics(), &global_options);
+    return fetch.response_headers()->status_code();
+  }
+};
+
+TEST_F(AdminSiteExpensiveReadsTest, ConfigAdmitsOneReadAtATime) {
+  GoogleString body;
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/config", "", &body));
+  admin_site_->SetExpensiveSlotBusyForTesting(kConfig, true);
+  EXPECT_EQ(429, FetchLeaf("/pagespeed_admin/config", "", &body));
+  EXPECT_THAT(body, ::testing::HasSubstr("busy"));
+  admin_site_->SetExpensiveSlotBusyForTesting(kConfig, false);
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/config", "", &body));
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, MessageHistoryAdmitsOneReadAtATime) {
+  GoogleString body;
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/message_history", "", &body));
+  admin_site_->SetExpensiveSlotBusyForTesting(kMessages, true);
+  EXPECT_EQ(429, FetchLeaf("/pagespeed_admin/message_history", "", &body));
+  admin_site_->SetExpensiveSlotBusyForTesting(kMessages, false);
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, GraphsJsonAdmitsOneReadAtATime) {
+  // No console logger in the fixture, so an admitted read answers 404;
+  // a refused one answers 429 either way.
+  GoogleString body;
+  EXPECT_EQ(HttpStatus::kNotFound,
+            FetchLeaf("/pagespeed_admin/graphs", "json=1", &body));
+  admin_site_->SetExpensiveSlotBusyForTesting(kGraphs, true);
+  EXPECT_EQ(429, FetchLeaf("/pagespeed_admin/graphs", "json=1", &body));
+  admin_site_->SetExpensiveSlotBusyForTesting(kGraphs, false);
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, CacheLookupAdmitsOneReadAtATime) {
+  admin_site_->SetExpensiveSlotBusyForTesting(kCacheLookup, true);
+  GoogleString body;
+  EXPECT_EQ(429, FetchLeaf("/pagespeed_admin/cache",
+                           "url=http://example.com/x.css", &body));
+  EXPECT_THAT(body, ::testing::HasSubstr("busy"));
+  admin_site_->SetExpensiveSlotBusyForTesting(kCacheLookup, false);
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, ACompletedCacheLookupFreesItsSlot) {
+  // A lookup that runs to completion releases its slot: the next one is
+  // admitted, not answered 429.
+  GoogleString first;
+  EXPECT_NE(429, FetchLeaf("/pagespeed_admin/cache",
+                           "url=http://example.com/x.css", &first));
+  GoogleString second;
+  EXPECT_NE(429, FetchLeaf("/pagespeed_admin/cache",
+                           "url=http://example.com/y.css", &second));
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, CacheStatusAdmitsOneReadAtATime) {
+  GoogleString body;
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/cache", "", &body, true));
+  admin_site_->SetExpensiveSlotBusyForTesting(kCacheStatus, true);
+  EXPECT_EQ(429, FetchLeaf("/pagespeed_admin/cache", "", &body, true));
+  // The per-vhost listing takes no slot.
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/cache", "", &body, false));
+  admin_site_->SetExpensiveSlotBusyForTesting(kCacheStatus, false);
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, LeavesDoNotBlockEachOther) {
+  admin_site_->SetExpensiveSlotBusyForTesting(kConfig, true);
+  GoogleString body;
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/message_history", "", &body));
+  admin_site_->SetExpensiveSlotBusyForTesting(kConfig, false);
+}
+
+TEST_F(AdminSiteExpensiveReadsTest, ABusySlotIsWaitedForBriefly) {
+  admin_site_->SetExpensiveSlotBusyForTesting(kConfig, true);
+  std::thread releaser([this]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    admin_site_->ReleaseExpensiveSlot(kConfig);
+  });
+  GoogleString body;
+  EXPECT_EQ(HttpStatus::kOK,
+            FetchLeaf("/pagespeed_admin/config", "", &body));
+  releaser.join();
+}
+
+TEST_F(AdminSiteTest, DeleteAllowedWhenPurgeEnabled) {
+  options()->set_enable_cache_purge(true);
+  GoogleUrl gurl("http://localhost/pagespeed_admin/cache");
+  QueryParams query_params;
+  query_params.ParseFromUrl(GoogleUrl(
+      "http://localhost/pagespeed_admin/cache"
+      "?url=http://example.com/x.css&Delete"));
+  GoogleString body;
+  StringAsyncFetch fetch(rewrite_driver()->request_context(), &body);
+  SystemRewriteOptions global_options(thread_system_.get());
+  // The fully wired fixture context: the delete runs a real metadata lookup.
+  admin_site_->AdminPage(false, gurl, query_params, rewrite_driver()->options(),
+                         nullptr, &fetch, nullptr, nullptr, nullptr, nullptr,
+                         nullptr, server_context(), factory()->statistics(),
+                         factory()->statistics(), &global_options);
+  EXPECT_NE(HttpStatus::kForbidden, fetch.response_headers()->status_code());
+  EXPECT_THAT(body, ::testing::Not(::testing::HasSubstr("Deleting not enabled")));
 }
 }  // namespace
 

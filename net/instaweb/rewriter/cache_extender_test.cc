@@ -43,6 +43,7 @@
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/cache/lru_cache.h"
 #include "pagespeed/kernel/html/html_parse_test_base.h"
@@ -51,6 +52,7 @@
 #include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/kernel/http/response_headers.h"
 #include "pagespeed/kernel/http/semantic_type.h"
+#include "pagespeed/kernel/util/gzip_inflater.h"
 #include "pagespeed/opt/logging/log_record.h"
 
 namespace net_instaweb {
@@ -308,6 +310,38 @@ TEST_F(CacheExtenderTest, DoExtend) {
   EXPECT_EQ(6, lru_cache()->num_misses()) << "3 metadata + 3 input resources";
   EXPECT_EQ(6, lru_cache()->num_inserts()) << "3 metadata + 3 input resources";
   EXPECT_EQ(3, counting_url_async_fetcher()->fetch_count());
+}
+
+// A valid gzip body that inflates past the largest response we are willing
+// to handle must not be cache-extended: the extender copies the resource
+// bytes verbatim under a fresh URL with fresh headers, so the still
+// compressed bytes would be served as if they were plain content.
+TEST_F(CacheExtenderTest, DoNotExtendOversizedGzip) {
+  options()->EnableExtendCacheFilters();
+
+  // Inflates one byte past the largest handled response; compresses to a
+  // tiny body that is comfortably cacheable at its compressed size.
+  GoogleString js(RewriteOptions::kDefaultMaxCacheableResponseContentLength +
+                      1,
+                  'a');
+  GoogleString compressed;
+  {
+    StringWriter writer(&compressed);
+    ASSERT_TRUE(GzipInflater::Deflate(js, GzipInflater::kGzip, &writer));
+  }
+  ASSERT_LT(compressed.size(), js.size() / 100);  // Compresses well.
+
+  ResponseHeaders response_headers;
+  DefaultResponseHeaders(kContentTypeJavascript, kMediumTtlSec,
+                         &response_headers);
+  response_headers.Add(HttpAttributes::kContentEncoding, HttpAttributes::kGzip);
+  SetFetchResponse(AbsolutifyUrl("c.js"), response_headers, compressed);
+  rewrite_driver()->AddFilters();
+
+  ValidateNoChanges(
+      "no_extend_oversized_gzip",
+      "<script type='text/javascript' src='c.js'></script>\n");
+  EXPECT_EQ(0, num_cache_extended_->Get());
 }
 
 TEST_F(CacheExtenderTest, ExtendUnhealthy) {

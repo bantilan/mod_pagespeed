@@ -140,4 +140,23 @@ TEST_F(HeaderUtilTest, SelectiveRequestHeaders) {
   EXPECT_EQ(1, selective.NumAttributes());
 }
 
+TEST_F(HeaderUtilTest, PropagatesRequestMethod) {
+  const struct {
+    const char* name;
+    RequestHeaders::Method method;
+  } kCases[] = {
+      {"GET", RequestHeaders::kGet},
+      {"HEAD", RequestHeaders::kHead},
+      {"POST", RequestHeaders::kPost},
+      {"PUT", RequestHeaders::kPut},
+      {"DELETE", RequestHeaders::kDelete},
+  };
+  for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
+    request_.method = kCases[i].name;
+    RequestHeaders headers;
+    ApacheRequestToRequestHeaders(request_, &headers);
+    EXPECT_EQ(kCases[i].method, headers.method()) << kCases[i].name;
+  }
+}
+
 }  // namespace net_instaweb

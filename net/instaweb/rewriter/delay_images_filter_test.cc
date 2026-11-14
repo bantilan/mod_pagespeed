@@ -109,9 +109,10 @@ class DelayImagesFilterTest : public RewriteTestBase {
                                        const GoogleString& image_data) {
     return StringPrintf(
         kScriptTemplate,
-        StrCat("\npagespeed.delayImagesInline.addLowResImages(\'", url,
+        StrCat("\nif(window.pagespeed){if(pagespeed.delayImagesInline){"
+               "pagespeed.delayImagesInline.addLowResImages(\'", url,
                "\', \'", image_data, "\');\n"
-               "pagespeed.delayImagesInline.replaceWithLowRes();\n").c_str());
+               "pagespeed.delayImagesInline.replaceWithLowRes();}}\n").c_str());
   }
 
   GoogleString GenerateRewrittenImageTag(const GoogleString& url,
@@ -133,12 +134,14 @@ class DelayImagesFilterTest : public RewriteTestBase {
 
   GoogleString GetHighResScript() {
     return StringPrintf(kScriptTemplate,
-                        "\npagespeed.delayImages.replaceWithHighRes();\n");
+                        "\nif(window.pagespeed){if(pagespeed.delayImages){"
+                        "pagespeed.delayImages.replaceWithHighRes();}}\n");
   }
 
   GoogleString GetLazyHighResScript() {
     return StringPrintf(kScriptTemplate,
-                        "\npagespeed.delayImages.registerLazyLoadHighRes();\n");
+                        "\nif(window.pagespeed){if(pagespeed.delayImages){"
+                        "pagespeed.delayImages.registerLazyLoadHighRes();}}\n");
   }
 
   GoogleString GetDelayImagesInlineCode() {

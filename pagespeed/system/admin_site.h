@@ -20,6 +20,10 @@
 #ifndef PAGESPEED_SYSTEM_ADMIN_SITE_H_
 #define PAGESPEED_SYSTEM_ADMIN_SITE_H_
 
+#include <atomic>
+#include <cstddef>
+#include <set>
+
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/string_util.h"
 
@@ -41,6 +45,53 @@ class SystemCaches;
 class SystemRewriteOptions;
 class Timer;
 class Writer;
+
+// Bounds on the statistics-log query of the graphs and console JSON leaves.
+// A finer granularity than the lower bound returns no more useful data and
+// costs more to compute; a query may also name only so many variables.
+const int64 kMinGraphGranularityMs = 1000;
+const int64 kMaxGraphGranularityMs = 86400000;  // one day
+const size_t kMaxGraphVarTitles = 64;
+
+// The statistics-log query a graphs/console JSON request asks for, after the
+// bounds above are applied.
+struct GraphQuery {
+  GraphQuery()
+      : start_time(0),
+        end_time(0),
+        granularity_ms(3000),
+        dump_for_graphs(true) {
+  }
+  int64 start_time;
+  int64 end_time;
+  int64 granularity_ms;
+  // true: the set of variables the graphs page uses; false: `var_titles`.
+  bool dump_for_graphs;
+  std::set<GoogleString> var_titles;
+};
+
+// Reads start_time, end_time, granularity and var_titles from `params`.
+// Missing values take their defaults (the whole log up to `now_ms` at the
+// default logging granularity); granularity is held to
+// [kMinGraphGranularityMs, kMaxGraphGranularityMs], times to be non-negative
+// and not after one day past `now_ms`, and at most kMaxGraphVarTitles
+// variable names are kept.
+GraphQuery ParseGraphQuery(const QueryParams& params, int64 now_ms);
+
+// The admin reads that cost the server real work, each admitted one at a time
+// with a short wait for the slot, except where the read may complete
+// asynchronously (see AdminSite::AcquireExpensiveSlot).
+enum ExpensiveLeaf {
+  kGraphs = 0,   // graphs/console JSON: reads the statistics log
+  kConfig,       // configuration dump
+  kMessages,     // plain message history
+  kCacheLookup,  // cache?url=: builds a rewrite driver per lookup
+  kCacheStatus,  // global cache listing: queries memcached/redis servers
+  kNumLeaves,    // Sentinel; keep last.
+};
+
+// How long a request waits for a busy slot before it is answered 429.
+const int kExpensiveSlotWaitMs = 100;
 
 // Implements the /pagespeed_admin pages.
 class AdminSite {
@@ -171,11 +222,59 @@ class AdminSite {
   // Return the message handler for debugging use.
   MessageHandler* MessageHandlerForTesting() { return message_handler_; }
 
+  // Frees the slot of `leaf` (see ExpensiveSlot::Detach).
+  void ReleaseExpensiveSlot(ExpensiveLeaf leaf) {
+    expensive_in_flight_[static_cast<size_t>(leaf)].store(
+        false, std::memory_order_release);
+  }
+
+  // Marks the slot of an expensive read as taken (true) or free.
+  void SetExpensiveSlotBusyForTesting(ExpensiveLeaf leaf, bool busy) {
+    expensive_in_flight_[static_cast<size_t>(leaf)].store(
+        busy, std::memory_order_release);
+  }
+
  private:
+  // Takes the slot of `leaf`, waiting up to `wait_ms` for it.  The wait
+  // sleeps the calling thread, which can be the server's event loop: only a
+  // read that finishes before its handler returns may wait.
+  bool AcquireExpensiveSlot(ExpensiveLeaf leaf, int wait_ms);
+
+  // Holds the slot of one expensive read for the length of a scope.  When the
+  // slot could not be taken, held() is false and the caller answers 429.
+  class ExpensiveSlot {
+   public:
+    ExpensiveSlot(AdminSite* site, ExpensiveLeaf leaf,
+                  int wait_ms = kExpensiveSlotWaitMs)
+        : site_(site),
+          leaf_(leaf),
+          held_(site->AcquireExpensiveSlot(leaf, wait_ms)) {}
+    bool held() const { return held_; }
+    // Frees the slot now; a later call and the destructor do nothing.
+    void Release() {
+      if (held_) site_->ReleaseExpensiveSlot(leaf_);
+      held_ = false;
+    }
+    // Gives the slot up without freeing it: the caller frees it later with
+    // ReleaseExpensiveSlot (an asynchronous read does so when it is done).
+    void Detach() { held_ = false; }
+    ~ExpensiveSlot() { Release(); }
+
+   private:
+    AdminSite* site_;
+    ExpensiveLeaf leaf_;
+    bool held_;
+
+    DISALLOW_COPY_AND_ASSIGN(ExpensiveSlot);
+  };
+  friend class ExpensiveSlot;
+
   MessageHandler* message_handler_;
   StaticAssetManager* static_asset_manager_;
   Timer* timer_;
   int64 start_time_ms_;
+  // One slot per expensive leaf (ExpensiveLeaf): the read in flight, if any.
+  std::atomic<bool> expensive_in_flight_[kNumLeaves];
   DISALLOW_COPY_AND_ASSIGN(AdminSite);
 };
 

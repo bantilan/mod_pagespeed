@@ -20,6 +20,9 @@
 
 #include "net/instaweb/rewriter/public/rewrite_options.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "net/instaweb/rewriter/public/domain_lawyer.h"
 #include "net/instaweb/rewriter/public/experiment_util.h"
 #include "net/instaweb/rewriter/public/rewrite_options_test_base.h"
@@ -383,6 +386,50 @@ TEST_F(RewriteOptionsTest, PolyfillFilenamesCloneMergeAndCacheSignatures) {
   EXPECT_EQ(RewriteOptions::kOptionNameUnknown,
       options_.ParseAndSetOptionFromNameWithScope(name, "unsafe.js",
           RewriteOptions::kQueryScope, &message, &handler));
+}
+
+TEST_F(RewriteOptionsTest, SecretOptionsAreFlaggedAtRegistration) {
+  // Registry-driven: every option flagged secret is redacted by
+  // OptionsToString, so an option flagged later is covered without touching
+  // the redaction test. The keys known today must be flagged, and no secret
+  // may also be marked safe to print.
+  std::vector<GoogleString> secret_names;
+  for (const RewriteOptions::OptionBase* option : options_.all_options()) {
+    if (option->is_secret()) {
+      secret_names.push_back(option->option_name().as_string());
+    }
+    EXPECT_FALSE(option->is_secret() && option->property()->safe_to_print())
+        << option->option_name();
+  }
+  const char* known_secrets[] = {
+      RewriteOptions::kUrlSigningKey, RewriteOptions::kXPsaBlockingRewrite,
+      RewriteOptions::kDownstreamCacheRebeaconingKey,
+      RewriteOptions::kRequestOptionOverride,
+      RewriteOptions::kStickyQueryParameters,
+  };
+  for (const char* name : known_secrets) {
+    EXPECT_NE(secret_names.end(),
+              std::find(secret_names.begin(), secret_names.end(), name))
+        << name;
+  }
+}
+
+TEST_F(RewriteOptionsTest, SecretValuesAreRedactedInOptionsToString) {
+  // Options that hold a key or credential never appear in admin/log output.
+  options_.set_url_signing_key("signing-key-9b7e");
+  options_.set_blocking_rewrite_key("blocking-key-4d2a");
+  options_.set_downstream_cache_rebeaconing_key("rebeacon-key-7c1f");
+  options_.set_request_option_override("override-token-3e8b");
+  options_.set_sticky_query_parameters("sticky-token-6a5d");
+  GoogleString output = options_.OptionsToString();
+  EXPECT_EQ(GoogleString::npos, output.find("signing-key-9b7e")) << output;
+  EXPECT_EQ(GoogleString::npos, output.find("blocking-key-4d2a")) << output;
+  EXPECT_EQ(GoogleString::npos, output.find("rebeacon-key-7c1f")) << output;
+  EXPECT_EQ(GoogleString::npos, output.find("override-token-3e8b")) << output;
+  EXPECT_EQ(GoogleString::npos, output.find("sticky-token-6a5d")) << output;
+  // The options are still listed, with the redacted placeholder.
+  EXPECT_NE(GoogleString::npos, output.find("UrlSigningKey")) << output;
+  EXPECT_NE(GoogleString::npos, output.find("***")) << output;
 }
 
 TEST_F(RewriteOptionsTest, NumFilterInLevels) {

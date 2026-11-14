@@ -60,4 +60,14 @@ TEST_F(ApacheConfigTest, Auth) {
   EXPECT_STREQ("http://example.com/url2", redirect);
 }
 
+TEST_F(ApacheConfigTest, RedactsProxyAuthInOptionsOutput) {
+  config_.set_proxy_auth("cookie-name=cookie-value-5c1d");
+  config_.set_url_signing_key("signing-key-9b7e");
+  GoogleString output = config_.OptionsToString();
+  EXPECT_EQ(GoogleString::npos, output.find("cookie-value-5c1d")) << output;
+  EXPECT_EQ(GoogleString::npos, output.find("signing-key-9b7e")) << output;
+  EXPECT_NE(GoogleString::npos, output.find("ProxyAuth")) << output;
+  EXPECT_NE(GoogleString::npos, output.find("***")) << output;
+}
+
 }  // namespace net_instaweb

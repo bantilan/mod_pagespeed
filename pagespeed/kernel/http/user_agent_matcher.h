@@ -51,7 +51,11 @@ class UserAgentMatcher {
   // Note that this must not contain the substring "webp".
   static const char kTestUserAgentNoWebP[];  // non-webp user agent
 
-  enum DeviceType {
+  // Fixed underlying type: holding an out-of-range value (e.g. the death
+  // test's DeviceType(-1)) is then defined behavior, so the defensive
+  // range check in ExperimentSpec::matches_device_type — not UB — is what
+  // fires.
+  enum DeviceType : int {
     kDesktop,
     kTablet,
     kMobile,

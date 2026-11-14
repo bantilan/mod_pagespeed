@@ -78,15 +78,15 @@ TEST(CspParseSourceTest, Quoted) {
       CspSourceExpression::Parse("'unsafe-hashed-attribUtes'"));
 
   EXPECT_EQ(
-      CspSourceExpression(CspSourceExpression::kHashOrNonce),
+      CspSourceExpression(CspSourceExpression::kNonce),
       CspSourceExpression::Parse("'nonce-qwertyu12345'"));
 
   EXPECT_EQ(
-      CspSourceExpression(CspSourceExpression::kHashOrNonce),
+      CspSourceExpression(CspSourceExpression::kHash),
       CspSourceExpression::Parse("'sha256-qwertyu12345='"));
 
   EXPECT_EQ(
-      CspSourceExpression(CspSourceExpression::kHashOrNonce),
+      CspSourceExpression(CspSourceExpression::kHash),
       CspSourceExpression::Parse("'sha256-qwertyu12345/=='"));
 
   // Some base64 errors.
@@ -665,6 +665,40 @@ TEST(CspPolicyTest, InlineScript) {
     EXPECT_FALSE(p->PermitsInlineScript());
     EXPECT_TRUE(p->PermitsInlineScriptAttribute());
   }
+}
+
+TEST(CspPolicyTest, CanModifyInlineBlocks) {
+  struct Case {
+    const char* policy;
+    bool script;
+    bool style;
+  };
+  const Case kCases[] = {
+      {"img-src *", true, true},
+      {"script-src 'nonce-abc123' 'self'; style-src 'nonce-abc123'", true,
+       true},
+      {"script-src 'unsafe-inline'; style-src 'unsafe-inline'", true, true},
+      {"default-src 'unsafe-inline'", true, true},
+      {"script-src 'sha256-abc123' 'nonce-abc123'; "
+       "style-src 'sha256-abc123' 'unsafe-inline'",
+       false, false},
+      {"script-src 'self'; style-src 'self'", false, false},
+      {"default-src 'none'", false, false},
+      {"script-src 'unsafe-inline' 'strict-dynamic'", false, true},
+  };
+  for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
+    std::unique_ptr<CspPolicy> p(CspPolicy::Parse(kCases[i].policy));
+    ASSERT_TRUE(p != nullptr) << kCases[i].policy;
+    EXPECT_EQ(kCases[i].script, p->CanModifyInlineScript()) << kCases[i].policy;
+    EXPECT_EQ(kCases[i].style, p->CanModifyInlineStyle()) << kCases[i].policy;
+  }
+
+  std::unique_ptr<CspSourceList> n(CspSourceList::Parse("'nonce-abc123'"));
+  EXPECT_TRUE(n->saw_nonce());
+  EXPECT_FALSE(n->saw_hash());
+  std::unique_ptr<CspSourceList> h(CspSourceList::Parse("'sha256-abc123'"));
+  EXPECT_TRUE(h->saw_hash());
+  EXPECT_FALSE(h->saw_nonce());
 }
 
 TEST(CspPolicyTest, InlineStyle) {

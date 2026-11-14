@@ -102,6 +102,24 @@ RequestHeaders::Method RequestHeaders::method() const {
   return kGet;
 }
 
+RequestHeaders::Method RequestHeaders::MethodFromString(StringPiece method) {
+  static const struct {
+    const char* name;
+    Method method;
+  } kMethods[] = {
+      {"GET", kGet},     {"HEAD", kHead},       {"POST", kPost},
+      {"PUT", kPut},     {"DELETE", kDelete},   {"OPTIONS", kOptions},
+      {"TRACE", kTrace}, {"CONNECT", kConnect}, {"PATCH", kPatch},
+      {"PURGE", kPurge},
+  };
+  for (size_t i = 0; i < sizeof(kMethods) / sizeof(kMethods[0]); ++i) {
+    if (StringCaseEqual(method, kMethods[i].name)) {
+      return kMethods[i].method;
+    }
+  }
+  return kError;
+}
+
 const char* RequestHeaders::method_string() const {
   switch (proto()->method()) {
     case HttpRequestHeaders::OPTIONS:     return "OPTIONS";

@@ -367,6 +367,24 @@ class InPlaceRewriteContextTest : public RewriteTestBase {
     EXPECT_EQ(date_ms, response_headers_.date_ms()) << url;
   }
 
+  // Fetches `url`, whose origin fails after part of the body, and checks
+  // that the client is answered with a failure and the driver is released
+  // (WaitForShutDown returns).
+  void FetchFailingMidStream(const GoogleString& url) {
+    WorkerTestBase::SyncPoint sync(server_context()->thread_system());
+    RequestContextPtr request_context(RequestContext::NewTestRequestContext(
+        server_context()->thread_system()));
+    NotifyingFetch notifying_fetch(request_context, options(), url, &sync,
+                                   &response_headers_);
+    rewrite_driver()->FetchResource(url, &notifying_fetch);
+    sync.Wait();
+    rewrite_driver()->WaitForShutDown();
+    mock_scheduler()->AwaitQuiescence();
+    EXPECT_TRUE(notifying_fetch.done());
+    EXPECT_FALSE(notifying_fetch.success());
+    EXPECT_EQ(0, http_cache()->cache_inserts()->Get());
+  }
+
   void ResetHeadersAndStats() {
     response_headers_.Clear();
     img_filter_->ClearStats();
@@ -1265,6 +1283,51 @@ TEST_F(InPlaceRewriteContextTest, CacheableCssUrlRewritingSucceeds) {
                         etag_, timer()->NowMs());
 }
 
+// A HEAD request for a cached, not yet rewritten original gets no body and
+// does not start a rewrite of an empty input: later GETs get the original and
+// then the full optimized body.
+TEST_F(InPlaceRewriteContextTest, HeadRequestDoesNotRewriteEmptyInput) {
+  Init();
+  // The original is in the cache, not yet rewritten.
+  AddResponse(cache_css_url_, kContentTypeCss, cache_body_, start_time_ms(),
+              ttl_ms_, "", StringPiece(""), kWriteToCache, kTransform);
+  ResetHeadersAndStats();
+
+  {
+    WorkerTestBase::SyncPoint sync(server_context()->thread_system());
+    RequestContextPtr request_context(RequestContext::NewTestRequestContext(
+        server_context()->thread_system()));
+    NotifyingFetch head_fetch(request_context, options(), cache_css_url_, &sync,
+                              &response_headers_);
+    head_fetch.request_headers()->set_method(RequestHeaders::kHead);
+    rewrite_driver()->FetchResource(cache_css_url_, &head_fetch);
+    sync.Wait();
+    rewrite_driver()->WaitForShutDown();
+    mock_scheduler()->AwaitQuiescence();
+    EXPECT_TRUE(head_fetch.done());
+    EXPECT_EQ("", head_fetch.content());
+  }
+  EXPECT_EQ(0, css_filter_->num_rewrites());
+
+  // GETs afterwards: the first serves the original bytes and rewrites in the
+  // background, the next serves the full optimized body.
+  const char* expected_bodies[] = {cache_body_.c_str(), "good:cf"};
+  for (int i = 0; i < 2; ++i) {
+    WorkerTestBase::SyncPoint sync(server_context()->thread_system());
+    RequestContextPtr request_context(RequestContext::NewTestRequestContext(
+        server_context()->thread_system()));
+    NotifyingFetch get_fetch(request_context, options(), cache_css_url_, &sync,
+                             &response_headers_);
+    rewrite_driver()->FetchResource(cache_css_url_, &get_fetch);
+    sync.Wait();
+    rewrite_driver()->WaitForShutDown();
+    mock_scheduler()->AwaitQuiescence();
+    EXPECT_TRUE(get_fetch.done());
+    EXPECT_EQ(expected_bodies[i], get_fetch.content());
+  }
+  EXPECT_EQ(1, css_filter_->num_rewrites());
+}
+
 TEST_F(InPlaceRewriteContextTest, NonCacheableUrlNoRewriting) {
   Init();
   FetchAndCheckResponse(nocache_html_url_, nocache_body_, true, 0, NULL,
@@ -1418,6 +1481,22 @@ TEST_F(InPlaceRewriteContextTest, FetchFailedNoRewriting) {
   EXPECT_EQ(0, img_filter_->num_rewrites());
   EXPECT_EQ(0, js_filter_->num_rewrites());
   EXPECT_EQ(0, css_filter_->num_rewrites());
+}
+
+TEST_F(InPlaceRewriteContextTest, MidStreamFetchFailureWhileStreaming) {
+  Init();
+  mock_url_fetcher()->SetResponseFailure(cache_js_url_);
+  FetchFailingMidStream(cache_js_url_);
+  EXPECT_EQ(0, js_filter_->num_rewrites());
+}
+
+TEST_F(InPlaceRewriteContextTest, MidStreamFetchFailureWhileWaitingToOptimize) {
+  options()->set_in_place_wait_for_optimized(true);
+  Init();
+  mock_url_fetcher()->SetResponseFailure(cache_js_url_);
+  FetchFailingMidStream(cache_js_url_);
+  EXPECT_EQ(0, js_filter_->num_rewrites());
+  EXPECT_TRUE(response_headers_.IsErrorStatus());
 }
 
 TEST_F(InPlaceRewriteContextTest, HandleResourceCreationFailure) {

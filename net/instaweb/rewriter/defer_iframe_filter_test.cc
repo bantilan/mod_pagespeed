@@ -19,6 +19,7 @@
 
 
 #include "net/instaweb/rewriter/public/defer_iframe_filter.h"
+#include "net/instaweb/rewriter/public/lazyload_images_filter.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_test_base.h"
 #include "net/instaweb/rewriter/public/server_context.h"
@@ -42,7 +43,8 @@ class DeferIframeFilterTest : public RewriteTestBase {
   GoogleString GeneratePagespeedIframeTag(const StringPiece& src) {
     return StrCat("<pagespeed_iframe src=\"", src, "\">"
         "<script type=\"text/javascript\">"
-        "\npagespeed.deferIframe.convertToIframe();"
+        "\nif(window.pagespeed){if(pagespeed.deferIframe){"
+        "pagespeed.deferIframe.convertToIframe();}}"
         "</script></pagespeed_iframe>");
   }
 };
@@ -95,6 +97,41 @@ TEST_F(DeferIframeFilterTest, TestMultipleIframePresent) {
       GeneratePagespeedIframeTag("http://test.com/1.html"),
       GeneratePagespeedIframeTag("http://test.com/2.html"), "</body>");
   ValidateExpected("defer_iframe", input_html, output_html);
+}
+
+// Class oracle: an emitted inline script that calls into the support script
+// from a separate <script> element must first check that the support script
+// ran, so a page where it is blocked or fails to load logs no ReferenceError.
+TEST(InlineScriptGuardTest, SeparateScriptsAreGuarded) {
+  const struct {
+    const char* name;
+    const char* code;
+    const char* expected;
+  } kScripts[] = {
+      {"DeferIframeFilter::kDeferIframeIframeJs",
+       DeferIframeFilter::kDeferIframeIframeJs,
+       "\nif(window.pagespeed){if(pagespeed.deferIframe){"
+       "pagespeed.deferIframe.convertToIframe();}}"},
+      {"LazyloadImagesFilter::kLoadAllImages",
+       LazyloadImagesFilter::kLoadAllImages,
+       "if(window.pagespeed){if(pagespeed.lazyLoadImages){"
+       "pagespeed.lazyLoadImages.loadAllImages();}}"},
+      {"LazyloadImagesFilter::kOverrideAttributeFunctions",
+       LazyloadImagesFilter::kOverrideAttributeFunctions,
+       "if(window.pagespeed){if(pagespeed.lazyLoadImages){"
+       "pagespeed.lazyLoadImages.overrideAttributeFunctions();}}"},
+  };
+  for (size_t i = 0; i < sizeof(kScripts) / sizeof(kScripts[0]); ++i) {
+    SCOPED_TRACE(kScripts[i].name);
+    EXPECT_STREQ(kScripts[i].expected, kScripts[i].code);
+    GoogleString code(kScripts[i].code);
+    // The first statement is the check; the call is inside it.
+    size_t start = code.find_first_not_of('\n');
+    EXPECT_EQ(start, code.find("if(window.pagespeed){if(pagespeed.")) << code;
+    // Emitted as raw script text (no CDATA), so it must stay XML-safe for
+    // pages served as XHTML.
+    EXPECT_EQ(GoogleString::npos, code.find_first_of("<>\"'&")) << code;
+  }
 }
 
 }  // namespace net_instaweb

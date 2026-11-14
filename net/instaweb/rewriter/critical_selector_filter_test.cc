@@ -363,6 +363,13 @@ TEST_F(CriticalSelectorFilterTest, LessThanSignInCssIsInlined) {
       << output_buffer_;
 }
 
+// NOTE (SEC-05 #22): upstream's EscapedClosingStyleTagKeepsTheLink and
+// ForeignLinkIsLeftAlone are not ported. The first needs the CSS
+// parse/serialize round-trip to decode escapes (so the summary carries a
+// literal "</style"); the second needs foreign-content keyword suppression
+// in the HTML lexer. Neither is in #22's diff; both are parser features
+// outside SEC-05's scope.
+
 TEST_F(CriticalSelectorFilterTest, EmptyBlock) {
   // Do not insert empty <style> blocks. Our critical selector sets do not
   // talk about 'i' so this should do nothing..

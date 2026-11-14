@@ -81,9 +81,10 @@ const char kCuppaPngWildcardData[] = "data:image/png;base64*";
 const char kInlinedScriptFormat[] =
     "<script type=\"text/javascript\""
     " id=\"pagespeed_script_%d\" data-pagespeed-no-defer>"
+    "if(window.pagespeed){if(pagespeed.dedupInlinedImages){"
     "pagespeed.dedupInlinedImages.inlineImg("
     "'pagespeed_img_0%d','pagespeed_img_0%d','pagespeed_script_%d'"
-    ");</script>";
+    ");}}</script>";
 
 const char kHtmlWrapperFormat[] =
     "<head>\n"
@@ -211,10 +212,12 @@ TEST_F(DedupInlinedImagesTest, DedupSecondSmallImageWithId) {
                              "<script type=\"text/javascript\""
                              " id=\"pagespeed_script_2\""
                              " data-pagespeed-no-defer>"
+                             "if(window.pagespeed){"
+                             "if(pagespeed.dedupInlinedImages){"
                              "pagespeed.dedupInlinedImages.inlineImg("
                              "'xyzzy',"
                              "'pagespeed_img_01',"
-                             "'pagespeed_script_2');"
+                             "'pagespeed_script_2');}}"
                              "</script>")));
 }
 
@@ -231,11 +234,35 @@ TEST_F(DedupInlinedImagesTest, DedupSecondSmallImageWithAttributes) {
                              "<script type=\"text/javascript\""
                              " id=\"pagespeed_script_2\""
                              " data-pagespeed-no-defer>"
+                             "if(window.pagespeed){"
+                             "if(pagespeed.dedupInlinedImages){"
                              "pagespeed.dedupInlinedImages.inlineImg("
                              "'pagespeed_img_01',"
                              "'plugh',"
-                             "'pagespeed_script_2');"
+                             "'pagespeed_script_2');}}"
                              "</script>")));
+}
+
+TEST_F(DedupInlinedImagesTest, SizeCutoffBoundary) {
+  // The restoring script is about the size of the cutoff, so an inlined image
+  // is deduplicated only when it is longer than kMinimumImageCutoff.
+  const char kPrefix[] = "data:image/gif;base64,";
+  const unsigned int sizes[] = {
+      DedupInlinedImagesFilter::kMinimumImageCutoff,
+      DedupInlinedImagesFilter::kMinimumImageCutoff + 1};
+  for (int i = 0; i < 2; ++i) {
+    unsigned int size = sizes[i];
+    GoogleString src(kPrefix);
+    src.append(size - src.size(), 'A');
+    ASSERT_EQ(size, src.size());
+    GoogleString img = StrCat("<img src='", src, "'>");
+    Parse(StrCat("cutoff_", IntegerToString(size)),
+          StrCat("<body>", img, "\n", img, "</body>"));
+    bool deduped = output_buffer_.find("pagespeed_img_01") != GoogleString::npos;
+    EXPECT_EQ(size > DedupInlinedImagesFilter::kMinimumImageCutoff, deduped)
+        << "size " << size;
+    output_buffer_.clear();
+  }
 }
 
 TEST_F(DedupInlinedImagesTest, DisabledForOldBlackberry) {

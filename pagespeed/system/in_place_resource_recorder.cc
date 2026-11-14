@@ -27,6 +27,7 @@
 #include "net/instaweb/http/public/http_cache_failure.h"
 #include "net/instaweb/http/public/http_value.h"
 #include "net/instaweb/http/public/inflating_fetch.h"
+#include "pagespeed/kernel/base/message_handler.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/base/timer.h"
@@ -103,6 +104,30 @@ bool StatesCacheLifetime(const ResponseHeaders& headers) {
     }
   }
   return false;
+}
+
+// Whether InflatingFetch turns a body with these headers into its identity
+// form.  It does for no content coding at all and for a single gzip or
+// deflate, matched as whole header values the way the inflater matches them;
+// a body in any other coding -- br, zstd, or a stacked list such as
+// "gzip, br" -- passes through it byte for byte.
+bool CanDecodeContentEncoding(const ResponseHeaders& headers) {
+  ConstStringStarVector codings;
+  headers.Lookup(HttpAttributes::kContentEncoding, &codings);
+  int num_codings = 0;
+  for (size_t i = 0; i < codings.size(); ++i) {
+    const GoogleString* coding = codings[i];
+    if (coding == nullptr || coding->empty() ||
+        StringCaseEqual(*coding, "identity")) {
+      continue;
+    }
+    if (!StringCaseEqual(*coding, HttpAttributes::kGzip) &&
+        !StringCaseEqual(*coding, HttpAttributes::kDeflate)) {
+      return false;
+    }
+    ++num_codings;
+  }
+  return num_codings <= 1;
 }
 
 }  // namespace
@@ -197,6 +222,21 @@ void InPlaceResourceRecorder::ConsiderResponseHeaders(
 
   if (!consider_response_headers_called_) {
     consider_response_headers_called_ = true;
+    // These are the headers of the bytes about to stream past: whether what
+    // arrives is the identity form of the resource or an encoding of it.  A
+    // body in a coding the inflater cannot undo must not be recorded at all,
+    // since DoneAndSetHeaders() would drop its Content-Encoding and store the
+    // encoded bytes as the identity form.  Not remembered against the URL:
+    // the coding is negotiated per request, and the next client may well be
+    // answered with a plain body.  The response itself is untouched.
+    if (!CanDecodeContentEncoding(*response_headers)) {
+      handler_->Message(kInfo,
+                        "IPRO: not recording %s: unsupported "
+                        "Content-Encoding",
+                        url_.c_str());
+      failure_ = true;
+      return;
+    }
     // In first call, set up headers for potential deflating. We basically only
     // care about Content-Encoding, plus AsyncFetch gets unhappy with 0
     // status code.
@@ -406,7 +446,9 @@ bool InPlaceResourceRecorder::ApplyOriginCachingHeaders(
 
 void InPlaceResourceRecorder::DoneAndSetHeaders(
     ResponseHeaders* response_headers, bool entire_response_received) {
-  if (!entire_response_received) {
+  // A recording that was already refused is finished by the server before the
+  // body ends; that is not a truncation.
+  if (!entire_response_received && !failure_) {
     // To record successfully, we must have a complete response.  Otherwise you
     // get https://github.com/apache/incubator-pagespeed-mod/issues/1081.
     Fail();
