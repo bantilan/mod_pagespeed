@@ -1,0 +1,1 @@
+- **The sprite canvas as a whole stays within the image resolution budget.** Individually small candidates could still multiply into a giant canvas; spriting is skipped when `max(width) x sum(heights)` exceeds the limit.

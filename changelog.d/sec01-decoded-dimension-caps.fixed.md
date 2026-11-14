@@ -1,0 +1,1 @@
+- **PNG, WebP and pixel-format decoding enforces dimension caps (16384 per side, 100 megapixels total).** A tiny stream declaring huge dimensions could drive giant decode buffers; such streams are rejected at Initialize time before any proportional allocation.

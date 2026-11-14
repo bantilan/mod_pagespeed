@@ -528,10 +528,11 @@ class Library : public spriter::ImageLibraryInterface {
   };
 
   Library(Delegate* delegate, const StringPiece& tmp_dir, Timer* timer,
-          MessageHandler* handler)
+          MessageHandler* handler, int64 max_image_resolution_bytes)
       : spriter::ImageLibraryInterface(delegate),
         timer_(timer),
-        handler_(handler) {
+        handler_(handler),
+        max_image_resolution_bytes_(max_image_resolution_bytes) {
     tmp_dir.CopyToString(&tmp_dir_);
   }
 
@@ -549,6 +550,20 @@ class Library : public spriter::ImageLibraryInterface {
   }
 
   Canvas* CreateCanvas(int width, int height) override {
+    // Bound the canvas as a whole: the per-image check in Register()
+    // admits any number of candidates that are individually under the
+    // limit, but the canvas is max(width) x sum(heights). Compare with
+    // division so the pixel budget cannot overflow; the spriter skips the
+    // sprite when no canvas comes back.
+    const int64 kBytesPerPixel = 4;
+    const int64 max_pixels = max_image_resolution_bytes_ / kBytesPerPixel;
+    if (height <= 0 || static_cast<int64>(width) > max_pixels / height) {
+      handler_->Message(kInfo,
+                        "Cannot sprite: canvas %dx%d exceeds the configured "
+                        "limit",
+                        width, height);
+      return nullptr;
+    }
     return new Canvas(width, height, this, tmp_dir_, timer_, handler_);
   }
 
@@ -580,6 +595,23 @@ class Library : public spriter::ImageLibraryInterface {
     if ((image_type != net_instaweb::IMAGE_PNG) &&
         (image_type != net_instaweb::IMAGE_GIF)) {
       handler->Message(kInfo, "Cannot sprite: not PNG or GIF, %s",
+                       resource->url().c_str());
+      return false;
+    }
+    // Apply the same resolution limit as the image-rewrite path: a
+    // candidate past the budget is skipped rather than laid out into a
+    // canvas of its declared size. Compare with division so the pixel
+    // budget cannot overflow.
+    ImageDim natural_dim;
+    image->Dimensions(&natural_dim);
+    const int64 kBytesPerPixel = 4;
+    const int64 max_pixels = max_image_resolution_bytes_ / kBytesPerPixel;
+    if (static_cast<int64>(natural_dim.width()) >
+        max_pixels / natural_dim.height()) {
+      handler->Message(kInfo,
+                       "Cannot sprite: resolution %dx%d exceeds the "
+                       "configured limit, %s",
+                       natural_dim.width(), natural_dim.height(),
                        resource->url().c_str());
       return false;
     }
@@ -615,6 +647,7 @@ class Library : public spriter::ImageLibraryInterface {
   GoogleString tmp_dir_;
   Timer* timer_;
   MessageHandler* handler_;
+  int64 max_image_resolution_bytes_;
 };
 
 }  // namespace spriter_binding
@@ -746,8 +779,8 @@ class ImageCombineFilter::Context : public RewriteContext {
           const GoogleUrl& css_url, const StringPiece& css_text)
       : RewriteContext(nullptr, parent, nullptr),
         library_(nullptr, filter->driver()->server_context()->filename_prefix(),
-                 filter->driver()->timer(),
-                 filter->driver()->message_handler()),
+                 filter->driver()->timer(), filter->driver()->message_handler(),
+                 filter->driver()->options()->image_resolution_limit_bytes()),
         filter_(filter) {
     css_base_url_.Reset(css_url);
     MD5Hasher hasher;
@@ -758,8 +791,8 @@ class ImageCombineFilter::Context : public RewriteContext {
   Context(RewriteDriver* driver, ImageCombineFilter* filter)
       : RewriteContext(driver, nullptr, nullptr),
         library_(nullptr, filter->driver()->server_context()->filename_prefix(),
-                 filter->driver()->timer(),
-                 filter->driver()->message_handler()),
+                 filter->driver()->timer(), filter->driver()->message_handler(),
+                 filter->driver()->options()->image_resolution_limit_bytes()),
         filter_(filter) {}
 
   ~Context() override {}

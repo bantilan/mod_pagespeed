@@ -1,0 +1,1 @@
+- **The JPEG writer owns its libjpeg error jump buffer.** Errors previously longjmp'd into a caller stack frame that may have returned; failures now surface as failed statuses from the call that triggered them.

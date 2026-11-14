@@ -1,0 +1,1 @@
+- **GIF images with empty extension blocks are rejected instead of crashing the worker.** A graphics-control or loop-count block carrying no data dereferenced a null pointer on three decode paths; such images now fail cleanly.

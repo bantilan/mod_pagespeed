@@ -19,6 +19,7 @@
 
 
 #include <cstdlib>
+#include <vector>
 
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/gtest.h"
@@ -26,6 +27,7 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/null_mutex.h"
 #include "pagespeed/kernel/base/string.h"
+#include "pagespeed/kernel/image/scanline_utils.h"
 #include "pagespeed/kernel/image/gif_reader.h"
 #include "pagespeed/kernel/image/png_optimizer.h"
 #include "pagespeed/kernel/image/read_image.h"
@@ -71,6 +73,7 @@ using pagespeed::image_compression::PngScanlineWriter;
 using pagespeed::image_compression::ReadTestFile;
 using pagespeed::image_compression::RGB_888;
 using pagespeed::image_compression::ScanlineReaderInterface;
+using pagespeed::image_compression::ScanlineStatus;
 using pagespeed::image_compression::ScanlineWriterInterface;
 using pagespeed::image_compression::ScopedPngStruct;
 using pagespeed::image_compression::kMessagePatternAnimatedGif;
@@ -1202,6 +1205,140 @@ TEST_F(PngScanlineReaderRawTest, ReadAfterReset) {
   }
 
   free(buffer_for_raw_reader);
+}
+
+// Appends a 32-bit big-endian value to *out.
+void AppendUint32BE(GoogleString* out, uint32 value) {
+  char buf[4] = {static_cast<char>(value >> 24), static_cast<char>(value >> 16),
+                 static_cast<char>(value >> 8), static_cast<char>(value)};
+  out->append(buf, sizeof(buf));
+}
+
+// Appends a PNG chunk with a correct CRC.
+void AppendPngChunk(GoogleString* out, const char* type, StringPiece data) {
+  AppendUint32BE(out, data.size());
+  out->append(type, 4);
+  out->append(data.data(), data.size());
+  uLong crc = crc32(0, Z_NULL, 0);
+  crc = crc32(crc, reinterpret_cast<const Bytef*>(type), 4);
+  crc = crc32(crc, reinterpret_cast<const Bytef*>(data.data()), data.size());
+  AppendUint32BE(out, static_cast<uint32>(crc));
+}
+
+// Builds a tiny PNG stream whose IHDR declares the given dimensions but
+// which carries no pixel data: enough structure for the reader to reach
+// and act on the header dimensions.
+GoogleString MakePngDeclaringDimensions(uint32 width, uint32 height) {
+  GoogleString png("\x89PNG\r\n\x1a\n", 8);
+  char ihdr[13];
+  ihdr[0] = static_cast<char>(width >> 24);
+  ihdr[1] = static_cast<char>(width >> 16);
+  ihdr[2] = static_cast<char>(width >> 8);
+  ihdr[3] = static_cast<char>(width);
+  ihdr[4] = static_cast<char>(height >> 24);
+  ihdr[5] = static_cast<char>(height >> 16);
+  ihdr[6] = static_cast<char>(height >> 8);
+  ihdr[7] = static_cast<char>(height);
+  ihdr[8] = 8;  // Bit depth.
+  ihdr[9] = 2;  // Color type: truecolor RGB.
+  ihdr[10] = 0;  // Compression: deflate.
+  ihdr[11] = 0;  // Filter method.
+  ihdr[12] = 0;  // No interlace.
+  AppendPngChunk(&png, "IHDR", StringPiece(ihdr, sizeof(ihdr)));
+  AppendPngChunk(&png, "IDAT", StringPiece("", 0));
+  AppendPngChunk(&png, "IEND", StringPiece("", 0));
+  return png;
+}
+
+// A stream declaring dimensions far beyond any image we can decode must be
+// rejected at Initialize time, before any buffer proportional to
+// width * height is allocated.
+TEST_F(PngScanlineReaderRawTest, OversizedDimensionsRejected) {
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  PngScanlineReaderRaw reader(&message_handler_);
+  GoogleString bomb = MakePngDeclaringDimensions(60000, 60000);
+  ScanlineStatus status =
+      reader.InitializeWithStatus(bomb.data(), bomb.length());
+  EXPECT_FALSE(status.Success());
+}
+
+// Builds a complete, valid PNG declaring the given dimensions: an opaque
+// black image whose IDAT carries real pixel data, so a decoder that accepts
+// the dimensions will happily decode the whole stream.
+GoogleString MakeValidPngDeclaringDimensions(uint32 width, uint32 height) {
+  // Each scanline is a filter byte followed by width * 3 zero bytes.
+  GoogleString raw;
+  for (uint32 row = 0; row < height; ++row) {
+    raw.push_back('\0');
+    raw.append(static_cast<size_t>(width) * 3, '\0');
+  }
+  uLongf idat_size = compressBound(raw.size());
+  GoogleString idat(idat_size, '\0');
+  if (compress2(reinterpret_cast<Bytef*>(&idat[0]), &idat_size,
+                reinterpret_cast<const Bytef*>(raw.data()), raw.size(),
+                9 /*level*/) != Z_OK) {
+    return "";
+  }
+  idat.resize(idat_size);
+
+  GoogleString png("\x89PNG\r\n\x1a\n", 8);
+  char ihdr[13];
+  ihdr[0] = static_cast<char>(width >> 24);
+  ihdr[1] = static_cast<char>(width >> 16);
+  ihdr[2] = static_cast<char>(width >> 8);
+  ihdr[3] = static_cast<char>(width);
+  ihdr[4] = static_cast<char>(height >> 24);
+  ihdr[5] = static_cast<char>(height >> 16);
+  ihdr[6] = static_cast<char>(height >> 8);
+  ihdr[7] = static_cast<char>(height);
+  ihdr[8] = 8;  // Bit depth.
+  ihdr[9] = 2;  // Color type: truecolor RGB.
+  ihdr[10] = 0;  // Compression: deflate.
+  ihdr[11] = 0;  // Filter method.
+  ihdr[12] = 0;  // No interlace.
+  AppendPngChunk(&png, "IHDR", StringPiece(ihdr, sizeof(ihdr)));
+  AppendPngChunk(&png, "IDAT", idat);
+  AppendPngChunk(&png, "IEND", StringPiece("", 0));
+  return png;
+}
+
+// The whole-image optimizer decodes via png_read_png, which buffers every
+// row from the IHDR before any data is seen. A complete image one pixel
+// wider than the per-side cap must be refused rather than decoded whole.
+TEST_F(PngOptimizerTest, OversizedWholeImageDimensionsRejected) {
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  message_handler_.AddPatternToSkipPrinting(kMessagePatternLibpngError);
+  message_handler_.AddPatternToSkipPrinting(kMessagePatternLibpngFailure);
+  reader_.reset(new PngReader(&message_handler_));
+  GoogleString in = MakeValidPngDeclaringDimensions(
+      pagespeed::image_compression::kScanlineMaxDimension + 1, 1);
+  ASSERT_NE(static_cast<size_t>(0), in.length());
+  GoogleString out;
+  EXPECT_FALSE(PngOptimizer::OptimizePngBestCompression(*reader_, in, &out,
+                                                        &message_handler_));
+  EXPECT_TRUE(out.empty());
+}
+
+// The best-compression pass re-reads the just-written PNG in full via
+// png_read_png, so the writer must apply the same per-side cap on that
+// re-read as the readers apply on the first decode.
+TEST_F(PngScanlineWriterTest, OversizedDimensionsRejectedByBestCompression) {
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  message_handler_.AddPatternToSkipPrinting(kMessagePatternLibpngError);
+  message_handler_.AddPatternToSkipPrinting(kMessagePatternLibpngFailure);
+  const size_t width =
+      pagespeed::image_compression::kScanlineMaxDimension + 1;
+  PngCompressParams best(true /*best compression*/, false /*progressive*/);
+  writer_.reset(CreateScanlineWriter(pagespeed::image_compression::IMAGE_PNG,
+                                     pixel_format_, width, height_ /* = 2 */,
+                                     &best, &output_, &message_handler_));
+  ASSERT_NE(static_cast<ScanlineWriterInterface*>(NULL), writer_.get());
+  // pixel_format_ is GRAY_8, so each row is one byte per pixel.
+  std::vector<unsigned char> row(width, 0);
+  for (int i = 0; i < height_; ++i) {
+    ASSERT_TRUE(writer_->WriteNextScanline(row.data()));
+  }
+  EXPECT_FALSE(writer_->FinalizeWrite());
 }
 
 TEST_F(PngScanlineReaderRawTest, InvalidPngs) {

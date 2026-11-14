@@ -1,0 +1,1 @@
+- **Out-of-range GIF pixel indexes decode to black.** A pixel index past the end of the color map expanded to uninitialized stack bytes in converted output; the palette is now zero-filled so such pixels are deterministic black.

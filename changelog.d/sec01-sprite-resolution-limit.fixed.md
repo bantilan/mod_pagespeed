@@ -1,0 +1,1 @@
+- **Spriting honors `ImageResolutionLimitBytes` like image rewriting.** Candidates past the budget are skipped instead of being laid out into a canvas of their declared size.

@@ -1,0 +1,1 @@
+- **Smallest-of-PNG/JPEG/WebP conversion tolerates a missing writer and missing lossy candidate.** Failed conversions left nulls that were dereferenced; the custom-quality attempt is skipped and the original bytes returned.

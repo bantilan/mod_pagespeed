@@ -1,0 +1,1 @@
+- **Chrome-quirks-enlarged GIF screens are rechecked against the decode caps.** Quirks mode could resize the screen to the first frame after the caps ran, publishing uncapped dimensions; the final spec is now validated before use.

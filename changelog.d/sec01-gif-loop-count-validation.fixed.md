@@ -1,0 +1,1 @@
+- **Malformed GIF loop-count sub-blocks are rejected.** Short blocks and wrong markers previously read the loop count from stale bytes; over-short or mis-marked blocks now fail while longer valid blocks still decode.

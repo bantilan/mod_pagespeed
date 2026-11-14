@@ -1,0 +1,1 @@
+- **Unquoted CSS `url()` trailing whitespace scans in linear time.** A long whitespace run after an unterminated URL was rescanned per character (quadratic); it is now skipped in one step.

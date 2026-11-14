@@ -229,6 +229,66 @@ TEST_F(CssImageCombineTest, NoSpritesMultiple) {
   ValidateNoChanges("no_sprite", in_text);
 }
 
+// Spriting must apply the same image resolution limit as the image-rewrite
+// path: a candidate whose dimensions exceed image_resolution_limit_bytes is
+// skipped rather than laid out into a canvas of its declared size.
+class CssImageCombineResolutionLimitTest : public CssImageCombineTest {
+ protected:
+  void SetUp() override {
+    // 5000 pixels at 4 bytes per pixel. Cuppa.png is 65x70 (4550 pixels,
+    // under the limit); BikeCrashIcn.png is 100x100 (10000 pixels, over it).
+    options()->set_image_resolution_limit_bytes(20000);
+    CssImageCombineTest::SetUp();
+  }
+};
+
+TEST_F(CssImageCombineResolutionLimitTest, NoSpriteImagePastResolutionLimit) {
+  constexpr char kBefore[] =
+      "<head><style>"
+      "#div1 { background-image:url('Cuppa.png');width:10px;height:10px}"
+      "#div2 { background-image:url('BikeCrashIcn.png');width:10px;height:10px}"
+      "</style></head>";
+  // The CSS parser normalizes quoting and whitespace on serialization, so
+  // pin the exact serialized form.
+  constexpr char kAfter[] =
+      "<head><style>"
+      "#div1{background-image:url(Cuppa.png);width:10px;height:10px}"
+      "#div2{background-image:url(BikeCrashIcn.png);width:10px;height:10px}"
+      "</style></head>";
+  ValidateExpected("sprite_resolution_limit", kBefore, kAfter);
+}
+
+// The canvas as a whole must stay within the same budget: every candidate
+// individually passes the per-image check, but the canvas is max(width) x
+// sum(heights), which multiplies past the limit as images accumulate. No
+// sprite is produced in that case.
+class CssImageCombineCanvasLimitTest : public CssImageCombineTest {
+ protected:
+  void SetUp() override {
+    // 50000 pixels at 4 bytes per pixel. Each of Cuppa.png (65x70, 4550
+    // pixels), BikeCrashIcn.png (100x100, 10000) and IronChef2.gif (192x256,
+    // 49152) is under the limit, but their canvas is 192 x 426 = 81792.
+    options()->set_image_resolution_limit_bytes(200000);
+    CssImageCombineTest::SetUp();
+  }
+};
+
+TEST_F(CssImageCombineCanvasLimitTest, NoSpriteWhenCanvasExceedsLimit) {
+  constexpr char kBefore[] =
+      "<head><style>"
+      "#div1 { background-image:url('Cuppa.png');width:10px;height:10px}"
+      "#div2 { background-image:url('BikeCrashIcn.png');width:10px;height:10px}"
+      "#div3 { background-image:url('IronChef2.gif');width:10px;height:10px}"
+      "</style></head>";
+  constexpr char kAfter[] =
+      "<head><style>"
+      "#div1{background-image:url(Cuppa.png);width:10px;height:10px}"
+      "#div2{background-image:url(BikeCrashIcn.png);width:10px;height:10px}"
+      "#div3{background-image:url(IronChef2.gif);width:10px;height:10px}"
+      "</style></head>";
+  ValidateExpected("sprite_canvas_limit", kBefore, kAfter);
+}
+
 TEST_F(CssImageCombineTest, NoCrashUnknownType) {
   // Make sure we don't crash trying to sprite an image with an unknown mimetype
   ResponseHeaders response_headers;

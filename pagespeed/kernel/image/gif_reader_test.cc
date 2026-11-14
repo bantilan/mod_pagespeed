@@ -32,6 +32,7 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/null_mutex.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
+#include "pagespeed/kernel/base/stdio_file_system.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/image/gif_square.h"
@@ -350,6 +351,41 @@ TEST_F(GifReaderTest, ExpandColormapOnZeroSizeCanvasAndCatchLibPngError) {
                                     PNG_TRANSFORM_EXPAND, true));
 }
 
+// The whole-image GIF reader allocates one row per logical-screen line
+// before it looks at any frame data, so a valid file whose screen declares
+// dimensions past the decode caps must be refused up front.
+TEST_F(GifReaderTest, OversizedScreenRejected) {
+  // Four colors: GifSquare derives the color resolution as log2(count)-1,
+  // and a two-entry map would make that zero, which giflib shifts while
+  // negative.
+  static const GifColorType color_map[] = {GifSquare::kGifWhite,
+                                           GifSquare::kGifBlack,
+                                           GifSquare::kGifRed,
+                                           GifSquare::kGifGreen};
+  const GoogleString filename = net_instaweb::StrCat(
+      net_instaweb::GTestTempDir(), "/oversized_screen.gif");
+  {
+    net_instaweb::StdioFileSystem file_system;
+    ASSERT_TRUE(file_system.RecursivelyMakeDir(net_instaweb::GTestTempDir(),
+                                               &message_handler_));
+    GifSquare gif(true /* manual_gcb */, &message_handler_);
+    ASSERT_TRUE(gif.Open(filename));
+    ASSERT_TRUE(gif.PrepareScreen(true, 65535, 10, color_map,
+                                  arraysize(color_map), 0,
+                                  GifSquare::kNoLoopCountSpecified));
+    ASSERT_TRUE(gif.PutImage(0, 0, 10, 10, color_map, arraysize(color_map), 0,
+                             -1 /* transparent_idx */, false /* interlace */,
+                             0 /* delay_cs */, 0 /* disposal */));
+    ASSERT_TRUE(gif.Close());
+  }
+  GoogleString in;
+  ASSERT_TRUE(ReadFile(filename, &in));
+  message_handler_.AddPatternToSkipPrinting("*too big*");
+  EXPECT_FALSE(gif_reader_->ReadPng(in, read_.png_ptr(), read_.info_ptr(),
+                                    PNG_TRANSFORM_EXPAND));
+  ASSERT_TRUE(read_.reset());
+}
+
 class GifScanlineReaderRawTest : public testing::Test {
  public:
   GifScanlineReaderRawTest()
@@ -535,6 +571,199 @@ TEST_F(GifScanlineReaderRawTest, FrameSmallerThanImage) {
   EXPECT_EQ(0, message_handler_.MessagesOfType(net_instaweb::kWarning));
   EXPECT_EQ(0, message_handler_.MessagesOfType(net_instaweb::kError));
   EXPECT_EQ(0, message_handler_.MessagesOfType(net_instaweb::kFatal));
+}
+
+// Helpers to build minimal GIF images byte by byte so truncated
+// extension blocks can be constructed precisely.
+
+// A 1x1 GIF89a header with no global color table.
+void AppendGifHeaderNoGct(GoogleString* out) {
+  const char header[] = {'G',  'I',  'F',  '8',  '9',  'a',  //
+                         0x01, 0x00,                   // width = 1
+                         0x01, 0x00,                   // height = 1
+                         0x00,                         // no global color table
+                         0x00,                         // background index
+                         0x00};                        // aspect ratio
+  out->append(header, sizeof(header));
+}
+
+// A 1x1 image descriptor at (0, 0) with no local color table,
+// followed by LZW data encoding a single pixel of value
+// 'pixel_value' (minimum code size 3 so values up to 7 encode).
+void AppendOnePixelImageDescriptor(GoogleString* out, int pixel_value) {
+  const char descriptor[] = {0x2C,        // image separator
+                             0x00, 0x00,  // left = 0
+                             0x00, 0x00,  // top = 0
+                             0x01, 0x00,  // width = 1
+                             0x01, 0x00,  // height = 1
+                             0x00};       // no local color table
+  out->append(descriptor, sizeof(descriptor));
+  // Minimum code size 3: clear = 8, EOI = 9, first code is 4 bits.
+  // Codes: clear(8), pixel_value, EOI(9), packed LSB first.
+  const int bits = 8 /* clear */ | (pixel_value << 4) | (9 << 8) /* EOI */;
+  const char lzw[] = {0x03,  // minimum code size
+                      0x02, static_cast<char>(bits & 0xff),
+                      static_cast<char>((bits >> 8) & 0xff),
+                      0x00  // block terminator
+  };
+  out->append(lzw, sizeof(lzw));
+}
+
+TEST_F(GifReaderTest, EmptyGraphicsControlExtensionBlock) {
+  // A graphics control extension whose single sub-block is empty
+  // (length zero) decodes to a null extension pointer; the reader
+  // must reject the image instead of dereferencing it.
+  GoogleString in;
+  AppendGifHeaderNoGct(&in);
+  const char empty_gce[] = {0x21, static_cast<char>(0xF9), 0x00};
+  in.append(empty_gce, sizeof(empty_gce));
+  in.push_back(0x3B);  // trailer
+
+  EXPECT_FALSE(gif_reader_->ReadPng(in, read_.png_ptr(), read_.info_ptr(),
+                                    PNG_TRANSFORM_IDENTITY));
+}
+
+TEST_F(GifReaderTest, OutOfRangePixelIndexDecodesToBlack) {
+  // A pixel index beyond the end of the color map must expand to
+  // deterministic black rather than to whatever happens to sit in the
+  // uninitialized tail of the palette buffer. The first, valid image
+  // primes the stack region the palette occupies with a distinctive
+  // fill so an uninitialized read is observable. The same PNG structs
+  // are reused for both images: resetting them would run a deep
+  // libpng call chain that wipes the primed stack region.
+  GoogleString priming, victim;
+
+  // Priming image: a 256-entry global color map entirely filled with
+  // 0xA5, pixel index 0.
+  const char priming_header[] = {'G',  'I',  'F',  '8', '9', 'a', 0x01, 0x00,
+                                 0x01, 0x00, static_cast<char>(0x87), 0x00, 0x00};
+  priming.append(priming_header, sizeof(priming_header));
+  priming.append(256 * 3, static_cast<char>(0xA5));
+  AppendOnePixelImageDescriptor(&priming, 0);
+  priming.push_back(0x3B);
+  ASSERT_TRUE(gif_reader_->ReadPng(priming, read_.png_ptr(), read_.info_ptr(),
+                                   PNG_TRANSFORM_EXPAND));
+  png_bytep priming_row = png_get_rows(read_.png_ptr(), read_.info_ptr())[0];
+  const png_byte kPrimed[3] = {0xA5, 0xA5, 0xA5};
+  ASSERT_EQ(0, memcmp(priming_row, kPrimed, 3));
+
+  // Victim image: a two-entry global color map and four pixels whose
+  // indices (5, 60, 130, 250) are all out of range for the map.
+  const char victim_header[] = {'G',  'I',  'F',  '8', '9', 'a', 0x04, 0x00,
+                                0x01, 0x00, static_cast<char>(0x80), 0x00, 0x00};
+  victim.append(victim_header, sizeof(victim_header));
+  const char color_map[] = {static_cast<char>(0xFF), 0x00, 0x00,  // red
+                            0x00, static_cast<char>(0xFF), 0x00};  // green
+  victim.append(color_map, sizeof(color_map));
+  const char descriptor[] = {0x2C,        // image separator
+                             0x00, 0x00,  // left = 0
+                             0x00, 0x00,  // top = 0
+                             0x04, 0x00,  // width = 4
+                             0x01, 0x00,  // height = 1
+                             0x00};       // no local color table
+  victim.append(descriptor, sizeof(descriptor));
+  // Minimum code size 8 (clear = 256, EOI = 257, 9-bit codes): clear,
+  // 5, 60, 130, 250, EOI, packed LSB first.
+  const int codes[] = {256, 5, 60, 130, 250, 257};
+  int bit_pos = 0;
+  unsigned char lzw[16] = {0};
+  for (int code : codes) {
+    for (int b = 0; b < 9; ++b) {
+      if ((code >> b) & 1) {
+        lzw[bit_pos / 8] |= 1 << (bit_pos % 8);
+      }
+      ++bit_pos;
+    }
+  }
+  const int lzw_size = (bit_pos + 7) / 8;
+  victim.push_back(0x08);  // minimum code size
+  victim.push_back(static_cast<char>(lzw_size));
+  victim.append(reinterpret_cast<const char*>(lzw), lzw_size);
+  victim.push_back(0x00);  // block terminator
+  victim.push_back(0x3B);  // trailer
+
+  ASSERT_TRUE(gif_reader_->ReadPng(victim, read_.png_ptr(), read_.info_ptr(),
+                                   PNG_TRANSFORM_EXPAND));
+  png_bytep victim_row = png_get_rows(read_.png_ptr(), read_.info_ptr())[0];
+  const png_byte kBlack[3] = {0x00, 0x00, 0x00};
+  for (int pixel = 0; pixel < 4; ++pixel) {
+    EXPECT_EQ(0, memcmp(victim_row + 3 * pixel, kBlack, 3)) << "pixel " << pixel;
+  }
+}
+
+TEST(GifFrameReaderInvalidInput, EmptyGraphicsControlExtensionBlock) {
+  // Same empty graphics control extension block, on the frame reader
+  // path: Initialize() scans past it, and PrepareNextFrame() must
+  // reject it instead of dereferencing a null extension.
+  GoogleString in;
+  AppendGifHeaderNoGct(&in);
+  const char empty_gce[] = {0x21, static_cast<char>(0xF9), 0x00};
+  in.append(empty_gce, sizeof(empty_gce));
+  AppendOnePixelImageDescriptor(&in, 0);
+  in.push_back(0x3B);
+
+  MockMessageHandler message_handler(new NullMutex);
+  net_instaweb::scoped_ptr<MultipleFrameReader> reader(
+      new TestGifFrameReader(&message_handler));
+  ASSERT_TRUE(reader->Initialize(in.data(), in.length()).Success());
+  ScanlineStatus status;
+  EXPECT_FALSE(reader->PrepareNextFrame(&status));
+}
+
+TEST(GifFrameReaderInvalidInput, EmptyLoopCountSubblock) {
+  // A NETSCAPE2.0 application extension whose loop-count sub-block
+  // is empty (length zero) decodes to a null extension pointer; the
+  // frame reader must reject the image during Initialize() instead of
+  // dereferencing it.
+  GoogleString in;
+  AppendGifHeaderNoGct(&in);
+  const char empty_loop_count[] = {0x21, static_cast<char>(0xFF), 0x0B, 'N', 'E', 'T', 'S', 'C',
+                                   'A',  'P',  'E',  '2', '.', '0', 0x00};
+  in.append(empty_loop_count, sizeof(empty_loop_count));
+  in.push_back(0x3B);
+
+  MockMessageHandler message_handler(new NullMutex);
+  net_instaweb::scoped_ptr<MultipleFrameReader> reader(
+      new TestGifFrameReader(&message_handler));
+  EXPECT_FALSE(reader->Initialize(in.data(), in.length()).Success());
+}
+
+// Builds a one-frame image whose NETSCAPE2.0 loop-count sub-block is
+// `subblock` (length byte first).
+GoogleString GifWithLoopCountSubblock(const GoogleString& subblock) {
+  GoogleString in;
+  AppendGifHeaderNoGct(&in);
+  const char app_ext[] = {0x21, '\xFF', 0x0B, 'N', 'E', 'T', 'S',
+                          'C',  'A',    'P',  'E', '2', '.', '0'};
+  in.append(app_ext, sizeof(app_ext));
+  in.append(subblock);
+  in.push_back(0x00);  // sub-block terminator
+  AppendOnePixelImageDescriptor(&in, 0);
+  in.push_back(0x3B);
+  return in;
+}
+
+TEST(GifFrameReaderInvalidInput, ShortLoopCountSubblock) {
+  // A loop-count sub-block too short to hold a loop count must be rejected
+  // even when its first data byte holds the expected marker; so must one
+  // with the wrong marker.
+  MockMessageHandler message_handler(new NullMutex);
+  net_instaweb::scoped_ptr<MultipleFrameReader> reader(
+      new TestGifFrameReader(&message_handler));
+  const char valid_block[] = {0x03, 0x01, 0x05, 0x00};
+  GoogleString valid =
+      GifWithLoopCountSubblock(GoogleString(valid_block, sizeof(valid_block)));
+  EXPECT_TRUE(reader->Initialize(valid.data(), valid.length()).Success());
+
+  const char short_block[] = {0x02, 0x01, 0x05};
+  GoogleString in =
+      GifWithLoopCountSubblock(GoogleString(short_block, sizeof(short_block)));
+  EXPECT_FALSE(reader->Initialize(in.data(), in.length()).Success());
+
+  const char wrong_marker[] = {0x03, 0x02, 0x05, 0x00};
+  GoogleString marker = GifWithLoopCountSubblock(
+      GoogleString(wrong_marker, sizeof(wrong_marker)));
+  EXPECT_FALSE(reader->Initialize(marker.data(), marker.length()).Success());
 }
 
 TEST(GifReaderUtil, DisposalMethod) {
@@ -1071,6 +1300,11 @@ class GifAnimationTest : public testing::Test {
     // Note that these images are synthesized with QUIRKS_NONE.
     filename_ = net_instaweb::StrCat(net_instaweb::GTestTempDir(),
                                      "/", filename, ".gif");
+    // GTestTempDir() names a per-process directory but does not create it,
+    // and GifSquare cannot open files under a missing directory.
+    net_instaweb::StdioFileSystem file_system;
+    EXPECT_TRUE(file_system.RecursivelyMakeDir(net_instaweb::GTestTempDir(),
+                                               &message_handler_));
     EXPECT_TRUE(gif_.Open(filename_));
     PS_LOG_INFO((&message_handler_), "Generating image: %s", filename_.c_str());
     gif_.PrepareScreen(true, image.width, image.height, kColorMap, kNumColors,
@@ -1257,6 +1491,71 @@ TEST_F(GifAnimationTest, ReadSingleFrameOpaque) {
   synth_frames_.push_back(frame);
 
   SynthesizeAndRead("single_frame_opaque", DefineImage());
+}
+
+// A screen that declares a side past the decode cap drives buffers
+// proportional to the screen area, whatever the size of the frames, so
+// initialization must refuse it before any frame is prepared.
+TEST_F(GifAnimationTest, OversizedScreenRejectedByInitialize) {
+  const Frame frame = {10, 10, false, 0, 0, NULL, 0, -1, 2, 0, 0};
+  synth_frames_.push_back(frame);
+
+  Image image = DefineImage();
+  image.width = 65535;
+  image.height = 10;
+  SynthesizeImage("oversized_screen", image);
+  ASSERT_TRUE(ReadFile(filename_, &input_image_));
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  EXPECT_FALSE(reader_->Initialize(input_image_.c_str(), input_image_.length())
+                   .Success());
+}
+
+// Sides within the cap can still combine past the pixel budget.
+TEST_F(GifAnimationTest, OversizedScreenPixelBudgetRejectedByInitialize) {
+  const Frame frame = {10, 10, false, 0, 0, NULL, 0, -1, 2, 0, 0};
+  synth_frames_.push_back(frame);
+
+  Image image = DefineImage();
+  image.width = 16384;
+  image.height = 8192;  // 128 Mi pixels, over the 100 Mi pixel budget.
+  SynthesizeImage("oversized_screen_budget", image);
+  ASSERT_TRUE(ReadFile(filename_, &input_image_));
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  EXPECT_FALSE(reader_->Initialize(input_image_.c_str(), input_image_.length())
+                   .Success());
+}
+
+// A frame may declare dimensions beyond the logical screen, and the eager
+// frame buffer is proportional to width * height, so the same caps are
+// applied when the frame is prepared.
+TEST_F(GifAnimationTest, OversizedFrameRejectedByPrepareNextFrame) {
+  const Frame frame = {16385, 1, false, 0, 0, NULL, 0, -1, 2, 0, 0};
+  synth_frames_.push_back(frame);
+
+  SynthesizeImage("oversized_frame", DefineImage());
+  ASSERT_TRUE(ReadFile(filename_, &input_image_));
+  EXPECT_TRUE(reader_->Initialize(input_image_.c_str(), input_image_.length())
+                  .Success());
+  ScanlineStatus status;
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  EXPECT_FALSE(reader_->PrepareNextFrame(&status));
+}
+
+// In Chrome quirks mode the logical screen is resized to the first frame
+// after the screen caps were checked, so a first frame past the cap would
+// be published through GetImageSpec() uncapped. Initialization must refuse
+// the enlarged dimensions.
+TEST_F(GifAnimationTest, OversizedFirstFrameInChromeQuirksRejectedByInitialize) {
+  const Frame frame = {16385, 1, false, 0, 0, NULL, 0, -1, 2, 0, 0};
+  synth_frames_.push_back(frame);
+
+  SynthesizeImage("oversized_first_frame_quirks", DefineImage());
+  ASSERT_TRUE(ReadFile(filename_, &input_image_));
+  ScanlineStatus status;
+  ASSERT_TRUE(reader_->set_quirks_mode(QUIRKS_CHROME, &status));
+  message_handler_.AddPatternToSkipPrinting("*dimensions*");
+  EXPECT_FALSE(reader_->Initialize(input_image_.c_str(), input_image_.length())
+                   .Success());
 }
 
 TEST_F(GifAnimationTest, ReadSingleFrameTransparency) {

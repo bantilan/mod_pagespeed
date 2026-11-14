@@ -1,0 +1,1 @@
+- **Whole-image GIF, JPEG and PNG decode paths enforce the same dimension caps.** GIF screens/frames, JPEG lossless coefficient reads and `png_read_png` buffered whole images from header dimensions; oversized inputs are now refused before those allocations.

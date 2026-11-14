@@ -45,8 +45,10 @@ using pagespeed::image_compression::kPngTestDir;
 using pagespeed::image_compression::GifReader;
 using pagespeed::image_compression::ImageConverter;
 using pagespeed::image_compression::IMAGE_GIF;
+using pagespeed::image_compression::IMAGE_JPEG;
 using pagespeed::image_compression::IMAGE_PNG;
 using pagespeed::image_compression::IMAGE_WEBP;
+using pagespeed::image_compression::RGB_888;
 using pagespeed::image_compression::JpegLossyOptions;
 using pagespeed::image_compression::PngOptimizer;
 using pagespeed::image_compression::PngReader;
@@ -468,6 +470,42 @@ TEST_F(ImageConverterTest, ConvertPaddedGifToWebp) {
   EXPECT_TRUE(status.Success()) << status.ToString();
   status = ImageConverter::ConvertImageWithStatus(reader.get(), writer.get());
   EXPECT_TRUE(status.Success()) << status.ToString();
+}
+
+TEST_F(ImageConverterTest, GetSmallestOfPngJpegWebpInvalidPngWithWebpConfig) {
+  png_struct_reader_.reset(new PngReader(&message_handler_));
+  pagespeed::image_compression::JpegCompressionOptions jpeg_options;
+  WebpConfiguration webp_config;
+  GoogleString in, out;
+  ReadTestFile(kPngSuiteTestDir, "xcrn0g04", "png", &in);
+  ASSERT_NE(static_cast<size_t>(0), in.size()) << "input file missing";
+
+  // The corrupted PNG fails the lossless WebP conversion before a
+  // writer is allocated; the custom-quality WebP attempt must be
+  // skipped rather than dereferenced, and the original bytes returned.
+  ImageConverter::ImageType type = ImageConverter::GetSmallestOfPngJpegWebp(
+      *png_struct_reader_, in, &jpeg_options, &webp_config, &out,
+      &message_handler_);
+  EXPECT_EQ(ImageConverter::IMAGE_NONE, type);
+  EXPECT_EQ(in, out);
+}
+
+TEST_F(ImageConverterTest, CreateJpegWriterForOversizedImage) {
+  ScanlineStatus status;
+  GoogleString out;
+  pagespeed::image_compression::JpegCompressionOptions options;
+  options.lossy = true;
+  options.lossy_options.quality = 85;
+
+  // libjpeg rejects dimensions above 65500 pixels when compression
+  // starts. That error must surface as a failed status rather than a
+  // jump into a buffer owned by a returned-from stack frame.
+  net_instaweb::scoped_ptr<ScanlineWriterInterface> writer(
+      CreateScanlineWriter(IMAGE_JPEG, RGB_888,
+                           70000,  // width, beyond libjpeg's 65500 limit
+                           1, &options, &out, &message_handler_, &status));
+  EXPECT_EQ(NULL, writer.get());
+  EXPECT_FALSE(status.Success());
 }
 
 // To manually inspect all gif conversions tested, uncomment the lines
