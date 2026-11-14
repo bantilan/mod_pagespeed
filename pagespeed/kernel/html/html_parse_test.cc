@@ -584,6 +584,19 @@ TEST_F(HtmlParseTestNoBodyNoHtml, TokenSizeLimitNotTriggeredUnderLimit) {
   EXPECT_NE(GoogleString::npos, output_buffer_.find("marker"));
 }
 
+TEST_F(HtmlParseTestNoBodyNoHtml, TokenSizeLimitAbortsOnHugeTextarea) {
+  // Element text (a multi-MB <textarea>) accumulates in a different buffer
+  // than tokens; it is held to the same unconditional ceiling.
+  const size_t kMaxTokenSize = 10UL * 1024 * 1024;
+  GoogleString huge_textarea = "<textarea>";
+  huge_textarea.append(kMaxTokenSize + 2, 'B');
+  // Do not close the textarea -- this forces literal_ to grow unboundedly.
+
+  Parse("huge_textarea", huge_textarea);
+
+  EXPECT_TRUE(html_parse_.size_limit_exceeded());
+}
+
 TEST_F(HtmlParseTest, StrayBriefCloseAtTopLevel) {
   // "/>" outside any tag is plain character data; it must never reach the
   // brief-close path, let alone crash on an empty element stack.

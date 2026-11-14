@@ -35,8 +35,12 @@ class CacheMethodsNginxTest(base.HtmlCacheNginxTest):
 
     def test_post_to_resource_is_not_proxied(self):
         # Falls through to nginx, which allows only GET/HEAD on static
-        # content; pagespeed must not proxy or record it.
-        status, headers, _ = self.request('POST', '/style.css')
+        # content; pagespeed must not proxy or record it. A unique query
+        # keeps this independent of any in-place entry recorded for the
+        # bare URL by earlier tests (IPRO keys ignore the method).
+        import random
+        status, headers, _ = self.request(
+            'POST', f'/style.css?nocache={random.randint(1, 1000000)}')
         self.assertEqual(405, status)
         self.assertNotIn('X-PageSpeed', headers)
 

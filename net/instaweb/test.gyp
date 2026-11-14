@@ -78,6 +78,10 @@
         '<(DEPTH)/pagespeed/automatic/proxy_fetch_test.cc',
         '<(DEPTH)/pagespeed/automatic/proxy_interface_test.cc',
         '<(DEPTH)/pagespeed/automatic/proxy_interface_test_base.cc',
+        '<(DEPTH)/pagespeed/nginx/ngx_fetch_body_test.cc',
+        '<(DEPTH)/pagespeed/nginx/ngx_gzip_rollback_test.cc',
+        '<(DEPTH)/pagespeed/nginx/ngx_inplace_url_agreement_test.cc',
+        '<(DEPTH)/pagespeed/nginx/ngx_request_body_test.cc',
         # TODO(jefftk): get this test to build.
         # '<(DEPTH)/pagespeed/automatic/rewriter_speed_test.cc',
         'config/measurement_proxy_rewrite_options_manager_test.cc',

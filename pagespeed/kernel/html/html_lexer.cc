@@ -1018,8 +1018,6 @@ void HtmlLexer::Parse(const char* text, int size) {
   if (size_limit_ > 0 && num_bytes_parsed_ > size_limit_) {
     size_limit_exceeded_ = true;
   }
-  // TODO(nikhilmadan): Protect against an unbounded sequence of bytes within an
-  // element, probably by just aborting the parse completely.
 
   for (int i = 0; i < size; ++i) {
     if (skip_parsing_) {

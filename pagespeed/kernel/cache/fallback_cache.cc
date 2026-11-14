@@ -138,10 +138,14 @@ void FallbackCache::Put(const GoogleString& key, const SharedString& value) {
       StoreSizeForRouting(key, value.size(), account_for_key_size_);
 
   if (store_size > threshold_bytes_) {
+    // Write the actual value to large_object_cache_ first, then the
+    // forwarding marker to small_object_cache_. This ordering ensures
+    // that if the large cache write fails silently, readers won't find
+    // a forwarding marker pointing to non-existent data.
+    large_object_cache_->Put(key, value);
     SharedString forwarding_value;
     forwarding_value.Assign(&kInLargeObjectCache, 1);
     small_object_cache_->Put(key, forwarding_value);
-    large_object_cache_->Put(key, value);
   } else {
     SharedString wrapped_value(value);
     wrapped_value.Append(&kInSmallObjectCache, 1);

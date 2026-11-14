@@ -288,4 +288,42 @@ TEST_F(FallbackCacheTest, StoreSizeDoesNotWrapPast2GB) {
   EXPECT_GT(store_size, kTestValueSizeThreshold);
 }
 
+// A cache backend that records the order of the Puts it receives.
+class OrderRecordingCache : public CacheInterface {
+ public:
+  OrderRecordingCache(StringVector* log, const GoogleString& tag)
+      : log_(log), tag_(tag) {}
+  void Get(const GoogleString& key, Callback* callback) override {
+    ValidateAndReportResult(key, kNotFound, callback);
+  }
+  void Put(const GoogleString& key, const SharedString& value) override {
+    log_->push_back(tag_);
+  }
+  void Delete(const GoogleString& key) override {}
+  GoogleString Name() const override { return "order_recording"; }
+  bool IsBlocking() const override { return true; }
+  bool IsHealthy() const override { return true; }
+  void ShutDown() override {}
+
+ private:
+  StringVector* log_;
+  GoogleString tag_;
+};
+
+TEST_F(FallbackCacheTest, LargeValueWrittenBeforeForwardingMarker) {
+  // The value must reach the large-object cache BEFORE the forwarding marker
+  // reaches the small one, so a crash between the two writes cannot leave a
+  // marker pointing at non-existent data.
+  StringVector put_order;
+  OrderRecordingCache small(&put_order, "small");
+  OrderRecordingCache large(&put_order, "large");
+  FallbackCache fallback(&small, &large, kTestValueSizeThreshold, &handler_);
+  const GoogleString big(kHugeWriteSize, 'b');
+  fallback.Put("bigkey", SharedString(big));
+
+  ASSERT_EQ(2U, put_order.size());
+  EXPECT_EQ("large", put_order[0]);
+  EXPECT_EQ("small", put_order[1]);
+}
+
 }  // namespace net_instaweb
