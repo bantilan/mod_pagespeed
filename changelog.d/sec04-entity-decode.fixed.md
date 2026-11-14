@@ -1,0 +1,1 @@
+- **Numeric character references above the Unicode maximum no longer wrap.** Values past U+10FFFF are clamped instead of wrapping mod 2^32 into a different character.

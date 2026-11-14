@@ -1,0 +1,1 @@
+- **XHTML scripts whose minified form contains `]]>` are kept as written.** Neither the CDATA-wrapped nor the bare form can emit the sequence into XHTML character data.

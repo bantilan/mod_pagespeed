@@ -31,6 +31,7 @@
 #include "net/instaweb/rewriter/public/test_rewrite_driver_factory.h"
 #include "net/instaweb/util/public/mock_property_page.h"
 #include "net/instaweb/util/public/property_cache.h"
+#include "pagespeed/kernel/base/escaping.h"
 #include "pagespeed/kernel/base/gtest.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
@@ -139,9 +140,12 @@ class CriticalCssBeaconFilterTestBase : public RewriteTestBase {
         server_context()->static_asset_manager()->GetAsset(
             StaticAssetEnum::CRITICAL_CSS_BEACON_JS, options()),
         "pagespeed.selectors=[", selectors, "];");
+    GoogleString escaped_beacon_url;
+    EscapeToJsStringLiteral(options()->beacon_url().http, false,
+                            &escaped_beacon_url);
     StrAppend(&html,
               "pagespeed.criticalCssBeaconInit('",
-              options()->beacon_url().http, "','", kTestDomain,
+              escaped_beacon_url, "','", kTestDomain,
               "','0','", ExpectedNonce(), "',pagespeed.selectors);"
               "</script></body>");
     return html;
@@ -182,6 +186,18 @@ TEST_F(CriticalCssBeaconFilterTest, ExtractFromInlineStyle) {
       kTestDomain,
       InputHtml(kInlineStyle),
       BeaconHtml(kInlineStyle, kSelectorsInline));
+}
+
+// The configured beacon URL is spliced into a single-quoted JS literal, so
+// it must be JS-escaped: the raw splice would terminate the literal.
+TEST_F(CriticalCssBeaconFilterTest, BeaconUrlIsJsEscaped) {
+  options()->set_beacon_url("http://example.com/beacon?x=');alert(1);//");
+  ValidateExpectedUrl(
+      kTestDomain,
+      InputHtml(kInlineStyle),
+      BeaconHtml(kInlineStyle, kSelectorsInline));
+  EXPECT_EQ(GoogleString::npos, output_buffer_.find("x=');alert(1);//"))
+      << output_buffer_;
 }
 
 TEST_F(CriticalCssBeaconFilterTest, DisabledForIE) {

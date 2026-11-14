@@ -846,6 +846,28 @@ TEST_P(JavascriptFilterTest, XHtmlInlineJavascript) {
                    StringPrintf(xhtml_script_format.c_str(), kJsMinData));
 }
 
+// Minification can join adjacent closing brackets and a comparison into a
+// "]]>" sequence, which must never appear in XHTML character data.  The
+// script is left as it was.
+TEST_P(JavascriptFilterTest, XhtmlInlineJavascriptNeverEmitsCdataEnd) {
+  InitFiltersAndTest(100);
+  static const char kBracketJs[] = "x[y[0] ] > 1;";
+  const GoogleString xhtml_script_format =
+      StrCat(kXhtmlDtd, StringPrintf(kInlineJs, kCdataWrapper));
+  const GoogleString original =
+      StringPrintf(xhtml_script_format.c_str(), kBracketJs);
+  ValidateExpected("xhtml cdata end", original, original);
+}
+
+// Same as above for an XHTML script without a CDATA wrapper, where the
+// minified code would otherwise be emitted as bare character data.
+TEST_P(JavascriptFilterTest, XhtmlInlineJavascriptWithoutCdataNeverEmitsCdataEnd) {
+  InitFiltersAndTest(100);
+  const GoogleString original =
+      StrCat(kXhtmlDtd, StringPrintf(kInlineJs, "x[y[0] ] > 1;"));
+  ValidateExpected("xhtml no cdata", original, original);
+}
+
 // http://github.com/apache/incubator-pagespeed-mod/issues/324
 TEST_P(JavascriptFilterTest, RetainExtraHeaders) {
   InitFilters();

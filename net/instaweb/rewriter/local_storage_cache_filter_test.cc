@@ -287,6 +287,54 @@ TEST_F(LocalStorageCacheTest, ImgLocalStorageDisabled) {
                    StrCat("<img src='", kPuzzleJpgFilename, "'>"));
 }
 
+// The local-storage snippet splices the element's URL and its other
+// attributes into double-quoted JS strings. Both come from page markup (our
+// lexer accepts almost any byte in an attribute name), so both must be
+// JS-escaped or a quote breaks out of the string.
+TEST_F(LocalStorageCacheTest, SnippetEscapesUrlAndAttributeNames) {
+  UseMd5Hasher();
+  AddFileToMockFetcher(StrCat(kTestDomain, "Cuppa.png?x=%22"),
+                       "Cuppa.png", kContentTypePng, 100);
+  const GoogleString input =
+      "<head></head><body>"
+      "<img src='Cuppa.png?x=\"' foo\"bar='v'>"
+      "</body>";
+
+  // Phase 1: no cookie, so the filter annotates the element with its
+  // local-storage attributes (including the hash) instead of a snippet.
+  ClearRewriteDriver();
+  rewrite_driver()->SetRequestHeaders(request_headers_);
+  Parse("lsc_escape_probe", input);
+  const char kHashAttr[] = "data-pagespeed-lsc-hash=\"";
+  size_t hash_at = output_buffer_.find(kHashAttr);
+  ASSERT_NE(GoogleString::npos, hash_at) << output_buffer_;
+  hash_at += STATIC_STRLEN(kHashAttr);
+  size_t hash_end = output_buffer_.find("\"", hash_at);
+  ASSERT_NE(GoogleString::npos, hash_end);
+  GoogleString hash = output_buffer_.substr(hash_at, hash_end - hash_at);
+  ASSERT_FALSE(hash.empty());
+
+  // Phase 2: with the hash in the cookie, the element is replaced by the
+  // snippet, whose strings must be escaped.
+  request_headers_.Add(HttpAttributes::kCookie,
+                       StrCat(LocalStorageCacheFilter::kLscCookieName,
+                              "=", hash));
+  output_buffer_.clear();
+  ClearRewriteDriver();
+  rewrite_driver()->SetRequestHeaders(request_headers_);
+  Parse("lsc_escape", input);
+  EXPECT_NE(GoogleString::npos,
+            output_buffer_.find("pagespeed.localStorageCache.inlineImg("))
+      << output_buffer_;
+  // The raw quote sequences must not appear: they would terminate the JS
+  // strings they sit in.
+  EXPECT_EQ(GoogleString::npos, output_buffer_.find("foo\"bar="))
+      << output_buffer_;
+  // ... but their escaped forms must.
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("foo\\\"bar="))
+      << output_buffer_;
+}
+
 TEST_F(LocalStorageCacheTest, CookieSet) {
   // The 2 hash values are Fe1SLPZ14c and du_OhARrJl. Only suppress the first.
   UseMd5Hasher();

@@ -27,6 +27,7 @@
 #include "pagespeed/kernel/base/gtest.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
+#include "pagespeed/kernel/cache/lru_cache.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/html/html_parse_test_base.h"
 #include "pagespeed/kernel/http/content_type.h"
@@ -188,6 +189,70 @@ TEST_F(JsInlineFilterTest, DoInlineJavascriptSimpleHtml) {
                        "",
                        "function id(x) { return x; }\n",
                        true);
+}
+
+// A script whose charset differs from the page's is copied verbatim into the
+// page, so it can only be inlined when its bytes are charset-neutral.
+TEST_F(JsInlineFilterTest, CharsetMismatchNotInlined) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+
+  ResponseHeaders latin1_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeJavascript, &latin1_headers);
+  latin1_headers.MergeContentType("text/javascript; charset=iso-8859-1");
+  const GoogleString non_ascii = "var s = 'caf\xE9';\n";
+  const GoogleString ascii_only = "var s = 'cafe';\n";
+  SetFetchResponse(StrCat(kTestDomain, "latin1.js"), latin1_headers,
+                   non_ascii);
+  SetFetchResponse(StrCat(kTestDomain, "ascii.js"), latin1_headers,
+                   ascii_only);
+
+  const char kUtf8Page[] = "<meta charset=\"utf-8\">";
+  ValidateNoChanges(
+      "mismatch", StrCat(kUtf8Page, "<script src=latin1.js></script>"));
+  // Pure ASCII is the same in both charsets, so it is still inlined.
+  ValidateExpected("ascii", StrCat(kUtf8Page, "<script src=ascii.js></script>"),
+                   StrCat(kUtf8Page, "<script>", ascii_only, "</script>"));
+}
+
+TEST_F(JsInlineFilterTest, CharsetMatchInlined) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+
+  ResponseHeaders utf8_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeJavascript, &utf8_headers);
+  utf8_headers.MergeContentType("text/javascript; charset=UTF-8");
+  const GoogleString body = "var s = 'caf\xC3\xA9';\n";
+  SetFetchResponse(StrCat(kTestDomain, "utf8.js"), utf8_headers, body);
+
+  const char kUtf8Page[] = "<meta charset=\"utf-8\">";
+  ValidateExpected("match", StrCat(kUtf8Page, "<script src=utf8.js></script>"),
+                   StrCat(kUtf8Page, "<script>", body, "</script>"));
+}
+
+TEST_F(JsInlineFilterTest, InlineDecisionIsScopedToPageCharset) {
+  SetHtmlMimetype();
+  AddFilter(RewriteOptions::kInlineJavascript);
+
+  ResponseHeaders headers;
+  SetDefaultLongCacheHeaders(&kContentTypeJavascript, &headers);
+  headers.MergeContentType("text/javascript; charset=UTF-8");
+  const GoogleString script = "var s = '\xE4\xB8\xAD';\n";
+  SetFetchResponse(StrCat(kTestDomain, "shared.js"), headers, script);
+  const GoogleString utf8 =
+      "<meta charset=\"utf-8\"><script src=shared.js></script>";
+  const GoogleString gbk =
+      "<meta charset=\"gbk\"><script src=shared.js></script>";
+
+  ValidateExpected("charset_utf8_first", utf8,
+                   StrCat("<meta charset=\"utf-8\"><script>", script,
+                          "</script>"));
+  ValidateNoChanges("charset_gbk_second", gbk);
+  lru_cache()->Clear();
+  ValidateNoChanges("charset_gbk_first", gbk);
+  ValidateExpected("charset_utf8_second", utf8,
+                   StrCat("<meta charset=\"utf-8\"><script>", script,
+                          "</script>"));
 }
 
 class JsInlineFilterTestCustomOptions : public JsInlineFilterTest {

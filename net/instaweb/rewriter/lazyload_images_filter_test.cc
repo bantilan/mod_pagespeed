@@ -537,4 +537,14 @@ TEST_F(LazyloadImagesFilterTest, LazyloadDisabledForXHR) {
   FAIL();
 }
 
+// The injected handler must no-op when the support script never loads, and
+// the literal must stay free of quote and & characters so it serializes
+// into the attribute byte-identically.
+TEST_F(LazyloadImagesFilterTest, ImageOnloadCodeIsGuarded) {
+  EXPECT_STREQ(
+      "if(window.pagespeed){if(pagespeed.lazyLoadImages){"
+      "pagespeed.lazyLoadImages.loadIfVisibleAndMaybeBeacon(this);}}",
+      LazyloadImagesFilter::kImageOnloadCode);
+}
+
 }  // namespace net_instaweb

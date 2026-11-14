@@ -127,14 +127,18 @@ void LocalStorageCacheFilter::EndElementImpl(HtmlElement* element) {
         StringPiece given_url(url);
         GoogleUrl abs_url(base_url(), given_url);
         StringPiece lsc_url(abs_url.IsWebValid() ? abs_url.Spec() : given_url);
+        // The URL comes from a page-authored attribute and is spliced into
+        // a double-quoted JS string, so escape it first.
+        GoogleString escaped_lsc_url;
+        EscapeToJsStringLiteral(lsc_url, false, &escaped_lsc_url);
         GoogleString snippet("pagespeed.localStorageCache.");
         if (is_img) {
           num_local_storage_cache_stored_images_->Add(1);
-          StrAppend(&snippet, "inlineImg(\"", lsc_url, "\", \"", hash, "\"",
-                    ExtractOtherImgAttributes(element), ");");
+          StrAppend(&snippet, "inlineImg(\"", escaped_lsc_url, "\", \"", hash,
+                    "\"", ExtractOtherImgAttributes(element), ");");
         } else /* is_link */ {
           num_local_storage_cache_stored_css_->Add(1);
-          StrAppend(&snippet, "inlineCss(\"", lsc_url, "\");");
+          StrAppend(&snippet, "inlineCss(\"", escaped_lsc_url, "\");");
         }
         HtmlElement* script_element =
             driver()->NewElement(element->parent(), HtmlName::kScript);
@@ -336,7 +340,11 @@ GoogleString LocalStorageCacheFilter::ExtractOtherImgAttributes(
       if (attr.DecodedValueOrNull() != nullptr) {
         EscapeToJsStringLiteral(attr.DecodedValueOrNull(), false, &escaped_js);
       }
-      StrAppend(&result, ", \"", attr.name_str(), "=", escaped_js, "\"");
+      // Attribute names come from page markup and our lexer accepts almost
+      // any byte in them, so the name is escaped like the value.
+      GoogleString escaped_name;
+      EscapeToJsStringLiteral(attr.name_str(), false, &escaped_name);
+      StrAppend(&result, ", \"", escaped_name, "=", escaped_js, "\"");
     }
   }
   return result;

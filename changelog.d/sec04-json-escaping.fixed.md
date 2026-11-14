@@ -1,0 +1,1 @@
+- **JSON string escaping preserves well-formed UTF-8 and escapes malformed bytes.** Valid multi-byte text stays verbatim instead of mojibake, while lone/truncated/overlong/surrogate bytes are escaped so output stays valid JSON.

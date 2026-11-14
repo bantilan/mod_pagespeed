@@ -1,0 +1,1 @@
+- **Injected image onload handlers no-op when the support script never loads.** The critical-images, delay-images and lazyload handlers check for their namespace first.

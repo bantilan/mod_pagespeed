@@ -937,4 +937,14 @@ TEST_F(DelayImagesFilterTest, DelayImageSizePercentageLimitTest) {
   MatchOutputAndCountBytes(input_html, output_html);
 }
 
+// The injected handler must no-op when the support script never loads, and
+// the literal must stay free of quote and & characters so it serializes
+// into the attribute byte-identically.
+TEST_F(DelayImagesFilterTest, ImageOnloadCodeIsGuarded) {
+  EXPECT_STREQ(
+      "if(window.pagespeed){if(pagespeed.switchToHighResAndMaybeBeacon){"
+      "pagespeed.switchToHighResAndMaybeBeacon(this);}}",
+      DelayImagesFilter::kImageOnloadCode);
+}
+
 }  // namespace net_instaweb

@@ -1,0 +1,1 @@
+- **Failed domain mappings leave nothing behind.** A rejected mapping neither sticks its host header to the target nor authorizes its domains, and wildcard rejections no longer trip authorize-all-domains.

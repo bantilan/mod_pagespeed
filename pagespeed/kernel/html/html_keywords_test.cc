@@ -103,6 +103,26 @@ TEST_F(HtmlKeywordsTest, Hex) {
   EXPECT_EQ(")", Unescape("&#x29;", &buf));
 }
 
+TEST_F(HtmlKeywordsTest, NumericEntityAboveUnicodeMaxDoesNotWrap) {
+  // 4294967330 == 2^32 + 34: without clamping, the uint32 accumulator wraps
+  // to 34 ('"'), so our decode disagrees with browsers about where the value
+  // ends. The clamped value is above U+00FF and unescapes to nothing.
+  GoogleString buf;
+  bool decoding_error = false;
+  StringPiece out = HtmlKeywords::Unescape("&#4294967330;", &buf,
+                                           &decoding_error);
+  EXPECT_EQ(0, out.size());
+
+  // Same through the hex accumulator: 0x100000022 wraps to 0x22 without it.
+  buf.clear();
+  decoding_error = false;
+  out = HtmlKeywords::Unescape("&#x100000022;", &buf, &decoding_error);
+  EXPECT_EQ(0, out.size());
+
+  // Ordinary values are unaffected.
+  EXPECT_EQ("\"", Unescape("&#34;", &buf));
+}
+
 TEST_F(HtmlKeywordsTest, AllCodes) {
   TestEscape("AElig", 0xC6);
   TestEscape("Aacute", 0xC1);

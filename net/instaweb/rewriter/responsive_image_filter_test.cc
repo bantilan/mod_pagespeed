@@ -805,8 +805,10 @@ TEST_F(ResponsiveImageFilterTest, InlinePreview) {
       EncodeImage(200, 200, "a.jpg", "0", "jpg"), " 2x,",
       EncodeImage(300, 300, "a.jpg", "0", "jpg"), " 3x,"
       "a.jpg 10.23x\" src=\"", kLowResSource,
-      "\" onload=\"pagespeed.switchToHighResAndMaybeBeacon(this);\" onerror=\""
-      "this.onerror=null;pagespeed.switchToHighResAndMaybeBeacon(this);\">");
+      "\" onload=\"if(window.pagespeed){if(pagespeed.switchToHighResAndMaybeBeacon){"
+      "pagespeed.switchToHighResAndMaybeBeacon(this);}}\" onerror=\""
+      "this.onerror=null;if(window.pagespeed){if(pagespeed.switchToHighResAndMaybeBeacon){"
+      "pagespeed.switchToHighResAndMaybeBeacon(this);}}\">");
   ValidateExpected("inline_preview", input_html, output_html);
 }
 
@@ -832,9 +834,10 @@ TEST_F(ResponsiveImageFilterTest, Lazyload) {
       EncodeImage(200, 200, "a.jpg", "0", "jpg"), " 2x,",
       EncodeImage(300, 300, "a.jpg", "0", "jpg"), " 3x,"
       "a.jpg 10.23x\" src=\"/psajs/1.0.gif\" "
-      "onload=\"pagespeed.lazyLoadImages.loadIfVisibleAndMaybeBeacon(this);\" "
-      "onerror=\"this.onerror=null;pagespeed.lazyLoadImages."
-      "loadIfVisibleAndMaybeBeacon(this);\">");
+      "onload=\"if(window.pagespeed){if(pagespeed.lazyLoadImages){"
+      "pagespeed.lazyLoadImages.loadIfVisibleAndMaybeBeacon(this);}} \" "
+      "onerror=\"this.onerror=null;if(window.pagespeed){if(pagespeed.lazyLoadImages){"
+      "pagespeed.lazyLoadImages.loadIfVisibleAndMaybeBeacon(this);}}\">");
   ValidateExpected("lazyload", input_html, output_html);
 }
 

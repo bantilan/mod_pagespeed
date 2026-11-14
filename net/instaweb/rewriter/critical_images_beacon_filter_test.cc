@@ -190,6 +190,8 @@ class CriticalImagesBeaconFilterTest : public RewriteTestBase {
     EscapeToJsStringLiteral(rewrite_driver()->google_url().Spec(), false, &url);
     StringPiece beacon_url = https_mode_ ? options()->beacon_url().https :
         options()->beacon_url().http;
+    GoogleString escaped_beacon_url;
+    EscapeToJsStringLiteral(beacon_url, false, &escaped_beacon_url);
     GoogleString options_signature_hash =
         rewrite_driver()->server_context()->hasher()->Hash(
             rewrite_driver()->options()->signature());
@@ -198,7 +200,7 @@ class CriticalImagesBeaconFilterTest : public RewriteTestBase {
         LazyloadImagesFilter::ShouldApply(rewrite_driver()) ==
             RewriterHtmlApplication::ACTIVE;
     GoogleString str = "pagespeed.CriticalImages.Run(";
-    StrAppend(&str, "'", beacon_url, "',");
+    StrAppend(&str, "'", escaped_beacon_url, "',");
     StrAppend(&str, "'", url, "',");
     StrAppend(&str, "'", options_signature_hash, "',");
     StrAppend(&str, BoolToString(!lazyload_will_run_beacon), ",");
@@ -377,6 +379,26 @@ TEST_F(CriticalImagesBeaconFilterTest, LazyloadEnabled) {
   ResetDriver();
   SetupAndProcessUrl();
   VerifyInjection(2);
+}
+
+// The injected handler must no-op when the support script never loads, and
+// the literal must stay free of quote and & characters so it serializes
+// into the attribute byte-identically.
+TEST_F(CriticalImagesBeaconFilterTest, ImageOnloadCodeIsGuarded) {
+  EXPECT_STREQ(
+      "if(window.pagespeed){if(pagespeed.CriticalImages){"
+      "pagespeed.CriticalImages.checkImageForCriticality(this);}}",
+      CriticalImagesBeaconFilter::kImageOnloadCode);
+}
+
+// The configured beacon URL is spliced into a single-quoted JS literal, so
+// it must be JS-escaped: the raw splice would terminate the literal.
+TEST_F(CriticalImagesBeaconFilterTest, BeaconUrlIsJsEscaped) {
+  options()->set_beacon_url("http://example.com/beacon?x=');alert(1);//");
+  RunInjection();
+  VerifyInjection(1);
+  EXPECT_EQ(GoogleString::npos, output_buffer_.find("x=');alert(1);//"))
+      << output_buffer_;
 }
 
 }  // namespace net_instaweb

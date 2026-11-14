@@ -1,0 +1,1 @@
+- **The HTML lexer caps token accumulation at 10 MB and guards the brief-close path.** Unclosed constructs can no longer grow lexer buffers without bound, and a stray brief-close on an empty element stack no longer dereferences null.

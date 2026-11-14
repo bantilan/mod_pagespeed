@@ -541,6 +541,67 @@ TEST_F(HtmlParseTestNoBodyNoHtml, SizeLimit) {
   CheckOutput(121, 160, input, output_with_break_in_td_text);
 }
 
+// A single oversized token (e.g. an unclosed comment) must not be able to
+// grow the lexer's accumulation buffers without bound, even when no
+// parse-size limit has been configured (size_limit_ defaults to -1).  Once
+// any accumulator crosses the unconditional kMaxTokenSize ceiling (10MB in
+// html_lexer.cc) the lexer sets size_limit_exceeded_ and stops parsing.
+TEST_F(HtmlParseTestNoBodyNoHtml, TokenSizeLimitAbortsOnHugeUnclosedComment) {
+  // kMaxTokenSize in html_lexer.cc is 10 * 1024 * 1024 (10MB).  We need
+  // kMaxTokenSize + 2 characters because the guard checks
+  // token_.size() > kMaxTokenSize before appending each character.
+  const size_t kMaxTokenSize = 10UL * 1024 * 1024;
+  GoogleString huge_comment = "<!--";
+  huge_comment.append(kMaxTokenSize + 2, 'A');
+  // Do not close the comment -- this forces token_ to grow unboundedly.
+
+  Parse("huge_unclosed_comment", huge_comment);
+
+  // The guard should have fired: size_limit_exceeded_ = true.
+  EXPECT_TRUE(html_parse_.size_limit_exceeded());
+}
+
+TEST_F(HtmlParseTestNoBodyNoHtml, TokenSizeLimitStopsProcessingRemainingInput) {
+  // After the token size guard fires, subsequent input is ignored.
+  const size_t kMaxTokenSize = 10UL * 1024 * 1024;
+  GoogleString huge_comment = "<!--";
+  huge_comment.append(kMaxTokenSize + 1, 'A');
+  // Close the comment, then add a marker tag that should be skipped.
+  huge_comment += "--><div id=\"marker\">visible</div>";
+
+  Parse("huge_closed_comment", huge_comment);
+
+  EXPECT_TRUE(html_parse_.size_limit_exceeded());
+  // The marker tag should NOT appear in output -- parsing was aborted.
+  EXPECT_EQ(GoogleString::npos, output_buffer_.find("marker"));
+}
+
+TEST_F(HtmlParseTestNoBodyNoHtml, TokenSizeLimitNotTriggeredUnderLimit) {
+  // A comment just under the limit should parse normally.
+  Parse("short_comment", "<!-- short comment --><div id=\"marker\"></div>");
+
+  EXPECT_FALSE(html_parse_.size_limit_exceeded());
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("marker"));
+}
+
+TEST_F(HtmlParseTest, StrayBriefCloseAtTopLevel) {
+  // "/>" outside any tag is plain character data; it must never reach the
+  // brief-close path, let alone crash on an empty element stack.
+  ValidateNoChanges("stray_brief_close", "a/>b");
+}
+
+TEST_F(HtmlParseTestNoBodyNoHtml, BriefCloseWithNoOpenElement) {
+  // "</script/>" walks the script error-recovery path into the self-closing
+  // (brief close) state *after* the script element has already been popped by
+  // "</script": EmitTagBriefClose runs with nothing above the nullptr stack
+  // sentinel.  PopElement() then yields nullptr, which must not be handed to
+  // HtmlParse::CloseElement (null dereference).
+  Parse("script_brief_close", "<script>a</script/>x");
+
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("</script>"));
+  EXPECT_NE(GoogleString::npos, output_buffer_.find("x"));
+}
+
 TEST_F(HtmlParseTest, OpenBracketAfterSpace) {
   // '<' after after unquoted attr value. Here name<input is an attribute
   // name.
@@ -2110,6 +2171,43 @@ TEST_F(AttributeManipulationTest, ModifyAttribute) {
   href->set_quote_style(HtmlElement::SINGLE_QUOTE);
   html_parse_.SetAttributeName(href, HtmlName::kSrc);
   CheckExpected("<a src='google' id=37 class='search!' selected />");
+}
+
+TEST_F(AttributeManipulationTest, SetValueWithSpaceUpgradesUnquotedAttribute) {
+  // id=37 is unquoted.  Rewriting it to a value containing characters
+  // outside the unquoted-attribute-value set must upgrade its quoting;
+  // otherwise the serialized form silently splits the value into extra
+  // attributes.
+  HtmlElement::Attribute* id = node_->FindAttribute(HtmlName::kId);
+  ASSERT_TRUE(id != NULL);
+  id->SetValue("37 onmouseover=alert(1)");
+  EXPECT_EQ(HtmlElement::DOUBLE_QUOTE, id->quote_style());
+  CheckExpected(
+      "<a href=\"http://www.google.com/\" id=\"37 onmouseover=alert(1)\""
+      " class='search!' selected />");
+}
+
+TEST_F(AttributeManipulationTest, SetValueWithoutUnsafeCharsKeepsNoQuote) {
+  // A value that stays within the unquoted-safe set keeps its quoting.
+  HtmlElement::Attribute* id = node_->FindAttribute(HtmlName::kId);
+  ASSERT_TRUE(id != NULL);
+  id->SetValue("38");
+  EXPECT_EQ(HtmlElement::NO_QUOTE, id->quote_style());
+  CheckExpected(
+      "<a href=\"http://www.google.com/\" id=38 class='search!' selected />");
+}
+
+TEST_F(AttributeManipulationTest, EscapedValueWithDoubleQuoteGetsSingleQuote) {
+  // An escaped value carrying a literal double quote (but no single quote)
+  // must be wrapped in single quotes, or the double quote would terminate
+  // the attribute in the serialized form.
+  HtmlElement::Attribute* id = node_->FindAttribute(HtmlName::kId);
+  ASSERT_TRUE(id != NULL);
+  id->SetEscapedValue("37\"a b");
+  EXPECT_EQ(HtmlElement::SINGLE_QUOTE, id->quote_style());
+  CheckExpected(
+      "<a href=\"http://www.google.com/\" id='37\"a b' class='search!'"
+      " selected />");
 }
 
 TEST_F(AttributeManipulationTest, ModifyKeepAttribute) {

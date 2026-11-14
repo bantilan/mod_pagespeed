@@ -223,9 +223,12 @@ GoogleString AddInstrumentationFilter::GetScriptJs(StringPiece event) {
   GoogleString html_url;
   EscapeToJsStringLiteral(driver()->google_url().Spec(), false, /* no quotes */
                           &html_url);
+  GoogleString escaped_beacon_url;
+  EscapeToJsStringLiteral(*beacon_url, false, /* no quotes */
+                          &escaped_beacon_url);
 
   StrAppend(&js, "\npagespeed.addInstrumentationInit(");
-  StrAppend(&js, "'", *beacon_url, "', ");
+  StrAppend(&js, "'", escaped_beacon_url, "', ");
   StrAppend(&js, "'", js_event, "', ");
   StrAppend(&js, "'", extra_params, "', ");
   StrAppend(&js, "'", html_url, "');");

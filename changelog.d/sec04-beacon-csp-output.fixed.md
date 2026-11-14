@@ -1,0 +1,1 @@
+- **The configured beacon URL is JS-escaped before splicing, and the size-limit redirect honors Content-Security-Policy.** No script is injected where the policy would block inline scripts.

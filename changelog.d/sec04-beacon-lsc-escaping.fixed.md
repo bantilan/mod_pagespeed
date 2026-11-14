@@ -1,0 +1,1 @@
+- **Beacon URLs and local-storage snippet strings are JS-escaped before splicing.** The critical-images and critical-CSS beacon initializers spliced the configured URL raw into a single-quoted literal, and the local-storage snippet spliced page-authored URLs and attribute names raw into double-quoted strings; all are now escaped.

@@ -49,7 +49,8 @@ const char kJquerySlider[] = "jquery.sexyslider";
 }  // namespace
 
 const char* LazyloadImagesFilter::kImageOnloadCode =
-    "pagespeed.lazyLoadImages.loadIfVisibleAndMaybeBeacon(this);";
+    "if(window.pagespeed){if(pagespeed.lazyLoadImages){"
+    "pagespeed.lazyLoadImages.loadIfVisibleAndMaybeBeacon(this);}}";
 
 const char* LazyloadImagesFilter::kLoadAllImages =
     "pagespeed.lazyLoadImages.loadAllImages();";

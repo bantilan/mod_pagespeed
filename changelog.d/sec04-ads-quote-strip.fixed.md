@@ -1,0 +1,1 @@
+- **Ad-snippet quote stripping requires a closing quote.** Values starting with a quote but not ending with one are left intact.

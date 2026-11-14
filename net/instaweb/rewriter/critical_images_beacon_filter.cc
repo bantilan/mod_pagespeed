@@ -44,8 +44,12 @@ const char CriticalImagesBeaconFilter::kCriticalImagesBeaconAddedCount[] =
     "critical_images_beacon_filter_script_added_count";
 
 // Legacy onload marker retained for compatibility with other filters/tests.
+// The guard keeps the handler a no-op when the support script never loads;
+// nested ifs keep the literal free of quote and & characters so it
+// serializes into the attribute byte-identically.
 const char* CriticalImagesBeaconFilter::kImageOnloadCode =
-    "pagespeed.CriticalImages.checkImageForCriticality(this);";
+    "if(window.pagespeed){if(pagespeed.CriticalImages){"
+    "pagespeed.CriticalImages.checkImageForCriticality(this);}}";
 
 CriticalImagesBeaconFilter::CriticalImagesBeaconFilter(RewriteDriver* driver)
     : CommonFilter(driver), added_beacon_js_(false) {
@@ -122,6 +126,9 @@ void CriticalImagesBeaconFilter::MaybeAddBeaconJavascript(
   GoogleString html_url;
   EscapeToJsStringLiteral(driver()->google_url().Spec(), false, /* no quotes */
                           &html_url);
+  GoogleString escaped_beacon_url;
+  EscapeToJsStringLiteral(*beacon_url, false, /* no quotes */
+                          &escaped_beacon_url);
   GoogleString options_signature_hash =
       driver()->server_context()->hasher()->Hash(
           driver()->options()->signature());
@@ -135,7 +142,7 @@ void CriticalImagesBeaconFilter::MaybeAddBeaconJavascript(
   GoogleString resize_rendered_image_dimensions_enabled =
       BoolToString(driver()->options()->Enabled(
           RewriteOptions::kResizeToRenderedImageDimensions));
-  StrAppend(&js, "\npagespeed.CriticalImages.Run('", *beacon_url, "','",
+  StrAppend(&js, "\npagespeed.CriticalImages.Run('", escaped_beacon_url, "','",
             html_url, "','", options_signature_hash, "',");
   StrAppend(&js, send_beacon_at_onload, ",",
             resize_rendered_image_dimensions_enabled, ",'",

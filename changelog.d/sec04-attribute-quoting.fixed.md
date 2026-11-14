@@ -1,0 +1,1 @@
+- **Rewritten attribute values that need quotes get them.** An unquoted attribute rewritten to a value with spaces or quotes is now quoted (single quotes when the value holds a double quote) instead of silently splitting into extra attributes.

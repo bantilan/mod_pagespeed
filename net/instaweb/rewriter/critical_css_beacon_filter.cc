@@ -132,10 +132,13 @@ void CriticalCssBeaconFilter::AppendBeaconInitJs(const BeaconMetadata& metadata,
   GoogleString page_url;
   EscapeToJsStringLiteral(driver()->google_url().Spec(), false /* add_quotes */,
                           &page_url);
+  GoogleString escaped_beacon_url;
+  EscapeToJsStringLiteral(beacon_url, false /* add_quotes */,
+                          &escaped_beacon_url);
   Hasher* hasher = driver()->server_context()->hasher();
   GoogleString options_hash = hasher->Hash(driver()->options()->signature());
-  StrAppend(script, "pagespeed.criticalCssBeaconInit('", beacon_url, "','",
-            page_url, "','", options_hash, "','", metadata.nonce,
+  StrAppend(script, "pagespeed.criticalCssBeaconInit('", escaped_beacon_url,
+            "','", page_url, "','", options_hash, "','", metadata.nonce,
             "',pagespeed.selectors);");
 }
 

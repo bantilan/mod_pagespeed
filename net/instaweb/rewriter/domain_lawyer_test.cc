@@ -369,6 +369,18 @@ TEST_F(DomainLawyerTest, MapHttpsAcrossSchemesAndPorts) {
   EXPECT_STREQ("http://localhost:8080/css/stylesheet.css", mapped);
 }
 
+TEST_F(DomainLawyerTest, FailedOriginMappingLeavesNoHostHeader) {
+  // Mapping a domain onto itself is ignored and reported as a failure; the
+  // host header supplied with it must not stick to the target domain.
+  EXPECT_FALSE(domain_lawyer_.AddOriginDomainMapping(
+      "http://a.example.com", "http://a.example.com", "stray.example.org",
+      &message_handler_));
+  EXPECT_EQ(GoogleString::npos,
+            domain_lawyer_.Signature().find("stray.example.org"));
+  EXPECT_EQ(GoogleString::npos,
+            domain_lawyer_.ToString().find("stray.example.org"));
+}
+
 TEST_F(DomainLawyerTest, AddTwoProtocolDomainMapping) {
   ASSERT_TRUE(domain_lawyer_.AddTwoProtocolOriginDomainMapping(
       "ref.nytimes.com", "www.nytimes.com", "", &message_handler_));
@@ -1225,6 +1237,22 @@ TEST_F(DomainLawyerTest, AddMappingFailures) {
   EXPECT_FALSE(AddShard("foo.com", "bar*.com"));
 
   EXPECT_TRUE(AddShard("foo.com", "bar1.com,bar2.com"));
+}
+
+TEST_F(DomainLawyerTest, RejectedMappingLeavesDomainsUnauthorized) {
+  // A mapping rejected for wildcarding must not leave the rejected domains
+  // authorized for rewriting or fetching.
+  EXPECT_FALSE(AddShard("*.foo.com", "bar.com"));
+  EXPECT_FALSE(IsDomainAuthorized(orig_request_, "http://baz.foo.com/"));
+  EXPECT_FALSE(IsDomainAuthorized(orig_request_, "http://bar.com/"));
+
+  EXPECT_FALSE(AddShard("foo.com", "*.bar.com"));
+  EXPECT_FALSE(IsDomainAuthorized(orig_request_, "http://cdn.bar.com/"));
+
+  // A rejected wildcard mapping must not trip the authorize-all-domains
+  // switch either.
+  EXPECT_FALSE(AddShard("*", "bar.com"));
+  EXPECT_FALSE(IsDomainAuthorized(orig_request_, "http://unrelated.com/"));
 }
 
 TEST_F(DomainLawyerTest, Shard) {

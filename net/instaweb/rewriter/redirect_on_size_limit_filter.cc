@@ -19,6 +19,7 @@
 
 #include "net/instaweb/rewriter/public/redirect_on_size_limit_filter.h"
 
+#include "net/instaweb/rewriter/public/csp.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_query.h"
 #include "pagespeed/kernel/base/escaping.h"
@@ -63,7 +64,8 @@ void RedirectOnSizeLimitFilter::EndElementImpl(HtmlElement* element) {
 void RedirectOnSizeLimitFilter::InsertScriptIfNeeded(HtmlElement* element,
                                                      bool is_start) {
   if (!redirect_inserted_ && noscript_element() == NULL &&
-      driver()->size_limit_exceeded()) {
+      driver()->size_limit_exceeded() &&
+      driver()->content_security_policy().PermitsInlineScript()) {
     scoped_ptr<GoogleUrl> url_with_psa_off(
         driver()->google_url().CopyAndAddQueryParam(
             RewriteQuery::kPageSpeed, "off"));
