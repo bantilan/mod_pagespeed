@@ -1,0 +1,1 @@
+- **Statistics logfile parsing tolerates truncated input and keeps record boundaries.** A partial trailing record is dropped instead of spinning the reader, malformed lines are skipped, and skipped records no longer shift subsequent block boundaries.

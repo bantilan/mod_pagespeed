@@ -1,0 +1,1 @@
+- **Redis Cluster replies are validated and connections capped.** Invalid redirections, out-of-range slots and master addresses are rejected, a rejected slot map opens no connections, and cluster connections are capped at 1024.

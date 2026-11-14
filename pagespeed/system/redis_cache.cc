@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <set>
 #include <utility>
 
 #include "base/logging.h"
@@ -80,6 +81,8 @@ namespace net_instaweb {
 //
 // TODO(yeputons): consider removing limit on amount of redirections.
 static const int kMaxRedirections = 1;
+// Highest Redis Cluster hash slot (slots are 14 bits).
+static const int kMaxSlot = 16383;
 static const int kDefaultDatabaseIndex = 0;
 static const int kRedisDatabaseIndexNotSet = -1;
 static const int kRedisTTLNotSet = -1;
@@ -265,6 +268,9 @@ RedisCache::RedisReply RedisCache::RedisCommand(
       last_redirecting_connection = conn,
       conn = GetOrCreateConnection(redirected_to, kDefaultDatabaseIndex),
       redirections_->Add(1)) {
+    if (conn == nullptr) {
+      break;  // Fail operation: too many connections.
+    }
     ScopedMutex lock(conn->GetOperationMutex());
 
     if (with_asking) {
@@ -349,7 +355,12 @@ ExternalServerSpec RedisCache::ParseRedirectionError(StringPiece error) {
 
   ExternalServerSpec result;
   result.host = host_port_vec[0].as_string();
-  if (!StringToInt(host_port_vec[1], &result.port)) {
+  if (result.host.empty()) {
+    LOG(ERROR) << "Invalid host in redirection error: '" << error << "'";
+    return ExternalServerSpec();
+  }
+  if (!StringToInt(host_port_vec[1], &result.port) || result.port < 1 ||
+      result.port > 65535) {
     LOG(ERROR) << "Invalid port in redirection error: '" << error << "'";
     return ExternalServerSpec();
   }
@@ -366,6 +377,11 @@ RedisCache::Connection* RedisCache::GetOrCreateConnection(
     GoogleString name = spec.ToString();
     ConnectionsMap::iterator it = connections_.find(name);
     if (it == connections_.end()) {
+      if (connections_.size() >= kMaxClusterConnections) {
+        LOG(ERROR) << "Not connecting to Redis server at " << spec.ToString()
+                   << ": already " << connections_.size() << " connections";
+        return nullptr;
+      }
       LOG(INFO) << "Initiating connection Redis server at " << spec.ToString();
       it = connections_
                .emplace(name, std::make_unique<Connection>(
@@ -421,7 +437,14 @@ void RedisCache::FetchClusterSlotMapping(Connection* connection) {
     return;  // error
   }
 
-  std::vector<ClusterMapping> new_cluster_mappings;
+  // The whole reply is validated before any connection is opened, so that a
+  // rejected reply leaves the connection budget untouched.
+  struct ValidatedMapping {
+    int start_slot_range;
+    int end_slot_range;
+    ExternalServerSpec master;
+  };
+  std::vector<ValidatedMapping> validated;
   for (size_t i = 0; i < reply->elements; i++) {
     // For each server we have an array in the form:
     // 1) [int] start slot range, inclusive
@@ -466,31 +489,72 @@ void RedisCache::FetchClusterSlotMapping(Connection* connection) {
           kError, "Got range with start > end from CLUSTER SLOTS");
       return;
     }
+    if (start_slot_range->integer < 0 || end_slot_range->integer > kMaxSlot) {
+      message_handler_->Message(kError,
+                                "Got out-of-range slot from CLUSTER SLOTS");
+      return;
+    }
+    if (master_ip->len == 0 || master_port->integer < 1 ||
+        master_port->integer > 65535) {
+      message_handler_->Message(kError,
+                                "Got invalid master address from CLUSTER SLOTS");
+      return;
+    }
     // Everything is there and is the right type.  Store it.
-    // Using database 0 for cluster
-    new_cluster_mappings.emplace_back(
-        start_slot_range->integer, end_slot_range->integer,
-        GetOrCreateConnection(
-            ExternalServerSpec(master_ip->str, master_port->integer),
-            kDefaultDatabaseIndex));
+    validated.push_back(
+        {static_cast<int>(start_slot_range->integer),
+         static_cast<int>(end_slot_range->integer),
+         ExternalServerSpec(master_ip->str,
+                            static_cast<int>(master_port->integer))});
   }
 
-  // Sort new_cluster_mappings based on start_slot_range_.
-  sort(new_cluster_mappings.begin(), new_cluster_mappings.end(),
-       [](const RedisCache::ClusterMapping& a,
-          const RedisCache::ClusterMapping& b) {
-         return a.start_slot_range_ < b.start_slot_range_;
+  // Sort based on start_slot_range.
+  sort(validated.begin(), validated.end(),
+       [](const ValidatedMapping& a, const ValidatedMapping& b) {
+         return a.start_slot_range < b.start_slot_range;
        });
 
   // Now they are sorted, verify that the slot ranges don't overlap.
   // Note: This starts at 1, not 0, because we are looking backwards.
-  for (size_t i = 1; i < new_cluster_mappings.size(); ++i) {
-    if (new_cluster_mappings[i].start_slot_range_ <=
-        new_cluster_mappings[i - 1].end_slot_range_) {
+  for (size_t i = 1; i < validated.size(); ++i) {
+    if (validated[i].start_slot_range <= validated[i - 1].end_slot_range) {
       message_handler_->Message(
           kError, "Redis returned overlapping slot ranges for CLUSTER SLOTS");
       return;
     }
+  }
+
+  // Reject the reply if the servers it names that are not connected yet do
+  // not fit in the connection budget.
+  {
+    std::set<GoogleString> new_servers;
+    ScopedMutex lock(connections_lock_.get());
+    for (const ValidatedMapping& mapping : validated) {
+      GoogleString name = mapping.master.ToString();
+      if (connections_.find(name) == connections_.end()) {
+        new_servers.insert(std::move(name));
+      }
+    }
+    if (connections_.size() + new_servers.size() > kMaxClusterConnections) {
+      message_handler_->Message(kError,
+                                "Too many servers in reply from CLUSTER SLOTS");
+      return;
+    }
+  }
+
+  std::vector<ClusterMapping> new_cluster_mappings;
+  for (const ValidatedMapping& mapping : validated) {
+    // Using database 0 for cluster
+    Connection* master_connection =
+        GetOrCreateConnection(mapping.master, kDefaultDatabaseIndex);
+    if (master_connection == nullptr) {
+      // Only reachable if concurrent redirections used up the budget.
+      message_handler_->Message(kError,
+                                "Too many servers in reply from CLUSTER SLOTS");
+      return;
+    }
+    new_cluster_mappings.emplace_back(
+        mapping.start_slot_range, mapping.end_slot_range, master_connection);
   }
 
   // We don't verify that it's a complete mapping, because Redis allows the

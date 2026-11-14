@@ -1,0 +1,1 @@
+- **Metadata entries with out-of-range slot indexes are rejected as misses.** Corrupt cache contents can no longer drive out-of-bounds reads in served responses.

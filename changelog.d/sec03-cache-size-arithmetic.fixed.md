@@ -1,0 +1,1 @@
+- **The size-tiered cache routes with 64-bit arithmetic.** Values past 2 GB no longer wrap into the small-object tier.

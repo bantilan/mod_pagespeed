@@ -1,0 +1,1 @@
+- **Compressed cache payloads that inflate past the size cap are reported as corrupt.** A small stored payload inflating thousandfold no longer exhausts reader memory; the cap is floored at the 16 MB default so small operator settings cannot mark every larger entry corrupt.

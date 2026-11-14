@@ -2410,9 +2410,10 @@ void RewriteDriver::WriteDomCohortIntoPropertyCache() {
   }
   if (flush_early_info_.get() != NULL) {
     GoogleString value;
-    flush_early_info_->SerializeToString(&value);
-    UpdatePropertyValueInDomCohort(
-        fallback_property_page(), kSubresourcesPropertyName, value);
+    if (flush_early_info_->SerializeToString(&value)) {
+      UpdatePropertyValueInDomCohort(
+          fallback_property_page(), kSubresourcesPropertyName, value);
+    }
   }
   // Write dom cohort for both actual property page and property page with
   // fallback values.

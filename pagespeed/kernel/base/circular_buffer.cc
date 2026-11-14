@@ -31,7 +31,14 @@ namespace net_instaweb {
 
 class MessageHandler;
 
+// Definition for the ODR uses of the in-class constant (comparisons and
+// diagnostics in the factories pass it by reference).
+const int CircularBuffer::kMaxCapacity;
+
 CircularBuffer* CircularBuffer::Create(const int capacity) {
+  if (!IsValidCapacity(capacity)) {
+    return nullptr;
+  }
   int total = Sizeof(capacity);
   CircularBuffer* cb = static_cast<CircularBuffer*>(malloc(total));
   cb->capacity_ = capacity;
@@ -42,6 +49,11 @@ CircularBuffer* CircularBuffer::Create(const int capacity) {
 
 CircularBuffer* CircularBuffer::Init(bool parent, void* block,
                                      const int block_size, const int capacity) {
+  // Refuse a capacity that cannot produce a usable buffer before touching
+  // the block, so no partly-initialized state is left behind.
+  if (!IsValidCapacity(capacity)) {
+    return nullptr;
+  }
   // Check if the pre-allocated block has right size for CircularBuffer.
   DCHECK(block_size == Sizeof(capacity));
   CircularBuffer* cb = static_cast<CircularBuffer*>(block);

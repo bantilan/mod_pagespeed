@@ -1,0 +1,1 @@
+- **Directory walks skip files that cannot be statted and count sizes only once known.** Disappearing files no longer feed uninitialized sizes or mismatched totals into cache-cleaning decisions.

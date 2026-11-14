@@ -29,6 +29,7 @@
 #include "net/instaweb/http/public/http_cache_failure.h"
 #include "net/instaweb/http/public/logging_proto_impl.h"
 #include "net/instaweb/http/public/mock_url_fetcher.h"
+#include "net/instaweb/rewriter/oob_slot_index_cache.h"
 #include "net/instaweb/http/public/rate_controller.h"
 #include "net/instaweb/http/public/request_context.h"
 #include "net/instaweb/http/public/wait_url_async_fetcher.h"
@@ -62,6 +63,7 @@
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/base/timer.h"
+#include "pagespeed/kernel/cache/cache_interface.h"
 #include "pagespeed/kernel/cache/lru_cache.h"
 #include "pagespeed/kernel/cache/write_through_cache.h"
 #include "pagespeed/kernel/html/html_element.h"
@@ -274,6 +276,36 @@ TEST_F(RewriteContextTest, TrimOnTheFlyOptimizable) {
   ClearStats();
   EXPECT_EQ(0, fetch_successes_->Get());  // no more fetches.
   EXPECT_EQ(0, fetch_failures_->Get());
+}
+
+// A cached OutputPartitions whose input indexes name slots outside the
+// rewrite's slot table is corrupt: every cache-hit consumer indexes the
+// slot table with those values unchecked.  The entry must be rejected at
+// decode time and the rewrite recomputed, not served from the bad entry.
+TEST_F(RewriteContextTest, MetadataOobSlotIndexTreatedAsMiss) {
+  GoogleString input_html, output_html;
+  TrimOnTheFlyStart(&input_html, &output_html);
+
+  // A warm request would normally be a metadata hit.
+  ValidateExpected("trimmable", input_html, output_html);
+  EXPECT_EQ(1, metadata_cache_info().num_hits());
+  EXPECT_EQ(0, metadata_cache_info().num_misses());
+  ClearStats();
+
+  // Interpose a backend that rewrites every metadata hit to carry a slot
+  // index far outside the slot table.  The wrapper does not own its
+  // delegate.
+  OobSlotIndexCache* corrupting_metadata =
+      new OobSlotIndexCache(server_context()->metadata_cache());
+  server_context()->DeleteCacheOnDestruction(corrupting_metadata);
+  server_context()->set_metadata_cache(corrupting_metadata);
+
+  // The output is still correct (recomputed), and the corrupted entry was
+  // NOT served as a hit -- it degraded to a miss.
+  ValidateExpected("trimmable", input_html, output_html);
+  EXPECT_LE(1, corrupting_metadata->num_corrupted());
+  EXPECT_EQ(0, metadata_cache_info().num_hits());
+  EXPECT_LE(1, metadata_cache_info().num_misses());
 }
 
 TEST_F(RewriteContextTest, TrimOnTheFlyWithVaryCookie) {

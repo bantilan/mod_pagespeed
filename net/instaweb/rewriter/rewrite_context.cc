@@ -170,12 +170,15 @@ class FreshenMetadataUpdateManager {
       metadata_cache_->Delete(partition_key_);
     } else if (partitions_.get() != nullptr) {
       GoogleString buf;
+      bool serialized;
       {
         StringOutputStream sstream(&buf);  // finalizes buf in destructor
-        partitions_->SerializeToZeroCopyStream(&sstream);
+        serialized = partitions_->SerializeToZeroCopyStream(&sstream);
       }
       // Write the updated partition info to the metadata cache.
-      metadata_cache_->PutSwappingString(partition_key_, &buf);
+      if (serialized) {
+        metadata_cache_->PutSwappingString(partition_key_, &buf);
+      }
     }
     delete this;
   }
@@ -350,6 +353,23 @@ class RewriteContext::OutputCacheCallback : public CacheInterface::Callback {
     return true;
   }
 
+  // Checks that every slot index referenced by the entry names a slot that
+  // exists in this rewrite.  The entry is trusted with vector indexing by
+  // every cache-hit consumer, so any out-of-range index marks it corrupt.
+  bool HasValidSlotIndexes(const OutputPartitions& partitions) const {
+    int num_slots = rewrite_context_->num_slots();
+    for (int i = 0, n = partitions.partition_size(); i < n; ++i) {
+      const CachedResult& partition = partitions.partition(i);
+      for (int j = 0, m = partition.input_size(); j < m; ++j) {
+        int index = partition.input(j).index();
+        if (index < 0 || index >= num_slots) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   // Tries to decode result of a cache lookup (which may or may not have
   // succeeded) into partitions (in result->partitions), and also checks the
   // dependency tables.
@@ -383,6 +403,18 @@ class RewriteContext::OutputCacheCallback : public CacheInterface::Callback {
     ArrayInputStream input(val_str.data(), val_str.size());
     if (partitions->ParseFromZeroCopyStream(&input) &&
         IsOtherDependencyValid(partitions, is_stale_rewrite)) {
+      // The slot indexes serialized in the entry are later used verbatim to
+      // index the rewrite's slot table.  A corrupted entry naming a slot
+      // that does not exist must be rejected here, as a cache miss, before
+      // any consumer can index out of bounds.
+      if (!HasValidSlotIndexes(*partitions)) {
+        rewrite_context_->FindServerContext()
+            ->rewrite_stats()
+            ->cached_output_misses()
+            ->Add(1);
+        *can_revalidate = false;
+        return false;
+      }
       bool ok = true;
       *can_revalidate = true;
       for (int i = 0, n = partitions->partition_size(); i < n; ++i) {
@@ -1754,6 +1786,7 @@ void RewriteContext::WritePartition() {
     if (!is_uncacheable_rewrite) {
       CacheInterface* metadata_cache = server_context->metadata_cache();
       GoogleString buf;
+      bool serialized;
       {
 #ifndef NDEBUG
         for (int i = 0, n = partitions_->partition_size(); i < n; ++i) {
@@ -1766,17 +1799,20 @@ void RewriteContext::WritePartition() {
         frozen_.set_value(true);
 #endif
         StringOutputStream sstream(&buf);  // finalizes buf in destructor
-        partitions_->SerializeToZeroCopyStream(&sstream);
+        serialized = partitions_->SerializeToZeroCopyStream(&sstream);
       }
 
       // Unchanged on-the-fly resources usually have their metadata
       // rewritten needlessly on fetches, so in that case do a Read
       // first and check whether the new bits are any different, as in
       // most cases a read is cheaper than a write.
-      if (IsFetchRewrite() && (kind() == kOnTheFlyResource)) {
-        WriteIfChanged::ReadCheckAndWrite(partition_key_, &buf, metadata_cache);
-      } else {
-        metadata_cache->PutSwappingString(partition_key_, &buf);
+      if (serialized) {
+        if (IsFetchRewrite() && (kind() == kOnTheFlyResource)) {
+          WriteIfChanged::ReadCheckAndWrite(partition_key_, &buf,
+                                            metadata_cache);
+        } else {
+          metadata_cache->PutSwappingString(partition_key_, &buf);
+        }
       }
     }
   } else {

@@ -1,0 +1,1 @@
+- **A rejected proxied request no longer leaks its property-cache lookup state, parallel fetches no longer race on authorized origins, and batcher shutdown answers queued lookups as misses.** Lifetime and shutdown races in the fetch path are closed.

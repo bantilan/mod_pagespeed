@@ -1,0 +1,1 @@
+- **Failed protobuf serializations are no longer stored as empty buffers.** Six metadata/property-cache write paths now skip the write (and report failure) when serialization fails.

@@ -22,6 +22,7 @@
 #include "pagespeed/system/system_caches.h"
 
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 #include "apr_poll.h"
@@ -34,6 +35,7 @@
 #include "net/instaweb/http/public/http_value.h"
 #include "net/instaweb/http/public/request_context.h"
 #include "net/instaweb/rewriter/public/custom_rewrite_test_base.h"
+#include "net/instaweb/rewriter/public/process_context.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_driver_factory.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
@@ -43,7 +45,9 @@
 #include "pagespeed/system/admin_site.h"
 #include "pagespeed/system/apr_mem_cache.h"
 #include "pagespeed/system/system_cache_path.h"
+#include "pagespeed/system/system_rewrite_driver_factory.h"
 #include "pagespeed/system/system_rewrite_options.h"
+#include "pagespeed/system/system_thread_system.h"
 #include "pagespeed/system/system_server_context.h"
 #include "pagespeed/system/external_server_spec.h"
 #include "net/instaweb/util/public/cache_property_store.h"
@@ -57,12 +61,15 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/named_lock_manager.h"
 #include "pagespeed/kernel/base/named_lock_tester.h"
+#include "pagespeed/kernel/base/circular_buffer.h"
+#include "pagespeed/kernel/base/null_message_handler.h"
 #include "pagespeed/kernel/base/null_mutex.h"
 #include "pagespeed/kernel/base/null_shared_mem.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/shared_string.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/stl_util.h"
+#include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/cache/async_cache.h"
@@ -73,6 +80,7 @@
 #include "pagespeed/kernel/cache/fallback_cache.h"
 #include "pagespeed/kernel/cache/file_cache.h"
 #include "pagespeed/kernel/cache/lru_cache.h"
+#include "pagespeed/kernel/util/simple_stats.h"
 #include "pagespeed/kernel/cache/threadsafe_cache.h"
 #include "pagespeed/kernel/cache/write_through_cache.h"
 #include "pagespeed/kernel/http/content_type.h"
@@ -378,6 +386,23 @@ class SystemCachesTest : public CustomRewriteTestBase<SystemRewriteOptions> {
   bool purge_done_;
   bool purge_success_;
 };
+
+// The inflated-size cap for the compressed metadata and property caches is
+// floored at the CompressedCache default: metadata entries are not HTTP
+// responses, so a small (or zero) largest-cacheable-response setting must
+// not mark every larger entry corrupt, and -1 stays unlimited.
+TEST(SystemCachesMaxMetadataInflatedValueSize, FloorsSmallConfiguredValues) {
+  EXPECT_EQ(CompressedCache::kDefaultMaxInflatedValueSize,
+            SystemCaches::MaxMetadataInflatedValueSize(0));
+  EXPECT_EQ(CompressedCache::kDefaultMaxInflatedValueSize,
+            SystemCaches::MaxMetadataInflatedValueSize(100));
+  // A setting above the floor is honored as-is.
+  EXPECT_EQ(RewriteOptions::kDefaultMaxCacheableResponseContentLength,
+            SystemCaches::MaxMetadataInflatedValueSize(
+                RewriteOptions::kDefaultMaxCacheableResponseContentLength));
+  // Unlimited stays unlimited.
+  EXPECT_EQ(-1, SystemCaches::MaxMetadataInflatedValueSize(-1));
+}
 
 TEST_F(SystemCachesTest, BasicFileAndLruCache) {
   options_->set_file_cache_path(kCachePath);
@@ -1473,6 +1498,291 @@ void SystemCachesExternalCacheTestBase::TestBrokenShmFallbackCacheShmNoLru() {
   EXPECT_STREQ(
       HttpCache(AssembledAsyncCacheWithStats()),
       server_context->http_cache()->Name());
+}
+
+// ---------------------------------------------------------------------------
+// Factory-level option parsing (lives here because the build cannot gain new
+// test files: gyp regeneration needs python2, which this environment lacks).
+// MessageBufferSize is handed straight to the shared-memory circular buffer,
+// so out-of-range values must be rejected at parse time as a visible
+// configuration error.
+// ---------------------------------------------------------------------------
+
+// A SystemRewriteDriverFactory with just enough implemented to construct, so
+// option parsing can be exercised without a real server.
+class MinimalTestFactory : public SystemRewriteDriverFactory {
+ public:
+  MinimalTestFactory(const ProcessContext& process_context,
+                     SystemThreadSystem* thread_system)
+      : SystemRewriteDriverFactory(process_context, thread_system,
+                                   nullptr /* shared_mem_runtime */,
+                                   "localhost", 80) {}
+
+  MessageHandler* DefaultHtmlParseMessageHandler() override {
+    return new GoogleMessageHandler;
+  }
+  MessageHandler* DefaultMessageHandler() override {
+    return new GoogleMessageHandler;
+  }
+  ServerContext* NewDecodingServerContext() override { return nullptr; }
+  void NonStaticInitStats(Statistics* statistics) override {
+    InitStats(statistics);
+  }
+};
+
+class SystemFactoryOptionTest
+    : public CustomRewriteTestBase<SystemRewriteOptions> {
+ protected:
+  void SetUp() override {
+    CustomRewriteTestBase<SystemRewriteOptions>::SetUp();
+    // The factory takes ownership of the thread system. The process context
+    // is shared: this binary already holds one and ours must be unique.
+    factory_.reset(new MinimalTestFactory(process_context(),
+                                          new SystemThreadSystem));
+    factory_->Init();
+    // RewriteDriverFactory::ShutDown() reads timer_ directly rather than
+    // through the lazy timer() accessor, so a factory that never touched the
+    // timer crashes on shutdown.  Real servers always have by then; force it
+    // here so TearDown() is safe.
+    factory_->timer();
+  }
+
+  void TearDown() override {
+    factory_->ShutDown();
+    factory_.reset();
+    CustomRewriteTestBase<SystemRewriteOptions>::TearDown();
+  }
+
+  // Applies a process-scope directive the way a config file would.
+  void SetDirective(const char* name, const char* value) {
+    GoogleString msg;
+    NullMessageHandler handler;
+    EXPECT_EQ(RewriteOptions::kOptionOk,
+              factory_->ParseAndSetOption1(name, value,
+                                           true /* process_scope */, &msg,
+                                           &handler))
+        << name << " " << value << ": " << msg;
+  }
+
+  // Applies a directive that is expected to be rejected, returning the
+  // operator-facing message.
+  GoogleString SetInvalidDirective(const char* name, const char* value) {
+    GoogleString msg;
+    NullMessageHandler handler;
+    EXPECT_EQ(RewriteOptions::kOptionValueInvalid,
+              factory_->ParseAndSetOption1(name, value,
+                                           true /* process_scope */, &msg,
+                                           &handler))
+        << name << " " << value << " was accepted";
+    return msg;
+  }
+
+  scoped_ptr<MinimalTestFactory> factory_;
+};
+
+// MessageBufferSize is handed straight to the shared-memory circular buffer,
+// so a negative value or one past CircularBuffer::kMaxCapacity must be
+// rejected at parse time as a visible configuration error, not silently
+// carried into a segment that can never be initialized.
+TEST_F(SystemFactoryOptionTest, MessageBufferSizeOutOfRangeIsRejected) {
+  GoogleString msg = SetInvalidDirective("MessageBufferSize", "-1");
+  EXPECT_TRUE(msg.find("MessageBufferSize") != GoogleString::npos) << msg;
+  EXPECT_EQ(0, factory_->message_buffer_size());
+
+  msg = SetInvalidDirective(
+      "MessageBufferSize",
+      IntegerToString(CircularBuffer::kMaxCapacity + 1).c_str());
+  EXPECT_TRUE(msg.find("MessageBufferSize") != GoogleString::npos) << msg;
+  EXPECT_EQ(0, factory_->message_buffer_size());
+}
+
+TEST_F(SystemFactoryOptionTest, MessageBufferSizeInRangeIsAccepted) {
+  SetDirective("MessageBufferSize", "0");  // Disables the message buffer.
+  EXPECT_EQ(0, factory_->message_buffer_size());
+
+  SetDirective("MessageBufferSize",
+               IntegerToString(CircularBuffer::kMaxCapacity).c_str());
+  EXPECT_EQ(CircularBuffer::kMaxCapacity, factory_->message_buffer_size());
+
+  SetDirective("MessageBufferSize", "10000");
+  EXPECT_EQ(10000, factory_->message_buffer_size());
+}
+
+// ---------------------------------------------------------------------------
+// cache.flush adoption across server contexts (same consolidation note as
+// above). Every context polls its own cache.flush; a context that sees a
+// newer flush publishes its timestamp in a shared statistic so the others
+// follow before their own poll is due. Two contexts on the same cache
+// directory stand for two server processes of one site: they must end up
+// with the same options signature, which is part of the property-cache key.
+// ---------------------------------------------------------------------------
+
+#ifdef _WIN32
+const char kSiteCachePath[] = "C:/cache-site";
+const char kOtherCachePath[] = "C:/cache-other";
+#else
+const char kSiteCachePath[] = "/cache-site";
+const char kOtherCachePath[] = "/cache-other";
+#endif
+
+const int64 kFlushPollIntervalSec = 5;
+
+// MemFileSystem reports a time of 0 for a file that does not exist; a real
+// file system reports a failure, which is what the server relies on before
+// the first touch of cache.flush.
+class FlushFileSystem : public MemFileSystem {
+ public:
+  FlushFileSystem(ThreadSystem* threads, Timer* timer)
+      : MemFileSystem(threads, timer) {}
+
+  bool Mtime(const StringPiece& path, int64* timestamp_sec,
+             MessageHandler* handler) override {
+    GoogleString name(path.data(), path.size());
+    if (!Exists(name.c_str(), handler).is_true()) {
+      return false;
+    }
+    return MemFileSystem::Mtime(path, timestamp_sec, handler);
+  }
+};
+
+// SystemServerContext is abstract here (ProxiesHtml is implemented only by
+// real ports), so the flush tests use a concrete subclass.
+class TestableSystemServerContext : public SystemServerContext {
+ public:
+  TestableSystemServerContext(RewriteDriverFactory* factory,
+                              StringPiece hostname, int port)
+      : SystemServerContext(factory, hostname, port) {}
+  bool ProxiesHtml() const override { return false; }
+};
+
+class SystemServerContextFlushTest
+    : public CustomRewriteTestBase<SystemRewriteOptions> {
+ protected:
+  void SetUp() override {
+    CustomRewriteTestBase<SystemRewriteOptions>::SetUp();
+    // One set of statistics for every context, the way processes share
+    // their shared-memory statistics (and, without per-host statistics,
+    // virtual hosts share them too).
+    stats_ = std::make_unique<SimpleStats>(factory()->thread_system());
+    SystemServerContext::InitStats(stats_.get());
+    file_system_ = std::make_unique<FlushFileSystem>(factory()->thread_system(),
+                                                     factory()->timer());
+  }
+
+  std::unique_ptr<SystemServerContext> NewContext(const char* cache_path) {
+    auto context = std::make_unique<TestableSystemServerContext>(
+        factory(), "flush-test.example.com", 80);
+    SystemRewriteOptions* options = context->global_system_rewrite_options();
+    options->set_file_cache_path(cache_path);
+    options->set_cache_flush_poll_interval_sec(kFlushPollIntervalSec);
+    options->ComputeSignature();
+    context->set_statistics(stats_.get());
+    context->set_timer(factory()->timer());
+    context->set_file_system(file_system_.get());
+    context->set_message_handler(message_handler());
+    return context;
+  }
+
+  // Touches <cache_path>/cache.flush now and returns its timestamp in ms, at
+  // the whole-second resolution the server reads it with.
+  int64 TouchCacheFlush(const char* cache_path) {
+    GoogleString name = StrCat(cache_path, "/cache.flush");
+    EXPECT_TRUE(file_system_->WriteFile(name.c_str(), "", message_handler()));
+    int64 mtime_sec = 0;
+    NullMessageHandler null_handler;
+    EXPECT_TRUE(file_system_->Mtime(name, &mtime_sec, &null_handler));
+    return mtime_sec * Timer::kSecondMs;
+  }
+
+  static int64 FlushTimestampMs(SystemServerContext* context) {
+    return context->global_options()->has_cache_invalidation_timestamp_ms()
+               ? context->global_options()->cache_invalidation_timestamp()
+               : -1;
+  }
+
+  std::unique_ptr<SimpleStats> stats_;
+  std::unique_ptr<FlushFileSystem> file_system_;
+};
+
+// A context that has never applied a flush follows a sibling that found one,
+// instead of keeping its old signature until its own poll is due.
+TEST_F(SystemServerContextFlushTest, NeverFlushedSiblingFollowsBeforeItsPoll) {
+  std::unique_ptr<SystemServerContext> busy = NewContext(kSiteCachePath);
+  std::unique_ptr<SystemServerContext> quiet = NewContext(kSiteCachePath);
+
+  busy->FlushCacheIfNecessary();  // First poll: no cache.flush yet.
+  AdvanceTimeMs(2 * Timer::kSecondMs);
+  quiet->FlushCacheIfNecessary();  // Its first poll, also before the touch.
+  AdvanceTimeMs(1 * Timer::kSecondMs);
+  int64 flush_ms = TouchCacheFlush(kSiteCachePath);
+  AdvanceTimeMs(2 * Timer::kSecondMs);
+
+  busy->FlushCacheIfNecessary();   // Its poll is due: applies the flush.
+  quiet->FlushCacheIfNecessary();  // Its own poll is 2 s away.
+
+  EXPECT_EQ(flush_ms, FlushTimestampMs(busy.get()));
+  EXPECT_EQ(flush_ms, FlushTimestampMs(quiet.get()));
+  EXPECT_EQ(busy->global_options()->signature(),
+            quiet->global_options()->signature());
+}
+
+// A context that applied an earlier flush follows a sibling to a later one.
+TEST_F(SystemServerContextFlushTest, FlushedSiblingFollowsBeforeItsPoll) {
+  std::unique_ptr<SystemServerContext> busy = NewContext(kSiteCachePath);
+  std::unique_ptr<SystemServerContext> quiet = NewContext(kSiteCachePath);
+  TouchCacheFlush(kSiteCachePath);
+  AdvanceTimeMs(1 * Timer::kSecondMs);
+  busy->FlushCacheIfNecessary();
+  AdvanceTimeMs(2 * Timer::kSecondMs);
+  quiet->FlushCacheIfNecessary();
+  AdvanceTimeMs(1 * Timer::kSecondMs);
+  int64 flush_ms = TouchCacheFlush(kSiteCachePath);
+  AdvanceTimeMs(2 * Timer::kSecondMs);
+
+  busy->FlushCacheIfNecessary();
+  quiet->FlushCacheIfNecessary();
+
+  EXPECT_EQ(flush_ms, FlushTimestampMs(busy.get()));
+  EXPECT_EQ(flush_ms, FlushTimestampMs(quiet.get()));
+  EXPECT_EQ(busy->global_options()->signature(),
+            quiet->global_options()->signature());
+}
+
+// The statistic is shared with contexts that watch another cache.flush (other
+// virtual hosts when statistics are not kept per host). A process of the site
+// that happens to serve a request just after another host's flush must not
+// take that flush for its own: a process that did not see it would keep the
+// site's own timestamp, and the two would never agree again.
+TEST_F(SystemServerContextFlushTest, AnotherHostsFlushDoesNotSplitTheSite) {
+  std::unique_ptr<SystemServerContext> other = NewContext(kOtherCachePath);
+  std::unique_ptr<SystemServerContext> busy = NewContext(kSiteCachePath);
+  std::unique_ptr<SystemServerContext> quiet = NewContext(kSiteCachePath);
+
+  other->FlushCacheIfNecessary();  // First poll: no cache.flush yet.
+  AdvanceTimeMs(2 * Timer::kSecondMs);
+  int64 site_flush_ms = TouchCacheFlush(kSiteCachePath);
+  busy->FlushCacheIfNecessary();
+  quiet->FlushCacheIfNecessary();
+  ASSERT_EQ(site_flush_ms, FlushTimestampMs(busy.get()));
+  ASSERT_EQ(site_flush_ms, FlushTimestampMs(quiet.get()));
+
+  // The other host is flushed and polls first; the busy process of the site
+  // serves a request right after, before its own poll is due.
+  AdvanceTimeMs(4 * Timer::kSecondMs);
+  int64 other_flush_ms = TouchCacheFlush(kOtherCachePath);
+  other->FlushCacheIfNecessary();
+  ASSERT_EQ(other_flush_ms, FlushTimestampMs(other.get()));
+  busy->FlushCacheIfNecessary();
+
+  // Later both processes of the site poll their own cache.flush.
+  AdvanceTimeMs(kFlushPollIntervalSec * Timer::kSecondMs);
+  busy->FlushCacheIfNecessary();
+  quiet->FlushCacheIfNecessary();
+
+  EXPECT_EQ(site_flush_ms, FlushTimestampMs(busy.get()));
+  EXPECT_EQ(site_flush_ms, FlushTimestampMs(quiet.get()));
+  EXPECT_EQ(busy->global_options()->signature(),
+            quiet->global_options()->signature());
 }
 
 }  // namespace

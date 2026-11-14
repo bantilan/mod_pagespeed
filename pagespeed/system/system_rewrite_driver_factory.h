@@ -179,6 +179,7 @@ class SystemRewriteDriverFactory : public RewriteDriverFactory {
   SystemCaches* caches() { return caches_.get(); }
 
   virtual void set_message_buffer_size(int x) { message_buffer_size_ = x; }
+  int message_buffer_size() const { return message_buffer_size_; }
 
   // Finds a fetcher for the settings in this config, sharing with
   // existing fetchers if possible, otherwise making a new one (and

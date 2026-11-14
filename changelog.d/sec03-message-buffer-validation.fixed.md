@@ -1,0 +1,1 @@
+- **Out-of-range `MessageBufferSize` values are rejected.** Non-positive or over-1 GiB capacities fail at parse time as configuration errors and leave the buffer off instead of misbehaving in shared memory.

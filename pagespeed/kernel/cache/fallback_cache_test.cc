@@ -259,4 +259,33 @@ TEST_F(FallbackCacheTest, CorruptValueLastCharL) {
   CheckNotFound("key");
 }
 
+// The threshold is inclusive: a stored size equal to the threshold stays
+// in the small-object cache, one byte above it goes to the large one.
+TEST_F(FallbackCacheTest, ThresholdIsInclusive) {
+  const char kKey[] = "k";  // One byte, counted.
+  // 198 (value) + 1 (key) + 1 (marker) == kTestValueSizeThreshold.
+  const GoogleString at_threshold(kTestValueSizeThreshold - 2, 'a');
+  CheckPut(kKey, at_threshold);
+  CheckGet(kKey, at_threshold);
+  EXPECT_EQ(0, large_cache_.size_bytes()) << "fallback not used.";
+
+  // 199 (value) + 1 (key) + 1 (marker) == kTestValueSizeThreshold + 1.
+  const GoogleString above_threshold(kTestValueSizeThreshold - 1, 'a');
+  CheckPut(kKey, above_threshold);
+  CheckGet(kKey, above_threshold);
+  EXPECT_LT(0, large_cache_.size_bytes()) << "fallback used.";
+}
+
+// The size Put() compares against the threshold must not wrap for a value
+// past 2 GB: such a value used to truncate into an int, go negative, and
+// be routed into the small-object cache. A value that large cannot be
+// allocated in a unit test, so the routing size is checked directly.
+TEST_F(FallbackCacheTest, StoreSizeDoesNotWrapPast2GB) {
+  const int64 kPast2GB = (INT64_C(2) << 30) + 100;
+  const int64 store_size =
+      FallbackCache::StoreSizeForRouting("key", kPast2GB, true);
+  EXPECT_GT(store_size, kPast2GB) << "routing size must not wrap past 2 GB";
+  EXPECT_GT(store_size, kTestValueSizeThreshold);
+}
+
 }  // namespace net_instaweb

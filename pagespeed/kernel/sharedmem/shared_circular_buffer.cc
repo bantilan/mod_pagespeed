@@ -71,6 +71,14 @@ bool SharedCircularBuffer::InitMutex(MessageHandler* handler) {
 }
 
 bool SharedCircularBuffer::InitSegment(bool parent, MessageHandler* handler) {
+  // A capacity that cannot produce a usable buffer is refused before any
+  // size is computed or any segment created, so an out-of-range value is
+  // never narrowed into a bogus segment size and no segment is left behind
+  // on the failure path.
+  if (!CircularBuffer::IsValidCapacity(buffer_capacity_)) {
+    handler->Message(kError, "Invalid buffer capacity: %d", buffer_capacity_);
+    return false;
+  }
   // Size of segment includes mutex and circular buffer.
   int buffer_size = CircularBuffer::Sizeof(buffer_capacity_);
   const size_t history_size = history_tracking_ ? sizeof(HistoryState) : 0;
@@ -117,6 +125,18 @@ bool SharedCircularBuffer::InitSegment(bool parent, MessageHandler* handler) {
   buffer_ = CircularBuffer::Init(
       parent, static_cast<void*>(const_cast<char*>(segment_->Base() + pos)),
       buffer_size, buffer_capacity_);
+  if (buffer_ == nullptr) {
+    // Unreachable for a validated capacity, but if the buffer cannot be
+    // initialized, do not leave a parent-created segment registered under
+    // our name: destroy what was created so the name stays clean.
+    if (parent) {
+      segment_.reset(nullptr);
+      shm_runtime_->DestroySegment(SegmentName(), handler);
+    } else {
+      segment_.reset(nullptr);
+    }
+    return false;
+  }
   return true;
 }
 

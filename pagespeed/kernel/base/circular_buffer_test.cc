@@ -18,6 +18,7 @@
  */
 
 
+#include <climits>
 #include <cstdlib>
 #include "pagespeed/kernel/base/circular_buffer.h"
 #include "pagespeed/kernel/base/mock_message_handler.h"
@@ -110,6 +111,26 @@ TEST_F(CircularBufferTest, SmallSize) {
   temp->Write("234");
   EXPECT_EQ("4", temp->ToString(&handler_));
   free(temp);
+}
+
+// A capacity that cannot produce a usable buffer (non-positive, or so
+// large the segment size computation overflows) must be refused, not
+// turned into an undersized allocation the buffer then writes past.
+TEST_F(CircularBufferTest, RejectsInvalidCapacity) {
+  EXPECT_EQ(nullptr, CircularBuffer::Create(0));
+  EXPECT_EQ(nullptr, CircularBuffer::Create(-1));
+  EXPECT_EQ(nullptr, CircularBuffer::Create(CircularBuffer::kMaxCapacity + 1));
+  EXPECT_EQ(nullptr, CircularBuffer::Create(INT_MAX));
+
+  // The pre-allocated-block form refuses the same values.
+  const int segment_size = CircularBuffer::Sizeof(16);
+  void* segment = malloc(segment_size);
+  ASSERT_NE(nullptr, segment);
+  EXPECT_EQ(nullptr, CircularBuffer::Init(true, segment, segment_size, 0));
+  EXPECT_EQ(nullptr, CircularBuffer::Init(true, segment, segment_size, -1));
+  EXPECT_EQ(nullptr, CircularBuffer::Init(true, segment, segment_size,
+                                          CircularBuffer::kMaxCapacity + 1));
+  free(segment);
 }
 
 }  // namespace net_instaweb
