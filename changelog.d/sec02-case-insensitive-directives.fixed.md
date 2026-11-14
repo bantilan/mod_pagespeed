@@ -1,0 +1,1 @@
+- **Cache-Control and Pragma directive names parse case-insensitively.** Mixed-case `No-Store`, `NO-CACHE`, `Private`, `MAX-AGE`, `MUST-REVALIDATE`, `PROXY-REVALIDATE`, `Public` and `Pragma: No-Cache` are honored exactly like their lowercase spellings at every cacheability decision site.

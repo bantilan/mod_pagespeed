@@ -68,7 +68,7 @@ void HTTPValue::SetHeaders(ResponseHeaders* headers) {
     // Using 'unsigned int' to facilitate bit-shifting in
     // SizeOfFirstChunk and SetSizeOfFirstChunk, and I don't
     // want to worry about sign extension.
-    int size = SizeOfFirstChunk();
+    int64 size = SizeOfFirstChunk();
     CHECK_EQ(storage_.size(), (kStorageOverhead + size));
   }
   storage_.Append(headers_string);
@@ -82,7 +82,7 @@ bool HTTPValue::Write(const StringPiece& str, MessageHandler* handler) {
     SetSizeOfFirstChunk(str.size());
   } else if (type_identifier() == kBodyFirst) {
     CHECK(storage_.size() >= kStorageOverhead);
-    int string_size = SizeOfFirstChunk();
+    int64 string_size = SizeOfFirstChunk();
     CHECK(string_size == storage_.size() - kStorageOverhead);
     SetSizeOfFirstChunk(str.size() + string_size);
   } else {
@@ -135,7 +135,10 @@ bool HTTPValue::ExtractHeaders(ResponseHeaders* headers,
   if (storage_.size() >= kStorageOverhead) {
     char type_id = type_identifier();
     const char* start = storage_.data() + kStorageOverhead;
-    int size = SizeOfFirstChunk();
+    // The on-disk field is an unsigned 32-bit value.  Keep it in int64 so a
+    // corrupted entry with the high bit set cannot wrap negative and slip
+    // past the bounds check.
+    int64 size = SizeOfFirstChunk();
     if (size <= storage_.size() - kStorageOverhead) {
       if (type_id == kBodyFirst) {
         start += size;
@@ -160,7 +163,9 @@ bool HTTPValue::ExtractContents(StringPiece* val) const {
   if (storage_.size() >= kStorageOverhead) {
     char type_id = type_identifier();
     const char* start = storage_.data() + kStorageOverhead;
-    int size = SizeOfFirstChunk();
+    // As in ExtractHeaders, keep the unsigned on-disk field in int64 so a
+    // corrupted entry cannot wrap negative and defeat the bounds check.
+    int64 size = SizeOfFirstChunk();
     if (size <= storage_.size() - kStorageOverhead) {
       if (type_id == kHeadersFirst) {
         start += size;

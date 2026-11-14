@@ -1,0 +1,1 @@
+- **Corrupt cache entries with a high-bit first-chunk size are rejected.** The unsigned on-disk field no longer wraps negative past the bounds check into wild served bytes.

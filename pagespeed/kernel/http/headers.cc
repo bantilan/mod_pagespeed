@@ -59,7 +59,9 @@ bool RemoveCookieString(const StringPiece& cookie_name,
   for (int i = 0, n = pieces.size(); i < n; ++i) {
     StringPiece working_cookie = pieces[i];
     TrimLeadingWhitespace(&working_cookie);
-    if (StringCaseStartsWith(working_cookie, cookie_prefix)) {
+    // Cookie names are case-sensitive, so the name= prefix must match
+    // exactly: removing "VICTIM" must leave a "Victim=..." cookie alone.
+    if (working_cookie.starts_with(cookie_prefix)) {
       cookie_found = true;
     } else {
       // Don't trim the whitespace off the cookie, just in case it actually
@@ -278,6 +280,20 @@ bool Headers<Proto>::HasValue(const StringPiece& name,
   for (ConstStringStarVector::const_iterator iter = values.begin();
        iter != values.end(); ++iter) {
     if (value == **iter) {
+      return true;
+    }
+  }
+  return false;
+}
+
+template <class Proto>
+bool Headers<Proto>::HasValueCaseInsensitive(const StringPiece& name,
+                                             const StringPiece& value) const {
+  ConstStringStarVector values;
+  Lookup(name, &values);
+  for (ConstStringStarVector::const_iterator iter = values.begin();
+       iter != values.end(); ++iter) {
+    if (StringCaseEqual(value, **iter)) {
       return true;
     }
   }

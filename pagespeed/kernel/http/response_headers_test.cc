@@ -362,6 +362,36 @@ TEST_F(ResponseHeadersTest, TestCachingPublic) {
             response_headers_.date_ms());
 }
 
+// A mixed-case "public" still authorizes proxy caching of a response to an
+// authorized request: Cache-Control directive names are case-insensitive
+// (RFC 7234 5.2).
+TEST_F(ResponseHeadersTest, TestCachingPublicMixedCase) {
+  ParseHeaders(
+      StrCat("HTTP/1.0 200 OK\r\n"
+             "Date: ",
+             start_time_string_,
+             "\r\n"
+             "Cache-control: PUBLIC, max-age=300\r\n\r\n"));
+
+  EXPECT_TRUE(response_headers_.IsBrowserCacheable());
+  EXPECT_TRUE(response_headers_.IsProxyCacheable());
+  EXPECT_TRUE(IsProxyCacheable(with_auth_));
+  EXPECT_TRUE(IsProxyCacheable(without_auth_));
+}
+
+// Mixed-case No-Transform and No-Store must survive a rewrite exactly like
+// the lowercase spellings.
+TEST_F(ResponseHeadersTest, CacheControlValuesToPreserveMixedCase) {
+  ParseHeaders(
+      StrCat("HTTP/1.0 200 OK\r\n"
+             "Date: ",
+             start_time_string_,
+             "\r\n"
+             "Cache-control: No-Transform, No-Store, max-age=300\r\n\r\n"));
+  EXPECT_STREQ(", no-transform, no-store",
+               response_headers_.CacheControlValuesToPreserve());
+}
+
 TEST_F(ResponseHeadersTest, TestCachingPartialReply) {
   // Make sure we don't cache a partial reply.
   ParseHeaders(StrCat("HTTP/1.0 206 Partial Reply\r\n"
@@ -2201,6 +2231,30 @@ TEST_F(ResponseHeadersTest, TestHopByHopSanitization) {
 
   EXPECT_TRUE(headers2.Sanitize());
   EXPECT_EQ("HTTP/1.0 0 (null)\r\nbar: baz\r\n\r\n", headers2.ToString());
+}
+
+// The end-to-end header table is binary-searched (IsHopByHopIndication,
+// Remove), so its entries must stay sorted case-insensitively.  A single
+// inversion makes entries unfindable, which would classify end-to-end
+// headers as hop-by-hop and strip them from sanitized responses.
+TEST_F(ResponseHeadersTest, EndToEndHeaderTableIsSorted) {
+  const StringPieceVector& names = HttpAttributes::SortedEndToEndHeaders();
+  ASSERT_GT(names.size(), 1u);
+  StringCompareInsensitive compare;
+  for (size_t i = 1; i < names.size(); ++i) {
+    EXPECT_FALSE(compare(names[i], names[i - 1]))
+        << names[i - 1] << " must not be listed after " << names[i];
+  }
+}
+
+TEST_F(ResponseHeadersTest, EndToEndHeadersAreNotHopByHop) {
+  // Every name in the table, looked up one by one, must be found by the
+  // binary search and classified end-to-end.
+  const StringPieceVector& names = HttpAttributes::SortedEndToEndHeaders();
+  for (size_t i = 0; i < names.size(); ++i) {
+    EXPECT_FALSE(ResponseHeaders::IsHopByHopIndication(names[i]))
+        << names[i] << " is an end-to-end header";
+  }
 }
 
 }  // namespace net_instaweb

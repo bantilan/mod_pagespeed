@@ -1,0 +1,1 @@
+- **Cookie removal matches names case-sensitively.** Removing `VICTIM` no longer strips an unrelated `Victim` cookie.

@@ -1,0 +1,1 @@
+- **Shared-cache freshness honors `s-maxage` without extending browser lifetimes.** `s-maxage` now limits how long the shared cache holds a response (and `s-maxage=0` forbids storing it), but it only ever shortens the `max-age`/`Expires` lifetime, never extends it or supplies one alone.

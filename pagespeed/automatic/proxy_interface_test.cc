@@ -271,6 +271,10 @@ class ProxyInterfaceTest : public ProxyInterfaceTestBase {
         cohort, kPropertyName)->has_value());
   }
 
+  GoogleString RedirectLocation(const GoogleString& original_url,
+                                const GoogleString& redirect_url,
+                                const char* params = "PageSpeed=noscript");
+
   void TestQueryParameters(StringPiece original_domain,
                            StringPiece redirect_domain,
                            bool add_params_to_redirect,
@@ -639,6 +643,185 @@ TEST_F(ProxyInterfaceTest, RedirectToDiffDomainDiscardsPagespeedQueryParams) {
                       /* redirect_domain= */ kTestDomain,
                       /* add_params_to_redirect= */ false,
                       /* add_params_to_location= */ false);
+}
+
+TEST_F(ProxyInterfaceTest, RedirectDoesNotRepeatPagespeedQueryParams) {
+  // The Location already carries the PageSpeed parameter, so it must not be
+  // appended a second time.
+  const char kParams[] = "PageSpeedCssInlineMaxBytes=99";
+  GoogleString original_url = "http://www.example.com/a/?x=y";
+  GoogleString redirect_url =
+      StrCat("http://www.example.com/b/?x=y&", kParams);
+  GoogleString get_text;
+  RequestHeaders request_headers;
+  ResponseHeaders set_headers, get_headers;
+
+  set_headers.Add(HttpAttributes::kContentType, kContentTypeHtml.mime_type());
+  set_headers.Add(HttpAttributes::kLocation, redirect_url);
+  set_headers.SetStatusAndReason(HttpStatus::kFound);
+  mock_url_fetcher_.SetResponse(original_url, set_headers, "<html></html>");
+  FetchFromProxy(StrCat(original_url, "&", kParams), request_headers, true,
+                 &get_text, &get_headers);
+  EXPECT_STREQ(redirect_url, get_headers.Lookup1(HttpAttributes::kLocation));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectKeepsPagespeedQueryParamsBeforeFragment) {
+  const char kParams[] = "PageSpeedCssInlineMaxBytes=99";
+  GoogleString original_url = "http://www.example.com/a/?x=y";
+  GoogleString get_text;
+  RequestHeaders request_headers;
+  ResponseHeaders set_headers, get_headers;
+
+  set_headers.Add(HttpAttributes::kContentType, kContentTypeHtml.mime_type());
+  set_headers.Add(HttpAttributes::kLocation, "http://www.example.com/b/#top");
+  set_headers.SetStatusAndReason(HttpStatus::kFound);
+  mock_url_fetcher_.SetResponse(original_url, set_headers, "<html></html>");
+  FetchFromProxy(StrCat(original_url, "&", kParams), request_headers, true,
+                 &get_text, &get_headers);
+  EXPECT_STREQ(StrCat("http://www.example.com/b/?", kParams, "#top"),
+               get_headers.Lookup1(HttpAttributes::kLocation));
+}
+
+// Fetches original_url (as the origin sees it) plus kParams from the client and
+// returns the Location the client gets back for an origin redirect to
+// redirect_url.
+GoogleString ProxyInterfaceTest::RedirectLocation(
+    const GoogleString& original_url, const GoogleString& redirect_url,
+    const char* kParams) {
+  GoogleString get_text;
+  RequestHeaders request_headers;
+  ResponseHeaders set_headers, get_headers;
+  set_headers.Add(HttpAttributes::kContentType, kContentTypeHtml.mime_type());
+  set_headers.Add(HttpAttributes::kLocation, redirect_url);
+  set_headers.SetStatusAndReason(HttpStatus::kFound);
+  mock_url_fetcher_.SetResponse(original_url, set_headers, "<html></html>");
+  FetchFromProxy(
+      StrCat(original_url, original_url.find('?') == GoogleString::npos
+                               ? "?"
+                               : "&",
+             kParams),
+      request_headers, true, &get_text, &get_headers);
+  return get_headers.Lookup1(HttpAttributes::kLocation);
+}
+
+TEST_F(ProxyInterfaceTest, RedirectStrippingParamsToRootStaysStripped) {
+  EXPECT_EQ("http://www.example.com/",
+            RedirectLocation("http://www.example.com/",
+                             "http://www.example.com/"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectStrippingParamsKeepsOtherQueryStripped) {
+  EXPECT_EQ("http://www.example.com/a?x=1",
+            RedirectLocation("http://www.example.com/a?x=1",
+                             "http://www.example.com/a?x=1"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectToOtherPathKeepsParams) {
+  EXPECT_EQ("http://www.example.com/b?PageSpeed=noscript",
+            RedirectLocation("http://www.example.com/a",
+                             "http://www.example.com/b"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectToOtherHostLeftUntouchedForNoscript) {
+  EXPECT_EQ("http://other.example.org/",
+            RedirectLocation("http://www.example.com/",
+                             "http://other.example.org/"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectWithReorderedQueryStaysAsWritten) {
+  EXPECT_EQ("http://www.example.com/a?y=2&x=1",
+            RedirectLocation("http://www.example.com/a?x=1&y=2",
+                             "http://www.example.com/a?y=2&x=1"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectWithEquivalentQueryFormsStaysAsWritten) {
+  // 'x' and 'x=' are the same, as are '+' and '%20' in a value.
+  EXPECT_EQ("http://www.example.com/a?x=",
+            RedirectLocation("http://www.example.com/a?x",
+                             "http://www.example.com/a?x="));
+  EXPECT_EQ("http://www.example.com/a?q=a%20b",
+            RedirectLocation("http://www.example.com/a?q=a+b",
+                             "http://www.example.com/a?q=a%20b"));
+}
+
+TEST_F(ProxyInterfaceTest,
+       RedirectDifferingOnlyByPagespeedParamsStaysAsWritten) {
+  EXPECT_EQ(
+      "http://www.example.com/a?x=1&PageSpeed=noscript",
+      RedirectLocation("http://www.example.com/a?x=1",
+                       "http://www.example.com/a?x=1&PageSpeed=noscript"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectWithDifferentOtherQueryStillGetsParams) {
+  EXPECT_EQ("http://www.example.com/a?x=2&PageSpeed=noscript",
+            RedirectLocation("http://www.example.com/a?x=1",
+                             "http://www.example.com/a?x=2"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectOptionNameCaseIsIgnoredWhenReAdding) {
+  // The option name after the PageSpeed prefix is case-insensitive in
+  // requests, so a Location that spells it differently already carries it.
+  EXPECT_EQ(
+      "http://www.example.com/b?PageSpeedCSSINLINEMAXBYTES=5",
+      RedirectLocation("http://www.example.com/a",
+                       "http://www.example.com/b?PageSpeedCSSINLINEMAXBYTES=5",
+                       "PageSpeedCssInlineMaxBytes=99"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectPrefixCaseIsStillSignificantWhenReAdding) {
+  // A differently cased PageSpeed prefix is not recognised in requests, so
+  // that parameter is not ours and ours is still added.
+  EXPECT_EQ(
+      "http://www.example.com/b?pagespeedcssinlinemaxbytes=5"
+      "&PageSpeedCssInlineMaxBytes=99",
+      RedirectLocation("http://www.example.com/a",
+                       "http://www.example.com/b?pagespeedcssinlinemaxbytes=5",
+                       "PageSpeedCssInlineMaxBytes=99"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectKeepsDifferentValueOfCarriedParam) {
+  EXPECT_EQ(
+      "http://www.example.com/b?PageSpeedCssInlineMaxBytes=5",
+      RedirectLocation("http://www.example.com/a",
+                       "http://www.example.com/b?PageSpeedCssInlineMaxBytes=5",
+                       "PageSpeedCssInlineMaxBytes=99"));
+}
+
+TEST_F(ProxyInterfaceTest,
+       RedirectWithOtherParamsAndFragmentGetsParamsBeforeFragment) {
+  EXPECT_EQ("http://www.example.com/b?x=1&PageSpeed=noscript#top",
+            RedirectLocation("http://www.example.com/a",
+                             "http://www.example.com/b?x=1#top"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectPrefixesModPagespeedAndPageSpeedAreTheSame) {
+  EXPECT_EQ(
+      "http://www.example.com/b?PageSpeedCssInlineMaxBytes=5",
+      RedirectLocation("http://www.example.com/a",
+                       "http://www.example.com/b?PageSpeedCssInlineMaxBytes=5",
+                       "ModPagespeedCssInlineMaxBytes=99"));
+  EXPECT_EQ("http://www.example.com/b?PageSpeed=off",
+            RedirectLocation("http://www.example.com/a",
+                             "http://www.example.com/b?PageSpeed=off",
+                             "ModPagespeed=noscript"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectEscapedEqualsSignIsNotAnEquivalentQuery) {
+  EXPECT_EQ("http://www.example.com/a?a=b%3Dc&PageSpeed=noscript",
+            RedirectLocation("http://www.example.com/a?a%3Db=c",
+                             "http://www.example.com/a?a=b%3Dc"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectEmptyQueryIsEquivalentToNoQuery) {
+  EXPECT_EQ("http://www.example.com/a?",
+            RedirectLocation("http://www.example.com/a",
+                             "http://www.example.com/a?"));
+}
+
+TEST_F(ProxyInterfaceTest, RedirectEscapedAmpersandIsNotAnEquivalentQuery) {
+  EXPECT_EQ("http://www.example.com/a?q=a&b&PageSpeed=noscript",
+            RedirectLocation("http://www.example.com/a?q=a%26b",
+                             "http://www.example.com/a?q=a&b"));
 }
 
 TEST_F(ProxyInterfaceTest, HeadResourceRequest) {
@@ -2975,6 +3158,21 @@ TEST_F(ProxyInterfaceTest, NoStore) {
                RewriteHtmlCacheHeader("no-store", "no-cache, no-store"));
   EXPECT_STREQ("max-age=0, no-cache, no-store",
                RewriteHtmlCacheHeader("no-store2", "no-store, max-age=300"));
+}
+
+// A mixed-case no-cache or must-revalidate on the original HTML takes the
+// same ttl=0 branch as the lowercase spelling: Cache-Control directive names
+// are case-insensitive (RFC 7234 5.2).
+TEST_F(ProxyInterfaceTest, MixedCaseNoCacheDirectives) {
+  // The fixture leaves max_html_cache_time_ms nonzero (and larger than the
+  // input max-age), so a cacheable page keeps its ttl and a private suffix.
+  EXPECT_STREQ("max-age=300, private",
+               RewriteHtmlCacheHeader("mc-plain", "max-age=300"));
+  EXPECT_STREQ("max-age=0, no-cache",
+               RewriteHtmlCacheHeader("mc-no-cache", "No-Cache"));
+  EXPECT_STREQ(
+      "max-age=0, no-cache",
+      RewriteHtmlCacheHeader("mc-must-revalidate", "Must-Revalidate"));
 }
 
 TEST_F(ProxyInterfaceTest, PropCacheFilter) {

@@ -42,6 +42,9 @@ class TestCachingHeaders : public CachingHeaders {
         TrimWhitespace(&((*values)[i]));
       }
       return true;
+    } else if (key == HttpAttributes::kPragma && !pragma_.empty()) {
+      values->push_back(pragma_);
+      return true;
     } else {
       return false;
     }
@@ -63,8 +66,11 @@ class TestCachingHeaders : public CachingHeaders {
     cacheable_resource_status_code_ = x;
   }
 
+  void set_pragma(const char* pragma) { pragma_ = pragma; }
+
  private:
   GoogleString cache_control_;
+  GoogleString pragma_;
   bool likely_static_resource_type_;
   bool cacheable_resource_status_code_;
 
@@ -170,6 +176,97 @@ TEST_F(CachingHeadersTest, IsCacheable) {
   EXPECT_TRUE(headers_->ProxyRevalidate());
   EXPECT_FALSE(headers_->MustRevalidate());
   EXPECT_TRUE(headers_->IsProxyCacheable());
+}
+
+TEST_F(CachingHeadersTest, CaseInsensitiveDirectives) {
+  // Cache-Control directive names are case-insensitive per RFC 7234 5.2,
+  // so mixed-case spellings must be honored exactly like lowercase ones.
+  SetCacheControl("No-Store");
+  EXPECT_FALSE(headers_->IsCacheable());
+  EXPECT_TRUE(headers_->HasExplicitNoCacheDirective());
+
+  SetCacheControl("NO-CACHE");
+  EXPECT_FALSE(headers_->IsCacheable());
+
+  SetCacheControl("Private");
+  EXPECT_TRUE(headers_->IsCacheable());
+  EXPECT_FALSE(headers_->IsProxyCacheable());
+
+  SetCacheControl("MAX-AGE=0");
+  EXPECT_FALSE(headers_->IsCacheable());
+  EXPECT_TRUE(headers_->HasExplicitNoCacheDirective());
+
+  SetCacheControl("Max-Age=600");
+  EXPECT_TRUE(headers_->IsCacheable());
+  EXPECT_TRUE(headers_->IsExplicitlyCacheable());
+
+  SetCacheControl("MUST-REVALIDATE");
+  EXPECT_TRUE(headers_->MustRevalidate());
+
+  SetCacheControl("PROXY-REVALIDATE");
+  EXPECT_TRUE(headers_->ProxyRevalidate());
+
+  // Pragma: no-cache is case-insensitive too.
+  SetCacheControl("");
+  headers_->set_pragma("No-Cache");
+  EXPECT_TRUE(headers_->HasExplicitNoCacheDirective());
+}
+
+TEST_F(CachingHeadersTest, SMaxAgeOnlyShortensFreshness) {
+  // s-maxage is the shared-cache window (RFC 7234 4.2.1). It may shorten
+  // the freshness that max-age or Expires grants, but must not lengthen
+  // it: the computed lifetime also becomes the max-age handed to browsers,
+  // which honor max-age and not s-maxage. A response that forbids
+  // shared-cache storage via s-maxage=0 must not be held for max-age's
+  // full year.
+  SetCacheControl("max-age=31536000, s-maxage=0");
+  EXPECT_TRUE(headers_->HasExplicitNoCacheDirective());
+  EXPECT_FALSE(headers_->IsCacheable());
+  EXPECT_FALSE(headers_->IsExplicitlyCacheable());
+  int64 freshness_ms = -1;
+  EXPECT_TRUE(headers_->GetFreshnessLifetimeMillis(&freshness_ms));
+  EXPECT_EQ(0, freshness_ms);
+
+  // A long s-maxage does not turn max-age=0 into a cacheable response:
+  // the no-cache decision from max-age<=0 is never overridden.
+  SetCacheControl("s-maxage=31536000, max-age=0");
+  EXPECT_TRUE(headers_->HasExplicitNoCacheDirective());
+  EXPECT_FALSE(headers_->IsCacheable());
+  EXPECT_FALSE(headers_->IsExplicitlyCacheable());
+  freshness_ms = -1;
+  EXPECT_TRUE(headers_->GetFreshnessLifetimeMillis(&freshness_ms));
+  EXPECT_EQ(0, freshness_ms);
+
+  // A longer s-maxage does not extend the max-age lifetime.
+  SetCacheControl("max-age=60, s-maxage=86400");
+  EXPECT_TRUE(headers_->GetFreshnessLifetimeMillis(&freshness_ms));
+  EXPECT_EQ(60000, freshness_ms);
+
+  // A shorter one shortens it.
+  SetCacheControl("max-age=86400, s-maxage=60");
+  EXPECT_TRUE(headers_->GetFreshnessLifetimeMillis(&freshness_ms));
+  EXPECT_EQ(60000, freshness_ms);
+
+  // When both are positive and s-maxage is smaller, it wins on magnitude.
+  SetCacheControl("max-age=60, s-maxage=30");
+  EXPECT_TRUE(headers_->GetFreshnessLifetimeMillis(&freshness_ms));
+  EXPECT_EQ(30000, freshness_ms);
+
+  // Directive names are case-insensitive.
+  SetCacheControl("MAX-AGE=60, S-MAXAGE=0");
+  EXPECT_TRUE(headers_->HasExplicitNoCacheDirective());
+}
+
+TEST_F(CachingHeadersTest, SMaxAgeAloneDoesNotSetFreshness) {
+  // s-maxage only shortens a lifetime that max-age or Expires grants. On
+  // its own it must not create one: the computed lifetime becomes the
+  // max-age browsers receive, and the origin gave browsers none.
+  SetCacheControl("s-maxage=600");
+  EXPECT_FALSE(headers_->HasExplicitFreshnessLifetime());
+  EXPECT_FALSE(headers_->IsExplicitlyCacheable());
+  int64 freshness_ms = -1;
+  EXPECT_FALSE(headers_->GetFreshnessLifetimeMillis(&freshness_ms));
+  EXPECT_EQ(0, freshness_ms);
 }
 
 }  // namespace net_instaweb

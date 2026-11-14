@@ -1,0 +1,1 @@
+- **Fetch completion no longer touches headers once the HTML parse owns them.** The fetch-thread status write and debug-log status read are skipped after the parse starts, closing a race with the HTML worker.

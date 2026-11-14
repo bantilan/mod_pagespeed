@@ -1,0 +1,1 @@
+- **The end-to-end header table is sorted for its binary search.** Two inversions made entries unfindable, misclassifying end-to-end headers as hop-by-hop and stripping them from sanitized responses.

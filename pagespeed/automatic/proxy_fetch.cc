@@ -21,8 +21,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <ctime>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "base/logging.h"
 #include "net/instaweb/http/public/cache_url_async_fetcher.h"
@@ -38,6 +42,7 @@
 #include "net/instaweb/rewriter/public/request_properties.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
+#include "net/instaweb/rewriter/public/rewrite_query.h"
 #include "net/instaweb/rewriter/public/server_context.h"
 #include "net/instaweb/rewriter/public/url_namer.h"
 #include "net/instaweb/util/public/fallback_property_page.h"
@@ -54,12 +59,14 @@
 #include "pagespeed/kernel/base/shared_string.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/stl_util.h"
+#include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/base/writer.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/google_url.h"
 #include "pagespeed/kernel/http/http_names.h"
+#include "pagespeed/kernel/http/query_params.h"
 #include "pagespeed/kernel/http/request_headers.h"
 #include "pagespeed/kernel/http/response_headers.h"
 #include "pagespeed/kernel/thread/queued_alarm.h"
@@ -836,6 +843,76 @@ bool ProxyFetch::StartParse() {
 
 const RewriteOptions* ProxyFetch::Options() { return driver_->options(); }
 
+namespace {
+
+// The setting a query parameter name selects when RewriteQuery reads it, or
+// "" if it is not one of ours. ModPagespeed and PageSpeed are the same
+// prefix; the prefix and the exact names PageSpeed, ModPagespeed,
+// PageSpeedFilters and ModPagespeedFilters are case-sensitive; the option
+// name after the prefix, X-PSA-Client-Options and Cache-Control are not.
+GoogleString PageSpeedParamKey(StringPiece name) {
+  for (const char* header :
+       {HttpAttributes::kXPsaClientOptions, HttpAttributes::kCacheControl}) {
+    if (StringCaseEqual(name, header)) {
+      return StrCat("h:", header);
+    }
+  }
+  for (const char* prefix :
+       {RewriteQuery::kModPagespeed, RewriteQuery::kPageSpeed}) {
+    if (name.starts_with(prefix)) {
+      name.remove_prefix(strlen(prefix));
+      if (name.empty() || name == "Filters") {
+        return StrCat("e:", name);
+      }
+      GoogleString key = StrCat("o:", name);
+      LowerString(&key);
+      return key;
+    }
+  }
+  return GoogleString();
+}
+
+bool SamePageSpeedParamName(StringPiece ours, StringPiece theirs) {
+  if (ours == theirs) {
+    return true;
+  }
+  GoogleString key = PageSpeedParamKey(ours);
+  return !key.empty() && key == PageSpeedParamKey(theirs);
+}
+
+bool IsOneOfOurParams(const QueryParams& ours, StringPiece name) {
+  for (int i = 0, n = ours.size(); i < n; ++i) {
+    if (SamePageSpeedParamName(ours.name(i), name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The query of 'url' as a sorted list of unescaped (name, value) pairs,
+// leaving out our PageSpeed parameters. 'a' and 'a=' are the same, '+' and
+// '%20' are the same, and the order of the parameters does not matter.
+std::vector<std::pair<GoogleString, GoogleString>> NormalizedQueryWithoutOurs(
+    const GoogleUrl& url, const QueryParams& ours) {
+  std::vector<std::pair<GoogleString, GoogleString>> result;
+  if (url.IsWebValid() && url.has_query()) {
+    QueryParams params;
+    params.ParseFromUrl(url);
+    for (int i = 0, n = params.size(); i < n; ++i) {
+      if (IsOneOfOurParams(ours, params.name(i))) {
+        continue;
+      }
+      GoogleString value;
+      params.UnescapedValue(i, &value);
+      result.emplace_back(GoogleUrl::UnescapeQueryParam(params.name(i)), value);
+    }
+    std::sort(result.begin(), result.end());
+  }
+  return result;
+}
+
+}  // namespace
+
 void ProxyFetch::HandleHeadersComplete() {
   const RewriteOptions* options = Options();
   if ((response_headers() != nullptr) &&
@@ -868,13 +945,52 @@ void ProxyFetch::HandleHeadersComplete() {
       GoogleUrl base_url(url_);
       GoogleUrl locn_url(base_url, loc);
       // Only add them back if we're being redirected back to the same domain.
-      if (base_url.Origin() == locn_url.Origin()) {
-        // TODO(jmarantz): Add a method to GoogleUrl that makes this easy.
-        GoogleString new_loc(loc);
-        StrAppend(&new_loc, locn_url.has_query() ? "&" : "?",
-                  driver_->pagespeed_query_params());
-        response_headers()->Replace(HttpAttributes::kLocation, new_loc);
-        response_headers()->ComputeCaching();
+      // A Location equal to the request URL without our parameters (fragment
+      // ignored) is the origin deliberately stripping them: leave it alone.
+      // Queries that differ only in parameter order, in 'a' versus 'a=', in
+      // '+' versus '%20', or in our own parameters count as equal.
+      QueryParams ours;
+      ours.ParseFromUntrustedString(driver_->pagespeed_query_params());
+      bool canonicalising =
+          base_url.IsWebValid() && locn_url.IsWebValid() &&
+          base_url.AllExceptQuery() == locn_url.AllExceptQuery() &&
+          NormalizedQueryWithoutOurs(base_url, ours) ==
+              NormalizedQueryWithoutOurs(locn_url, ours);
+      if (base_url.Origin() == locn_url.Origin() && !canonicalising) {
+        // Re-add only the PageSpeed parameters the Location does not already
+        // carry, so a redirect chain never accumulates repeats of them.
+        QueryParams theirs;
+        if (locn_url.has_query()) {
+          theirs.ParseFromUrl(locn_url);
+        }
+        GoogleString missing;
+        for (int i = 0, n = ours.size(); i < n; ++i) {
+          if (IsOneOfOurParams(theirs, ours.name(i))) {
+            continue;
+          }
+          if (!missing.empty()) {
+            missing += "&";
+          }
+          StrAppend(&missing, ours.name(i));
+          const GoogleString* value = ours.EscapedValue(i);
+          if (value != nullptr) {
+            StrAppend(&missing, "=", *value);
+          }
+        }
+        if (!missing.empty()) {
+          // Insert before any fragment; a query after '#' would be lost.
+          GoogleString new_loc(loc);
+          GoogleString fragment;
+          size_t hash = new_loc.find('#');
+          if (hash != GoogleString::npos) {
+            fragment = new_loc.substr(hash);
+            new_loc.erase(hash);
+          }
+          StrAppend(&new_loc, locn_url.has_query() ? "&" : "?", missing,
+                    fragment);
+          response_headers()->Replace(HttpAttributes::kLocation, new_loc);
+          response_headers()->ComputeCaching();
+        }
       }
     }
   }
@@ -945,11 +1061,12 @@ void ProxyFetch::SetupForHtml() {
       // Add, remove and update headers as appropriate.
       int64 ttl_ms;
       GoogleString cache_control_suffix;
+      // Cache-Control directive names are case-insensitive (RFC 7234 5.2).
       if ((options->max_html_cache_time_ms() == 0) ||
-          response_headers()->HasValue(HttpAttributes::kCacheControl,
-                                       "no-cache") ||
-          response_headers()->HasValue(HttpAttributes::kCacheControl,
-                                       "must-revalidate")) {
+          response_headers()->HasValueCaseInsensitive(
+              HttpAttributes::kCacheControl, "no-cache") ||
+          response_headers()->HasValueCaseInsensitive(
+              HttpAttributes::kCacheControl, "must-revalidate")) {
         ttl_ms = 0;
         cache_control_suffix = ", no-cache";
         // Preserve values like no-store and no-transform.
@@ -1246,14 +1363,16 @@ void ProxyFetch::HandleDone(bool success) {
       SharedAsyncFetch::HandleHeadersComplete();
       Write(buffered, server_context_->message_handler());
     }
-  } else if (!response_headers()->headers_complete()) {
+  } else if (!started_parse_ && !response_headers()->headers_complete()) {
     // This is a fetcher failure, like connection refused, not just an error
-    // status code.
+    // status code. Once the parse has started the headers were complete (the
+    // parse begins only after they are) and belong to the html worker, which
+    // may still be adding to them before its first flush, so this thread
+    // does not touch them.
     response_headers()->SetStatusAndReason(HttpStatus::kNotFound);
   }
 
-  VLOG(1) << "Fetch result:" << success << " " << url_ << " : "
-          << response_headers()->status_code();
+  VLOG(1) << "Fetch result:" << success << " " << url_;
   if (started_parse_) {
     ScopedMutex lock(mutex_.get());
     done_outstanding_ = true;
