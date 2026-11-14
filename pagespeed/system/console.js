@@ -484,7 +484,8 @@ pagespeed.Console.prototype.drawGraph = function(graph) {
   var svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('class', 'pagespeed-console-chart');
   svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
-  svg.setAttribute('role', 'img');
+  // No role="img": axis and time labels below stay navigable; the
+  // visually-hidden table after the chart carries sampled values.
   svg.setAttribute('aria-label', graph.title + ' over the last 24 hours');
   var defs = document.createElementNS(ns, 'defs');
   var gradient = document.createElementNS(ns, 'linearGradient');
@@ -556,6 +557,32 @@ pagespeed.Console.prototype.drawGraph = function(graph) {
       {hour: 'numeric', minute: '2-digit'}) : '';
   svg.appendChild(end);
   chart.appendChild(svg);
+  var dataTable = document.createElement('table');
+  dataTable.className = 'pagespeed-visually-hidden';
+  var caption = document.createElement('caption');
+  caption.textContent = graph.title + ', sampled values';
+  dataTable.appendChild(caption);
+  var headRow = document.createElement('tr');
+  var timeHead = document.createElement('th');
+  timeHead.textContent = 'Time';
+  headRow.appendChild(timeHead);
+  var valueHead = document.createElement('th');
+  valueHead.textContent = 'Value';
+  headRow.appendChild(valueHead);
+  dataTable.appendChild(headRow);
+  var stride = Math.max(1, Math.floor(values.length / 12));
+  for (var s = 0; s < values.length; s += stride) {
+    var bodyRow = document.createElement('tr');
+    var timeCell = document.createElement('td');
+    timeCell.textContent = timestamps.length ?
+        new Date(timestamps[s]).toLocaleString() : '';
+    bodyRow.appendChild(timeCell);
+    var valueCell = document.createElement('td');
+    valueCell.textContent = (100 * values[s]).toFixed(2) + '%';
+    bodyRow.appendChild(valueCell);
+    dataTable.appendChild(bodyRow);
+  }
+  chart.appendChild(dataTable);
 };
 
 /** Populate the four at-a-glance console metrics. */

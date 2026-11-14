@@ -1222,8 +1222,19 @@ void AdminSite::ImagesHandler(AdminSource source, AsyncFetch* fetch,
         "document.body.style.overflow='hidden';lastTrigger=button;close.focus();"
         "return;}if(event."
         "target===modal||event.target===close){hide();}});document.addEventListener("
-        "'keydown',function(event){if(event.key==='Escape'&&modal.classList."
-        "contains('is-open'))hide();});})();</script>",
+        "'keydown',function(event){if(!modal.classList.contains('is-open'))"
+        "return;if(event.key==='Escape'){hide();return;}"
+        "if(event.key!=='Tab')return;"
+        "var focusable=modal.querySelectorAll('button,a[href],input,select,"
+        "textarea,[tabindex]:not([tabindex=\"-1\"])');"
+        "focusable=Array.prototype.filter.call(focusable,function(el){"
+        "return !el.disabled&&el.offsetParent!==null;});"
+        "if(!focusable.length)return;"
+        "var first=focusable[0],last=focusable[focusable.length-1];"
+        "if(event.shiftKey&&document.activeElement===first){"
+        "event.preventDefault();last.focus();}"
+        "else if(!event.shiftKey&&document.activeElement===last){"
+        "event.preventDefault();first.focus();}});})();</script>",
         message_handler_);
   }
 }
@@ -1241,12 +1252,31 @@ void AdminSite::GraphsHandler(const RewriteOptions& options, AdminSource source,
   WriteAdminPageHeading(fetch, message_handler_, "TRENDS", "Graphs",
                         "Track cache behavior, image rewrites, and runtime "
                         "activity over time.");
+  if (statistics == nullptr || statistics->console_logger() == nullptr) {
+    // Same gate as the ?json data fetch below: without a console logger
+    // the charts can never load, so say so instead of spinning forever.
+    // Also covers no-JavaScript clients, which see this section as-is.
+    fetch->Write(
+        "<section class='pagespeed-console-unavailable'>\n"
+        "  <h2>Graphs need a little setup</h2>\n"
+        "  <p>PageSpeed cannot load trend charts because statistics "
+        "logging is not enabled. Enable Statistics, StatisticsLogging, "
+        "and LogDir to use this page.</p>\n"
+        "</section>\n",
+        message_handler_);
+    return;
+  }
   fetch->Write(
-      "<div id='cache_applied'>Loading Charts...</div>"
-      "<div id='cache_type'>Loading Charts...</div>"
-      "<div id='ipro'>Loading Charts...</div>"
-      "<div id='image_rewriting'>Loading Charts...</div>"
-      "<div id='realtime'>Loading Charts...</div>",
+      "<div id='cache_applied'>Loading Charts..."
+      "<noscript>Charts require JavaScript.</noscript></div>"
+      "<div id='cache_type'>Loading Charts..."
+      "<noscript>Charts require JavaScript.</noscript></div>"
+      "<div id='ipro'>Loading Charts..."
+      "<noscript>Charts require JavaScript.</noscript></div>"
+      "<div id='image_rewriting'>Loading Charts..."
+      "<noscript>Charts require JavaScript.</noscript></div>"
+      "<div id='realtime'>Loading Charts..."
+      "<noscript>Charts require JavaScript.</noscript></div>",
       message_handler_);
   StringPiece graphs_js =
       options.Enabled(RewriteOptions::kDebug) ? JS_graphs_js : JS_graphs_js_opt;

@@ -28,6 +28,7 @@ goog.provide('pagespeed.Graphs');
 
 goog.require('goog.array');
 goog.require('goog.events');
+goog.require('goog.events.KeyCodes');
 goog.require('goog.net.EventType');
 goog.require('goog.net.XhrIo');
 goog.require('goog.object');
@@ -112,22 +113,28 @@ pagespeed.Graphs = function(opt_xhr) {
   navElement.id = 'nav-bar';
   navElement.className = 'pagespeed-sub-tabs';
   navElement.setAttribute('aria-label', 'Graph views');
+  navElement.setAttribute('role', 'tablist');
+  var tabMarkup = function(mode, panel, label) {
+    return '<a id="' + mode + '" href="javascript:void(0);" role="tab" ' +
+        'aria-selected="false" aria-controls="' + panel + '" tabindex="-1">' +
+        label + '</a>';
+  };
   navElement.innerHTML =
-      '<a id="' + pagespeed.Graphs.DisplayMode.CACHE_APPLIED +
-      '" href="javascript:void(0);">' +
-      'Per application cache stats</a>' +
-      '<a id="' + pagespeed.Graphs.DisplayMode.CACHE_TYPE +
-      '" href="javascript:void(0);">' +
-      'Per type cache stats</a>' +
-      '<a id="' + pagespeed.Graphs.DisplayMode.IPRO +
-      '" href="javascript:void(0);">' +
-      'IPRO status</a>' +
-      '<a id="' + pagespeed.Graphs.DisplayMode.REWRITE_IMAGE +
-      '" href="javascript:void(0);">' +
-      'Image rewriting</a>' +
-      '<a id="' + pagespeed.Graphs.DisplayMode.REALTIME +
-      '" href="javascript:void(0);">' +
-      'Realtime</a>';
+      tabMarkup(pagespeed.Graphs.DisplayMode.CACHE_APPLIED,
+                pagespeed.Graphs.DisplayDiv.CACHE_APPLIED,
+                'Per application cache stats') +
+      tabMarkup(pagespeed.Graphs.DisplayMode.CACHE_TYPE,
+                pagespeed.Graphs.DisplayDiv.CACHE_TYPE,
+                'Per type cache stats') +
+      tabMarkup(pagespeed.Graphs.DisplayMode.IPRO,
+                pagespeed.Graphs.DisplayDiv.IPRO,
+                'IPRO status') +
+      tabMarkup(pagespeed.Graphs.DisplayMode.REWRITE_IMAGE,
+                pagespeed.Graphs.DisplayDiv.REWRITE_IMAGE,
+                'Image rewriting') +
+      tabMarkup(pagespeed.Graphs.DisplayMode.REALTIME,
+                pagespeed.Graphs.DisplayDiv.REALTIME,
+                'Realtime');
   // The UI table of auto-refresh.
   var uiTable = document.createElement('div');
   uiTable.id = 'ui-div';
@@ -149,8 +156,10 @@ pagespeed.Graphs = function(opt_xhr) {
   toolbar.appendChild(uiTable);
   workspace.appendChild(toolbar);
   for (var i in pagespeed.Graphs.DisplayDiv) {
-    workspace.appendChild(document.getElementById(
-        pagespeed.Graphs.DisplayDiv[i]));
+    var panel = document.getElementById(pagespeed.Graphs.DisplayDiv[i]);
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', pagespeed.Graphs.DisplayMode[i]);
+    workspace.appendChild(panel);
   }
 };
 
@@ -178,8 +187,12 @@ pagespeed.Graphs.prototype.show = function(div) {
     var link = document.getElementById(pagespeed.Graphs.DisplayMode[i]);
     if (link == currentTab) {
       link.className = 'pagespeed-underline-link';
+      link.setAttribute('aria-selected', 'true');
+      link.setAttribute('tabindex', '0');
     } else {
       link.className = '';
+      link.setAttribute('aria-selected', 'false');
+      link.setAttribute('tabindex', '-1');
     }
   }
 
@@ -187,6 +200,40 @@ pagespeed.Graphs.prototype.show = function(div) {
   // TODO(xqyin): Note that there are similar changes under caches page as
   // well. We should factor out the logic and let similar codes like this
   // being shared by different pages.
+};
+
+
+/**
+ * Move tab focus and selection with the keyboard (roving tabindex).
+ * @param {!goog.events.BrowserEvent} event The key event.
+ * @private
+ */
+pagespeed.Graphs.prototype.handleTabKeys_ = function(event) {
+  var tabs = [];
+  for (var i in pagespeed.Graphs.DisplayMode) {
+    tabs.push(document.getElementById(pagespeed.Graphs.DisplayMode[i]));
+  }
+  var current = tabs.indexOf(document.activeElement);
+  if (current < 0) {
+    return;
+  }
+  var next = -1;
+  if (event.keyCode == goog.events.KeyCodes.LEFT ||
+      event.keyCode == goog.events.KeyCodes.UP) {
+    next = (current + tabs.length - 1) % tabs.length;
+  } else if (event.keyCode == goog.events.KeyCodes.RIGHT ||
+             event.keyCode == goog.events.KeyCodes.DOWN) {
+    next = (current + 1) % tabs.length;
+  } else if (event.keyCode == goog.events.KeyCodes.HOME) {
+    next = 0;
+  } else if (event.keyCode == goog.events.KeyCodes.END) {
+    next = tabs.length - 1;
+  }
+  if (next >= 0) {
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+  }
 };
 
 
@@ -328,6 +375,11 @@ pagespeed.Graphs.prototype.requestUrl = function() {
  * Refreshes the page by making requsts to server.
  */
 pagespeed.Graphs.prototype.performRefresh = function() {
+  // Pause polling while hidden; a visibility listener below refreshes
+  // deliberately when the page is shown again.
+  if (document.hidden) {
+    return;
+  }
   // TODO(xqyin): Figure out if there is a potential timing issue that the
   // xhr.isActive() would be false before the callback starts.
   if (!this.xhr_.isActive()) {
@@ -351,26 +403,36 @@ pagespeed.Graphs.prototype.performRefresh = function() {
  * Parses the response sent by server and draws charts.
  */
 pagespeed.Graphs.prototype.parseAjaxResponse = function() {
-  if (this.xhr_.isSuccess()) {
-    var text = this.xhr_.getResponseText();
-    if (!this.secondRefreshStarted_) {
-      // We collect historical data in the first refresh and wait for the
-      // second refresh to update data. We won't call functions to draw charts
-      // until we make data up-to-date.
-      this.parseHistoricalMessages(text);
-      // Add the second refresh to the queue with no delay time. So it would be
-      // implemented immediately after the first refresh completion.
-      window.setTimeout(goog.bind(this.performRefresh, this), 0);
-    } else {
-      this.parseSnapshotMessages(text);
-      // Only keep one-day statistics.
-      if (this.psolMessages_.length > pagespeed.Graphs.TIMERANGE_) {
-        this.psolMessages_.shift();
-      }
-      this.drawVisualization();
-    }
-  } else {
+  if (!this.xhr_.isSuccess()) {
     console.log(this.xhr_.getLastError());
+    // Transient fetch failure with logging enabled: replace only the
+    // loading placeholders, never clobber already-drawn charts.
+    for (var i in pagespeed.Graphs.DisplayDiv) {
+      var chartDiv = document.getElementById(pagespeed.Graphs.DisplayDiv[i]);
+      if (chartDiv.textContent.indexOf('Loading Charts') >= 0) {
+        chartDiv.textContent =
+            'Chart data is not available right now. Wait for the next ' +
+            'refresh or reload the page.';
+      }
+    }
+    return;
+  }
+  var text = this.xhr_.getResponseText();
+  if (!this.secondRefreshStarted_) {
+    // We collect historical data in the first refresh and wait for the
+    // second refresh to update data. We won't call functions to draw charts
+    // until we make data up-to-date.
+    this.parseHistoricalMessages(text);
+    // Add the second refresh to the queue with no delay time. So it would be
+    // implemented immediately after the first refresh completion.
+    window.setTimeout(goog.bind(this.performRefresh, this), 0);
+  } else {
+    this.parseSnapshotMessages(text);
+    // Only keep one-day statistics.
+    if (this.psolMessages_.length > pagespeed.Graphs.TIMERANGE_) {
+      this.psolMessages_.shift();
+    }
+    this.drawVisualization();
   }
 };
 
@@ -513,7 +575,8 @@ pagespeed.Graphs.prototype.drawBarChart = function(prefix, title, targetId) {
   var svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('class', 'pagespeed-graphs-bars');
   svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
-  svg.setAttribute('role', 'img');
+  // No role="img": bar names and values below are SVG text that assistive
+  // technology reads directly; the label stays as the accessible name.
   svg.setAttribute('aria-label', title + ', ' + rows.length + ' measurements');
   for (var i = 0; i < rows.length; i++) {
     var y = 12 + i * rowHeight;
@@ -600,7 +663,8 @@ pagespeed.Graphs.prototype.drawHistoryChart = function(prefix, title, targetId) 
   var svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('class', 'pagespeed-graphs-lines');
   svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
-  svg.setAttribute('role', 'img');
+  // No role="img": axis and time labels below stay navigable; the
+  // visually-hidden table after the legend carries the plotted values.
   svg.setAttribute('aria-label', title + ' trends for the last 24 hours');
   for (var tick = 0; tick <= 4; tick++) {
     var y = top + plotHeight * tick / 4;
@@ -656,6 +720,33 @@ pagespeed.Graphs.prototype.drawHistoryChart = function(prefix, title, targetId) 
   svg.appendChild(lastLabel);
   chart.appendChild(svg);
   chart.appendChild(legend);
+  var dataTable = document.createElement('table');
+  dataTable.className = 'pagespeed-visually-hidden';
+  var caption = document.createElement('caption');
+  caption.textContent = title + ', current values by series';
+  dataTable.appendChild(caption);
+  var headRow = document.createElement('tr');
+  var seriesHead = document.createElement('th');
+  seriesHead.textContent = 'Series';
+  headRow.appendChild(seriesHead);
+  var valueHead = document.createElement('th');
+  valueHead.textContent = 'Current value';
+  headRow.appendChild(valueHead);
+  dataTable.appendChild(headRow);
+  for (var s = 0; s < seriesNames.length; s++) {
+    var bodyRow = document.createElement('tr');
+    var nameCell = document.createElement('th');
+    nameCell.setAttribute('scope', 'row');
+    nameCell.textContent = seriesNames[s].replace(/_/g, ' ');
+    bodyRow.appendChild(nameCell);
+    var valueCell = document.createElement('td');
+    var samples = seriesValues[s];
+    valueCell.textContent = samples.length ?
+        samples[samples.length - 1].toLocaleString() : 'no data';
+    bodyRow.appendChild(valueCell);
+    dataTable.appendChild(bodyRow);
+  }
+  chart.appendChild(dataTable);
 };
 
 
@@ -689,6 +780,10 @@ pagespeed.Graphs.Start = function() {
           document.getElementById(pagespeed.Graphs.DisplayMode[i]), 'click',
           goog.bind(graphsObj.show, graphsObj, pagespeed.Graphs.DisplayDiv[i]));
     }
+    goog.events.listen(
+        document.getElementById('nav-bar'),
+        goog.events.EventType.KEYDOWN,
+        goog.bind(graphsObj.handleTabKeys_, graphsObj));
     // IE6/7 don't support this event. Then the back button would not work
     // because no requests captured.
     goog.events.listen(window, 'hashchange',
@@ -705,6 +800,13 @@ pagespeed.Graphs.Start = function() {
     goog.events.listen(
         graphsObj.xhr_, goog.net.EventType.COMPLETE,
         goog.bind(graphsObj.parseAjaxResponse, graphsObj));
+    goog.events.listen(
+        document, 'visibilitychange',
+        function() {
+          if (!document.hidden) {
+            graphsObj.performRefresh();
+          }
+        });
     setInterval(goog.bind(graphsObj.performRefresh, graphsObj),
                 pagespeed.Graphs.FREQUENCY_ * 1000);
     graphsObj.performRefresh();

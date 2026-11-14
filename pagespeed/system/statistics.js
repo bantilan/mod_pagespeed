@@ -24,6 +24,7 @@ goog.provide('pagespeed.Statistics');
 
 goog.require('goog.array');
 goog.require('goog.events');
+goog.require('goog.events.KeyCodes');
 goog.require('goog.net.EventType');
 goog.require('goog.net.XhrIo');
 goog.require('goog.string');
@@ -155,16 +156,24 @@ pagespeed.Statistics = function(opt_xhr) {
 
   var tablePanel = document.createElement('section');
   tablePanel.className = 'pagespeed-stat-table-panel';
+  tablePanel.id = 'pagespeed-stat-table-panel';
+  tablePanel.setAttribute('role', 'tabpanel');
+  tablePanel.setAttribute('aria-label', 'Counter results');
   var toolbar = document.createElement('div');
   toolbar.className = 'pagespeed-stat-toolbar';
+  var statTab = function(category, label) {
+    return '<button type="button" role="tab" aria-selected="false" ' +
+        'aria-controls="pagespeed-stat-table-panel" tabindex="-1" ' +
+        'data-category="' + category + '">' + label + '</button>';
+  };
   toolbar.innerHTML =
-      '<div class="pagespeed-stat-category-tabs" id="pagespeed-stat-category-tabs" role="tablist">' +
-      '<button type="button" role="tab" aria-selected="false" data-category="all" class="is-active">All counters</button>' +
-      '<button type="button" role="tab" aria-selected="false" data-category="cache">Cache</button>' +
-      '<button type="button" role="tab" aria-selected="false" data-category="css">CSS</button>' +
-      '<button type="button" role="tab" aria-selected="false" data-category="images">Images</button>' +
-      '<button type="button" role="tab" aria-selected="false" data-category="fonts">Fonts</button>' +
-      '<button type="button" role="tab" aria-selected="false" data-category="other">Other</button></div>' +
+      '<div class="pagespeed-stat-category-tabs" id="pagespeed-stat-category-tabs" role="tablist" aria-label="Filter counters by category">' +
+      statTab('all', 'All counters') +
+      statTab('cache', 'Cache') +
+      statTab('css', 'CSS') +
+      statTab('images', 'Images') +
+      statTab('fonts', 'Fonts') +
+      statTab('other', 'Other') + '</div>' +
       '<input id="text-filter" type="search" placeholder="Search counters..." aria-label="Search counters">' +
       '<label class="pagespeed-stat-toggle">Auto refresh <input type="checkbox" id="auto-refresh"></label>' +
       '<label class="pagespeed-stat-toggle">Sort by activity <input type="checkbox" id="sort-freq"></label>';
@@ -188,6 +197,9 @@ pagespeed.Statistics = function(opt_xhr) {
     goog.events.listen(categories[i], 'click', goog.bind(
         this.setCategory_, this, categories[i].getAttribute('data-category')));
   }
+  goog.events.listen(document.getElementById('pagespeed-stat-category-tabs'),
+                     goog.events.EventType.KEYDOWN,
+                     goog.bind(this.handleTabKeys_, this));
   this.update();
 };
 
@@ -497,6 +509,41 @@ pagespeed.Statistics.prototype.updateCategoryTabs_ = function() {
     buttons[i].className = category == this.activeCategory_ ? 'is-active' : '';
     buttons[i].setAttribute('aria-selected',
                             category == this.activeCategory_ ? 'true' : 'false');
+    buttons[i].setAttribute('tabindex',
+                            category == this.activeCategory_ ? '0' : '-1');
+  }
+};
+
+
+/**
+ * Move tab focus and selection with the keyboard (roving tabindex).
+ * @param {!goog.events.BrowserEvent} event The key event.
+ * @private
+ */
+pagespeed.Statistics.prototype.handleTabKeys_ = function(event) {
+  var buttons = document.querySelectorAll(
+      '#pagespeed-stat-category-tabs [data-category]');
+  var tabs = Array.prototype.slice.call(buttons);
+  var current = tabs.indexOf(document.activeElement);
+  if (current < 0) {
+    return;
+  }
+  var next = -1;
+  if (event.keyCode == goog.events.KeyCodes.LEFT ||
+      event.keyCode == goog.events.KeyCodes.UP) {
+    next = (current + tabs.length - 1) % tabs.length;
+  } else if (event.keyCode == goog.events.KeyCodes.RIGHT ||
+             event.keyCode == goog.events.KeyCodes.DOWN) {
+    next = (current + 1) % tabs.length;
+  } else if (event.keyCode == goog.events.KeyCodes.HOME) {
+    next = 0;
+  } else if (event.keyCode == goog.events.KeyCodes.END) {
+    next = tabs.length - 1;
+  }
+  if (next >= 0) {
+    event.preventDefault();
+    tabs[next].focus();
+    this.setCategory_(tabs[next].getAttribute('data-category'));
   }
 };
 
@@ -741,6 +788,11 @@ pagespeed.Statistics.prototype.requestUrl = function() {
  * Refreshes the page by making requsts to server.
  */
 pagespeed.Statistics.prototype.performRefresh = function() {
+  // Pause polling while hidden; a visibility listener below refreshes
+  // deliberately when the page is shown again.
+  if (document.hidden) {
+    return;
+  }
   if (!this.xhr_.isActive()) {
     if (!this.firstRefreshStarted_ || this.autoRefresh_) {
       this.firstRefreshStarted_ = true;
@@ -791,6 +843,13 @@ pagespeed.Statistics.Start = function() {
     goog.events.listen(
         statisticsObj.xhr_, goog.net.EventType.COMPLETE,
         goog.bind(statisticsObj.parseAjaxResponse, statisticsObj));
+    goog.events.listen(
+        document, 'visibilitychange',
+        function() {
+          if (!document.hidden) {
+            statisticsObj.performRefresh();
+          }
+        });
     statisticsObj.performRefresh();
   };
   goog.events.listen(window, 'load', statisticsOnload);

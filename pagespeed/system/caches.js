@@ -23,6 +23,7 @@
 goog.provide('pagespeed.Caches');
 
 goog.require('goog.events');
+goog.require('goog.events.KeyCodes');
 goog.require('goog.net.EventType');
 goog.require('goog.net.XhrIo');
 goog.require('goog.object');
@@ -62,23 +63,25 @@ pagespeed.Caches = function(opt_xhr) {
   modeElement.id = 'nav-bar';
   modeElement.className = 'pagespeed-sub-tabs';
   modeElement.setAttribute('aria-label', 'Cache views');
+  modeElement.setAttribute('role', 'tablist');
+  var tabMarkup = function(mode, panel, label) {
+    return '<a id="' + mode + '" href="javascript:void(0);" role="tab" ' +
+        'aria-selected="false" aria-controls="' + panel + '" tabindex="-1">' +
+        label + '</a>';
+  };
   modeElement.innerHTML =
-      '<a id="' +
-      pagespeed.Caches.DisplayMode.METADATA_CACHE +
-      '" href="javascript:void(0);">' +
-      'Metadata entry</a>' +
-      '<a id="' +
-      pagespeed.Caches.DisplayMode.CACHE_STRUCTURE +
-      '" href="javascript:void(0);">' +
-      'Cache structure</a>' +
-      '<a id="' +
-      pagespeed.Caches.DisplayMode.PHYSICAL_CACHE +
-      '" href="javascript:void(0);">' +
-      'Backends</a>' +
-      '<a id="' +
-      pagespeed.Caches.DisplayMode.PURGE_CACHE +
-      '" href="javascript:void(0);">' +
-      'Purge set</a>';
+      tabMarkup(pagespeed.Caches.DisplayMode.METADATA_CACHE,
+                pagespeed.Caches.DisplayDiv.METADATA_CACHE,
+                'Metadata entry') +
+      tabMarkup(pagespeed.Caches.DisplayMode.CACHE_STRUCTURE,
+                pagespeed.Caches.DisplayDiv.CACHE_STRUCTURE,
+                'Cache structure') +
+      tabMarkup(pagespeed.Caches.DisplayMode.PHYSICAL_CACHE,
+                pagespeed.Caches.DisplayDiv.PHYSICAL_CACHE,
+                'Backends') +
+      tabMarkup(pagespeed.Caches.DisplayMode.PURGE_CACHE,
+                pagespeed.Caches.DisplayDiv.PURGE_CACHE,
+                'Purge set');
   var metadataElement = document.getElementById(
       pagespeed.Caches.DisplayDiv.METADATA_CACHE);
   var workspace = document.createElement('section');
@@ -88,9 +91,13 @@ pagespeed.Caches = function(opt_xhr) {
   for (var mode in pagespeed.Caches.DisplayDiv) {
     var displayElement = document.getElementById(
         pagespeed.Caches.DisplayDiv[mode]);
-    if (displayElement) workspace.appendChild(displayElement);
+    if (displayElement) {
+      displayElement.setAttribute('role', 'tabpanel');
+      displayElement.setAttribute(
+          'aria-labelledby', pagespeed.Caches.DisplayMode[mode]);
+      workspace.appendChild(displayElement);
+    }
   }
-  // TODO(xqyin): Maybe use closure tab pane UI element instead.
 
   // Create a div to display the result of showing metadata cache entry.
   var metadataResult = document.createElement('pre');
@@ -228,12 +235,50 @@ pagespeed.Caches.prototype.show = function(div) {
     var link = document.getElementById(pagespeed.Caches.DisplayMode[i]);
     if (link == currentTab) {
       link.className = 'pagespeed-underline-link';
+      link.setAttribute('aria-selected', 'true');
+      link.setAttribute('tabindex', '0');
     } else {
       link.className = '';
+      link.setAttribute('aria-selected', 'false');
+      link.setAttribute('tabindex', '-1');
     }
   }
 
   location.href = location.href.split('#')[0] + '#' + div;
+};
+
+
+/**
+ * Move tab focus and selection with the keyboard (roving tabindex).
+ * @param {!goog.events.BrowserEvent} event The key event.
+ * @private
+ */
+pagespeed.Caches.prototype.handleTabKeys_ = function(event) {
+  var tabs = [];
+  for (var i in pagespeed.Caches.DisplayMode) {
+    tabs.push(document.getElementById(pagespeed.Caches.DisplayMode[i]));
+  }
+  var current = tabs.indexOf(document.activeElement);
+  if (current < 0) {
+    return;
+  }
+  var next = -1;
+  if (event.keyCode == goog.events.KeyCodes.LEFT ||
+      event.keyCode == goog.events.KeyCodes.UP) {
+    next = (current + tabs.length - 1) % tabs.length;
+  } else if (event.keyCode == goog.events.KeyCodes.RIGHT ||
+             event.keyCode == goog.events.KeyCodes.DOWN) {
+    next = (current + 1) % tabs.length;
+  } else if (event.keyCode == goog.events.KeyCodes.HOME) {
+    next = 0;
+  } else if (event.keyCode == goog.events.KeyCodes.END) {
+    next = tabs.length - 1;
+  }
+  if (next >= 0) {
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+  }
 };
 
 
@@ -472,6 +517,10 @@ pagespeed.Caches.Start = function() {
           document.getElementById(pagespeed.Caches.DisplayMode[i]), 'click',
           goog.bind(cachesObj.show, cachesObj, pagespeed.Caches.DisplayDiv[i]));
     }
+    goog.events.listen(
+        document.getElementById('nav-bar'),
+        goog.events.EventType.KEYDOWN,
+        goog.bind(cachesObj.handleTabKeys_, cachesObj));
     // IE6/7 don't support this event. Then the back button would not work
     // because no requests captured.
     goog.events.listen(window, 'hashchange',

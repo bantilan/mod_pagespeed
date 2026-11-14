@@ -426,6 +426,11 @@ pagespeed.Messages.REFRESH_ERROR_ =
  * Refreshs the page by making requsts to server.
  */
 pagespeed.Messages.prototype.autoRefresh = function() {
+  // Pause polling while hidden; a visibility listener below refreshes
+  // deliberately when the page is shown again.
+  if (document.hidden) {
+    return;
+  }
   if (this.autoRefresh_ && !this.xhr_.isActive()) {
     this.xhr_.send(document.location.href);
   }
@@ -480,6 +485,13 @@ pagespeed.Messages.Start = function() {
                        goog.bind(messagesObj.toggleAutorefresh, messagesObj));
     goog.events.listen(messagesObj.xhr_, goog.net.EventType.COMPLETE,
                        goog.bind(messagesObj.parseAjaxResponse, messagesObj));
+    goog.events.listen(
+        document, 'visibilitychange',
+        function() {
+          if (!document.hidden) {
+            messagesObj.autoRefresh();
+          }
+        });
     setInterval(goog.bind(messagesObj.autoRefresh, messagesObj), 5000);
   };
   if (document.readyState == 'complete' ||
