@@ -20,6 +20,8 @@
 
 #include "net/instaweb/http/public/rate_controlling_url_async_fetcher.h"
 
+#include <pthread.h>
+
 #include <vector>
 
 #include "net/instaweb/http/public/async_fetch.h"
@@ -84,6 +86,27 @@ class MockFetch : public AsyncFetch {
 
   DISALLOW_COPY_AND_ASSIGN(MockFetch);
 };
+
+// Runs WaitUrlAsyncFetcher::CallCallbacks on a thread with a worker-sized
+// (2MB) stack. Production fetch completions run on worker threads, not the
+// generous main-thread stack, so a drain that recurses per queued fetch
+// overflows here while an iterative one stays flat.
+void* CallCallbacksEntry(void* arg) {
+  static_cast<WaitUrlAsyncFetcher*>(arg)->CallCallbacks();
+  return nullptr;
+}
+
+void DrainWaitFetcherOnSmallStackThread(WaitUrlAsyncFetcher* wait_fetcher) {
+  pthread_attr_t attr;
+  pthread_t thread;
+  void* ignored = nullptr;
+  CHECK_EQ(0, pthread_attr_init(&attr));
+  CHECK_EQ(0, pthread_attr_setstacksize(&attr, 2 << 20));
+  CHECK_EQ(0, pthread_create(&thread, &attr, CallCallbacksEntry,
+                             wait_fetcher));
+  CHECK_EQ(0, pthread_attr_destroy(&attr));
+  CHECK_EQ(0, pthread_join(thread, &ignored));
+}
 
 class RateControllingUrlAsyncFetcherTest : public ::testing::Test {
  protected:
@@ -405,6 +428,59 @@ TEST_F(RateControllingUrlAsyncFetcherTest,
   EXPECT_EQ(0, global_fetch_queue_size());
 
   STLDeleteContainerPointers(fetch_vector.begin(), fetch_vector.end());
+}
+
+TEST_F(RateControllingUrlAsyncFetcherTest, ShutdownDrainsDeepQueueIteratively) {
+  // Regression test for unbounded recursion in RateController::CustomFetch.
+  //
+  // On shutdown, a completing fetch drains the per-host queue by creating a
+  // wrapper for the next queued fetch and calling Done(false) on it
+  // synchronously. Done() dispatches straight to HandleDone(), which pops and
+  // Done()s the *next* queued fetch, and so on -- one C++ stack frame per
+  // queued fetch. With the default config a single slow host can queue
+  // ~2000 fetches (500 * requests_per_host), so a shutdown under load could
+  // recurse deep enough to overflow the worker-thread stack and crash the
+  // process. This test queues a deep backlog and drains it on a worker-sized
+  // (2MB) stack, which the recursive drain overflows; the iterative drain
+  // completes on it.
+  const int kOutgoing = 2;
+  const int kQueueDepth = 100000;
+
+  // max_global_queue_size must be >= per-host queued threshold; size both to
+  // hold the entire backlog so nothing is load-shed.
+  RateControllingUrlAsyncFetcher deep_fetcher(
+      counting_fetcher_.get(), kQueueDepth + kOutgoing, kOutgoing, kQueueDepth,
+      thread_system_.get(), &stats_);
+
+  std::vector<MockFetch*> fetches;
+  fetches.reserve(kQueueDepth + kOutgoing);
+  for (int i = 0; i < kQueueDepth + kOutgoing; ++i) {
+    MockFetch* fetch = new MockFetch(
+        RequestContext::NewTestRequestContext(thread_system_.get()),
+        /*is_background_fetch=*/true);
+    fetches.push_back(fetch);
+    deep_fetcher.Fetch(domain1_url1_, &handler_, fetch);
+  }
+
+  // kOutgoing fetches are in flight; the remainder are queued for the host.
+  EXPECT_EQ(kQueueDepth, global_fetch_queue_size());
+
+  // Shut down, then complete the in-flight fetches on a worker-sized stack.
+  // Completing the first one triggers the shutdown drain of the entire
+  // per-host queue. Pre-fix this recurses kQueueDepth deep and overflows the
+  // 2MB stack; post-fix it drains iteratively without growing the stack.
+  // (The main thread's stack -- 32MB here -- would survive the recursion, so
+  // running the drain there would not distinguish the fix.)
+  deep_fetcher.ShutDown();
+  DrainWaitFetcherOnSmallStackThread(wait_fetcher_.get());
+
+  // Every fetch is accounted for: the queued ones were dropped on shutdown,
+  // the in-flight ones completed, and the global queue is fully drained.
+  for (size_t i = 0; i < fetches.size(); ++i) {
+    EXPECT_TRUE(fetches[i]->done());
+  }
+  EXPECT_EQ(0, global_fetch_queue_size());
+  STLDeleteContainerPointers(fetches.begin(), fetches.end());
 }
 
 }  // namespace
