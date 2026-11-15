@@ -20,6 +20,7 @@
 #ifndef PAGESPEED_KERNEL_THREAD_PTHREAD_SHARED_MEM_H_
 #define PAGESPEED_KERNEL_THREAD_PTHREAD_SHARED_MEM_H_
 
+#include <atomic>
 #include <cstddef>
 #include <map>
 #include <utility>
@@ -58,6 +59,11 @@ class PthreadSharedMem : public AbstractSharedMem {
   // Frees all lazy-initialized memory used to track shared-memory segments.
   static void Terminate();
 
+  // Whether a lock operation takes over a mutex whose holder terminated while
+  // holding it, instead of blocking forever. True where the platform has
+  // robust mutexes (Linux, FreeBSD).
+  static bool RecoversAbandonedMutexes();
+
  private:
   typedef std::map<GoogleString, std::pair<char*, size_t> > SegmentBaseMap;
 
@@ -75,7 +81,7 @@ class PthreadSharedMem : public AbstractSharedMem {
   static SegmentBaseMap* segment_bases_;
 
   // Holds the number of times a PthreadSharedMem has been created.
-  static size_t s_instance_count_;
+  static std::atomic<size_t> s_instance_count_;
   // Used to prefix segment names, so that when two runtimes are active at the
   // same moment they will not have overlapping segment names. This occurs in
   // ngx_pagespeed during a configuration reload, where first a new factory is

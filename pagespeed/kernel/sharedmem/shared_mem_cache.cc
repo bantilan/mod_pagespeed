@@ -115,6 +115,8 @@
 // True       0           Writer working.
 //
 // For now, writers wait in sleep loop, while readers simply fail/miss.
+// A writer stops waiting after kMaxWaitForReadersUs, as a reader that
+// terminated while reading never leaves; see EnsureReadyForWriting().
 //
 // TODO(morlovich): Evaluate using chaining and one more layer of indirection
 // instead, as it should hopefully produce much better utilization and avoid
@@ -161,6 +163,11 @@ using SharedMemCacheData::kInvalidEntry;
 using SharedMemCacheData::kHashSize;
 
 namespace {
+
+// How long a writer waits for the readers of an entry to leave. A reader
+// only copies the value out of shared memory, which takes far less, so this
+// is reached only for a reader that terminated while reading.
+const int64 kMaxWaitForReadersUs = Timer::kSecondUs;
 
 // Increase this number if making backwards incompatible changes to the dump
 // format.
@@ -473,6 +480,9 @@ void SharedMemCache<kBlockSize>::PutRawHash(const GoogleString& raw_hash,
   SectorStats* stats = sector->sector_stats();
 
   ScopedMutex lock(sector->mutex());
+  if (sector->disabled()) {
+    return;  // See Sector::OnOwnerDied().
+  }
   ++stats->num_put;
   int64 last_checkpoint_ms = stats->last_checkpoint_ms;
 
@@ -487,10 +497,11 @@ void SharedMemCache<kBlockSize>::PutRawHash(const GoogleString& raw_hash,
     if (KeyMatch(cand, raw_hash)) {
       if (!cand->creating) {
         ++stats->num_put_update;
-        EnsureReadyForWriting(sector, cand);
-        PutIntoEntry(sector, cand_key, last_use_timestamp_ms, value);
-        ScheduleSnapshotIfNecessary(checkpoint_ok, last_use_timestamp_ms,
-                                    last_checkpoint_ms, pos.sector);
+        if (EnsureReadyForWriting(sector, cand)) {
+          PutIntoEntry(sector, cand_key, last_use_timestamp_ms, value);
+          ScheduleSnapshotIfNecessary(checkpoint_ok, last_use_timestamp_ms,
+                                      last_checkpoint_ms, pos.sector);
+        }
       } else {
         ++stats->num_put_concurrent_create;
       }
@@ -527,7 +538,16 @@ void SharedMemCache<kBlockSize>::PutRawHash(const GoogleString& raw_hash,
   }
 
   // Wait for readers before touching the key.
-  EnsureReadyForWriting(sector, best);
+  if (!EnsureReadyForWriting(sector, best)) {
+    return;
+  }
+  if (sector->disabled()) {
+    // Defensive: EnsureReadyForWriting() does not release the lock here, as
+    // best is Writeable(), but if that ever changes the sector may have been
+    // disabled meanwhile.
+    best->creating = false;
+    return;
+  }
   std::memcpy(best->hash_bytes, raw_hash.data(), kHashSize);
   PutIntoEntry(sector, best_key, last_use_timestamp_ms, value);
 
@@ -641,6 +661,13 @@ void SharedMemCache<kBlockSize>::PutIntoEntry(
 
   CacheEntry* entry = sector->EntryAt(entry_num);
   DCHECK(entry->creating);
+
+  // EnsureReadyForWriting may have released the lock while waiting, and
+  // the sector may have been disabled meanwhile.
+  if (sector->disabled()) {
+    entry->creating = false;
+    return;
+  }
   DCHECK_EQ(0u, entry->open_count);
 
   // Adjust space allocation....
@@ -708,16 +735,21 @@ void SharedMemCache<kBlockSize>::Get(const GoogleString& key,
   Sector<kBlockSize>* sector = sectors_[pos.sector];
   {
     ScopedMutex lock(sector->mutex());
-    SectorStats* stats = sector->sector_stats();
-    ++stats->num_get;
+    // A disabled sector acts as empty; see Sector::OnOwnerDied().
+    if (!sector->disabled()) {
+      SectorStats* stats = sector->sector_stats();
+      ++stats->num_get;
 
-    for (int p = 0; p < kAssociativity; ++p) {
-      EntryNum cand_key = pos.keys[p];
-      CacheEntry* cand = sector->EntryAt(cand_key);
-      if (KeyMatch(cand, raw_hash)) {
-        ++stats->num_get_hit;
-        key_state = GetFromEntry(key, sector, cand_key, callback);
-        break;
+      for (int p = 0; p < kAssociativity; ++p) {
+        EntryNum cand_key = pos.keys[p];
+        CacheEntry* cand = sector->EntryAt(cand_key);
+        if (KeyMatch(cand, raw_hash)) {
+          key_state = GetFromEntry(key, sector, cand_key, callback);
+          if (key_state == kAvailable) {
+            ++stats->num_get_hit;
+          }
+          break;
+        }
       }
     }
   }
@@ -776,6 +808,9 @@ void SharedMemCache<kBlockSize>::Delete(const GoogleString& key) {
 
   Sector<kBlockSize>* sector = sectors_[pos.sector];
   ScopedMutex lock(sector->mutex());
+  if (sector->disabled()) {
+    return;  // See Sector::OnOwnerDied().
+  }
 
   for (int p = 0; p < kAssociativity; ++p) {
     EntryNum cand_key = pos.keys[p];
@@ -797,7 +832,14 @@ void SharedMemCache<kBlockSize>::DeleteEntry(Sector<kBlockSize>* sector,
     // outstanding readers).
     return;
   }
-  EnsureReadyForWriting(sector, entry);
+  if (!EnsureReadyForWriting(sector, entry)) {
+    return;
+  }
+  if (sector->disabled()) {
+    // Disabled while EnsureReadyForWriting waited without the lock.
+    entry->creating = false;
+    return;
+  }
   BlockVector blocks;
   sector->BlockListForEntry(entry, &blocks);
   sector->ReturnBlocksToFreeList(blocks);
@@ -810,6 +852,9 @@ void SharedMemCache<kBlockSize>::SanityCheck() {
   for (int i = 0; i < num_sectors_; ++i) {
     Sector<kBlockSize>* sector = sectors_[i];
     ScopedMutex lock(sector->mutex());
+    if (sector->disabled()) {
+      continue;  // Its structures are not expected to be consistent.
+    }
 
     // Make sure that all blocks are accounted for exactly once.
 
@@ -972,7 +1017,7 @@ void SharedMemCache<kBlockSize>::ExtractPosition(
 }
 
 template<size_t kBlockSize>
-void SharedMemCache<kBlockSize>::EnsureReadyForWriting(
+bool SharedMemCache<kBlockSize>::EnsureReadyForWriting(
     Sector<kBlockSize>* sector, CacheEntry* entry) {
   // It is possible that as we are starting to write, some other processes
   // are still in the middle of copying in read data for this entry, so we have
@@ -984,13 +1029,30 @@ void SharedMemCache<kBlockSize>::EnsureReadyForWriting(
   //
   entry->creating = true;
 
-  // Now just wait for previous readers to leave.
-  while (entry->open_count > 0) {
+  // Now just wait for previous readers to leave. If the sector gets disabled
+  // meanwhile the callers give up, so there is nothing to wait for any more.
+  // A reader that terminated while reading never leaves, so give up on the
+  // entry after a while. It then stays marked as being created: readers and
+  // writers keep away from it, and its blocks stay in use, until the server
+  // is restarted.
+  // On a timer without a monotonic clock, AprTimer among them,
+  // NowMonotonicUs() is the wall clock.
+  int64 give_up_us = timer_->NowMonotonicUs() + kMaxWaitForReadersUs;
+  while (entry->open_count > 0 && !sector->disabled()) {
+    if (timer_->NowMonotonicUs() >= give_up_us) {
+      handler_->Message(kWarning,
+                        "SharedMemCache: gave up waiting for the readers of a "
+                        "cache entry, probably a process or thread that "
+                        "terminated while reading it; the entry is unusable "
+                        "until the server is restarted");
+      return false;
+    }
     ++sector->sector_stats()->num_put_spins;
     sector->mutex()->Unlock();
     timer_->SleepUs(50);
     sector->mutex()->Lock();
   }
+  return true;
 }
 
 template<size_t kBlockSize>

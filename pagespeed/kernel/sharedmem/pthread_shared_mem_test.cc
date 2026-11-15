@@ -24,11 +24,14 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <memory>
+#include <thread>
 #include <vector>
 
 #include "pagespeed/kernel/base/abstract_shared_mem.h"
 #include "pagespeed/kernel/base/function.h"
 #include "pagespeed/kernel/base/gtest.h"
+#include "pagespeed/kernel/base/null_message_handler.h"
 #include "pagespeed/kernel/sharedmem/shared_circular_buffer_test_base.h"
 #include "pagespeed/kernel/sharedmem/shared_dynamic_string_map_test_base.h"
 #include "pagespeed/kernel/sharedmem/shared_mem_cache_data_test_base.h"
@@ -54,6 +57,12 @@ class PthreadSharedMemEnvBase : public SharedMemTestEnv {
 
   virtual void ShortSleep() {
     usleep(1000);
+  }
+
+  // Robust mutexes notice both a process and a thread that terminates while
+  // holding them, so this holds for the process and the thread variant.
+  virtual bool RecoversAbandonedMutexes() const {
+    return PthreadSharedMem::RecoversAbandonedMutexes();
   }
 };
 
@@ -161,6 +170,46 @@ INSTANTIATE_TYPED_TEST_CASE_P(PthreadThread, SharedMemStatisticsTestTemplate,
                               PthreadSharedMemThreadEnv);
 INSTANTIATE_TYPED_TEST_CASE_P(PthreadThread, SharedMemTestTemplate,
                               PthreadSharedMemThreadEnv);
+
+// Runtimes created concurrently on several threads must still get distinct
+// segment namespaces: each one attaches back to its own segment.
+TEST(PthreadSharedMemInstanceTest, ConcurrentRuntimesDoNotShareSegments) {
+  const int kThreads = 8;
+  const int kPerThread = 64;
+  std::vector<std::unique_ptr<PthreadSharedMem> > runtimes(
+      kThreads * kPerThread);
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.push_back(std::thread([&runtimes, t]() {
+      for (int i = 0; i < kPerThread; ++i) {
+        runtimes[t * kPerThread + i].reset(new PthreadSharedMem());
+      }
+    }));
+  }
+  for (size_t t = 0; t < threads.size(); ++t) {
+    threads[t].join();
+  }
+
+  NullMessageHandler handler;
+  std::vector<std::unique_ptr<AbstractSharedMemSegment> > segments;
+  for (size_t i = 0; i < runtimes.size(); ++i) {
+    segments.push_back(std::unique_ptr<AbstractSharedMemSegment>(
+        runtimes[i]->CreateSegment("seg", 1, &handler)));
+    ASSERT_TRUE(segments.back().get() != nullptr);
+    segments.back()->Base()[0] = static_cast<char>(i % 128);
+  }
+  for (size_t i = 0; i < runtimes.size(); ++i) {
+    std::unique_ptr<AbstractSharedMemSegment> attached(
+        runtimes[i]->AttachToSegment("seg", 1, &handler));
+    ASSERT_TRUE(attached.get() != nullptr);
+    char content = attached->Base()[0];
+    EXPECT_EQ(static_cast<char>(i % 128), content) << i;
+  }
+  segments.clear();
+  for (size_t i = 0; i < runtimes.size(); ++i) {
+    runtimes[i]->DestroySegment("seg", &handler);
+  }
+}
 
 }  // namespace
 

@@ -21,8 +21,13 @@
 #ifndef PAGESPEED_KERNEL_SHAREDMEM_SHARED_MEM_CACHE_TEST_BASE_H_
 #define PAGESPEED_KERNEL_SHAREDMEM_SHARED_MEM_CACHE_TEST_BASE_H_
 
+#include <atomic>
+#include <memory>
+#include <vector>
+
 #include "pagespeed/kernel/base/abstract_shared_mem.h"
 #include "pagespeed/kernel/base/basictypes.h"
+#include "pagespeed/kernel/base/function.h"
 #include "pagespeed/kernel/base/gtest.h"
 #include "pagespeed/kernel/base/md5_hasher.h"
 #include "pagespeed/kernel/base/mem_file_system.h"
@@ -32,6 +37,7 @@
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/cache/cache_test_base.h"
 #include "pagespeed/kernel/sharedmem/shared_mem_cache.h"
+#include "pagespeed/kernel/sharedmem/shared_mem_cache_data.h"
 #include "pagespeed/kernel/sharedmem/shared_mem_test_base.h"
 #include "pagespeed/kernel/thread/slow_worker.h"
 #include "pagespeed/kernel/util/simple_stats.h"
@@ -62,6 +68,9 @@ class SharedMemCacheTestBase : public CacheTestBase {
   void TestSnapshot();
   void TestRegisterSnapshotFileCache();
   void TestCheckpointAndRestore();
+  void TestAbandonedSectorLocks();
+  void TestAbandonedLockWhileWriterWaits();
+  void TestAbandonedReader();
 
   void ResetCache();
 
@@ -76,13 +85,64 @@ class SharedMemCacheTestBase : public CacheTestBase {
   void CheckDelete(const char* key);
   void TestReaderWriterChild();
 
+  typedef std::vector<std::unique_ptr<SharedMemCacheData::Sector<kBlockSize> > >
+      SectorVector;
+
+  // Attaches to the cache's segment and each of its sectors, the way another
+  // process does. Returns false on failure.
+  bool AttachSectors(std::unique_ptr<AbstractSharedMemSegment>* segment,
+                     SectorVector* sectors);
+
+  // Takes the lock of every sector of the cache, garbles the sectors and
+  // exits without releasing the locks, like a process that terminates in the
+  // middle of cache operations.
+  void AbandonSectorLocksChild();
+
+  // Runs AbandonSectorLocksChild() and waits for it to finish.
+  void AbandonSectorLocksAndWait();
+
+  // A MockTimer that runs a callback, once, at the start of the next
+  // SleepUs(). SharedMemCache sleeps only while a writer waits for the
+  // readers of an entry, and without holding the sector's lock.
+  class SleepHookTimer : public MockTimer {
+   public:
+    SleepHookTimer(AbstractMutex* mutex, int64 time_ms)
+        : MockTimer(mutex, time_ms), sleep_hook_(NULL) {}
+    // A hook that never ran is cancelled, as Function requires.
+    virtual ~SleepHookTimer() {
+      Function* hook = sleep_hook_.exchange(NULL);
+      if (hook != NULL) {
+        hook->CallCancel();
+      }
+    }
+    void set_sleep_hook(Function* hook) {
+      Function* old = sleep_hook_.exchange(hook);
+      if (old != NULL) {
+        old->CallCancel();
+      }
+    }
+    virtual void SleepUs(int64 us) {
+      // Several threads may sleep at once in the thread environment.
+      Function* hook = sleep_hook_.exchange(NULL);
+      if (hook != NULL) {
+        hook->CallRun();
+      }
+      MockTimer::SleepUs(us);
+    }
+
+   private:
+    std::atomic<Function*> sleep_hook_;
+
+    DISALLOW_COPY_AND_ASSIGN(SleepHookTimer);
+  };
+
   scoped_ptr<SharedMemTestEnv> test_env_;
   scoped_ptr<AbstractSharedMem> shmem_runtime_;
   scoped_ptr<SharedMemCache<kBlockSize> > cache_;
   MD5Hasher hasher_;
   scoped_ptr<ThreadSystem> thread_system_;
   MockMessageHandler handler_;
-  MockTimer timer_;
+  SleepHookTimer timer_;
 
   GoogleString large_;
   GoogleString gigantic_;
@@ -174,11 +234,25 @@ TYPED_TEST_P(SharedMemCacheTestTemplate, TestCheckpointAndRestore) {
   SharedMemCacheTestBase::TestCheckpointAndRestore();
 }
 
+TYPED_TEST_P(SharedMemCacheTestTemplate, TestAbandonedSectorLocks) {
+  SharedMemCacheTestBase::TestAbandonedSectorLocks();
+}
+
+TYPED_TEST_P(SharedMemCacheTestTemplate, TestAbandonedLockWhileWriterWaits) {
+  SharedMemCacheTestBase::TestAbandonedLockWhileWriterWaits();
+}
+
+TYPED_TEST_P(SharedMemCacheTestTemplate, TestAbandonedReader) {
+  SharedMemCacheTestBase::TestAbandonedReader();
+}
+
 REGISTER_TYPED_TEST_CASE_P(SharedMemCacheTestTemplate, TestBasic, TestReinsert,
                            TestReplacement, TestReaderWriter, TestConflict,
                            TestEvict, TestSnapshot,
                            TestRegisterSnapshotFileCache,
-                           TestCheckpointAndRestore);
+                           TestCheckpointAndRestore, TestAbandonedSectorLocks,
+                           TestAbandonedLockWhileWriterWaits,
+                           TestAbandonedReader);
 
 }  // namespace net_instaweb
 

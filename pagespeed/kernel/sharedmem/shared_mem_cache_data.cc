@@ -75,6 +75,7 @@ Sector<kBlockSize>::Sector(AbstractSharedMemSegment* segment,
     : cache_entries_(cache_entries),
       data_blocks_(data_blocks),
       segment_(segment),
+      handler_(NULL),
       sector_offset_(sector_offset) {
   MemLayout layout(segment->SharedMutexSize(), cache_entries, data_blocks);
   char* base = const_cast<char*>(segment->Base()) + sector_offset;
@@ -91,9 +92,32 @@ Sector<kBlockSize>::~Sector() {
 
 template<size_t kBlockSize>
 bool Sector<kBlockSize>::Attach(MessageHandler* handler) {
-  mutex_.reset(
-      segment_->AttachToSharedMutex(sector_offset_ + sizeof(SectorHeader)));
+  handler_ = handler;
+  mutex_.reset(segment_->AttachToSharedMutexWithRecovery(
+      sector_offset_ + sizeof(SectorHeader), this));
   return (mutex_.get() != NULL);
+}
+
+template<size_t kBlockSize>
+void Sector<kBlockSize>::OnOwnerDied() {
+  // The terminated holder may have been anywhere in a critical section, e.g.
+  // half-way through relinking the LRU or the freelist, so none of the
+  // sector's structures can be trusted any more; following a corrupted list
+  // could even loop forever. Rebuilding them in place is not safe either:
+  // readers and writers in other processes may at this moment be copying
+  // data out of or into blocks of this sector without holding the lock (see
+  // the creating/open_count protocol in shared_mem_cache.cc). So the sector
+  // is retired instead. That costs its share of the cache until the server
+  // is restarted, which is cheap next to the alternative.
+  if (sector_header_->disabled == 0) {
+    sector_header_->disabled = 1;
+    if (handler_ != NULL) {
+      handler_->Message(kWarning,
+                        "SharedMemCache: the lock of a cache sector was held "
+                        "by a process or thread that terminated; the sector "
+                        "is disabled until the server is restarted");
+    }
+  }
 }
 
 template<size_t kBlockSize>
@@ -108,6 +132,8 @@ bool Sector<kBlockSize>::Initialize(MessageHandler* handler)
   if (!Attach(handler)) {
     return false;
   }
+
+  sector_header_->disabled = 0;
 
   // Initialize the LRU and the cache entry.
   sector_header_->lru_list_front = kInvalidEntry;

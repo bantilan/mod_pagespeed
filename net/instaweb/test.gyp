@@ -394,6 +394,11 @@
 #        'util/split_writer_test.cc',               # not currently needed
       ],
       'conditions': [
+        ['support_posix_shared_mem == 1', {
+          'sources': [
+            '<(DEPTH)/pagespeed/kernel/sharedmem/pthread_shared_mem_test.cc',
+          ],
+        }],
         ['support_posix_shared_mem != 1', {
           'sources!' : [
             '<(DEPTH)/pagespeed/kernel/sharedmem/pthread_shared_mem_test.cc',

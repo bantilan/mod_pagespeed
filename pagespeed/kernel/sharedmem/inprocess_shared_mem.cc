@@ -27,6 +27,7 @@
 
 #include <cstring>
 #include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -45,8 +46,10 @@ namespace net_instaweb {
 // objects passing ownership to the caller.
 class LOCKABLE InProcessSharedMem::DelegateMutex : public AbstractMutex {
  public:
-  // Does not take ownership of actual.
-  explicit DelegateMutex(AbstractMutex* actual) : actual_(actual) {}
+  // Does not take ownership of actual, which belongs to `segment`; holding
+  // the segment keeps it alive.
+  DelegateMutex(AbstractMutex* actual, std::shared_ptr<Segment> segment)
+      : actual_(actual), segment_(std::move(segment)) {}
 
   ~DelegateMutex() override {}
 
@@ -62,31 +65,30 @@ class LOCKABLE InProcessSharedMem::DelegateMutex : public AbstractMutex {
 
  private:
   AbstractMutex* actual_;
+  std::shared_ptr<Segment> segment_;
   DISALLOW_COPY_AND_ASSIGN(DelegateMutex);
 };
 
 // Likewise for segments and AttachToSegment.
+// Shares ownership of the Segment, so that destroying the segment name or
+// creating it again leaves this object usable.
 class InProcessSharedMem::DelegateSegment : public AbstractSharedMemSegment {
  public:
-  explicit DelegateSegment(AbstractSharedMemSegment* actual)
-      : actual_(actual) {}
+  explicit DelegateSegment(std::shared_ptr<Segment> actual)
+      : actual_(std::move(actual)) {}
 
   ~DelegateSegment() override {}
 
-  volatile char* Base() override { return actual_->Base(); }
+  volatile char* Base() override;
 
-  size_t SharedMutexSize() const override { return actual_->SharedMutexSize(); }
+  size_t SharedMutexSize() const override;
 
-  bool InitializeSharedMutex(size_t offset, MessageHandler* handler) override {
-    return actual_->InitializeSharedMutex(offset, handler);
-  }
+  bool InitializeSharedMutex(size_t offset, MessageHandler* handler) override;
 
-  AbstractMutex* AttachToSharedMutex(size_t offset) override {
-    return actual_->AttachToSharedMutex(offset);
-  }
+  AbstractMutex* AttachToSharedMutex(size_t offset) override;
 
  private:
-  AbstractSharedMemSegment* actual_;
+  std::shared_ptr<Segment> actual_;
   DISALLOW_COPY_AND_ASSIGN(DelegateSegment);
 };
 
@@ -114,8 +116,10 @@ class InProcessSharedMem::Segment : public AbstractSharedMemSegment {
   }
 
   AbstractMutex* AttachToSharedMutex(size_t offset) override {
-    return new DelegateMutex(*MutexPtr(offset));
+    return new DelegateMutex(*MutexPtr(offset), nullptr);
   }
+
+  AbstractMutex* MutexAt(size_t offset) { return *MutexPtr(offset); }
 
  private:
   AbstractMutex** MutexPtr(size_t offset) {
@@ -129,10 +133,28 @@ class InProcessSharedMem::Segment : public AbstractSharedMemSegment {
   DISALLOW_COPY_AND_ASSIGN(Segment);
 };
 
+volatile char* InProcessSharedMem::DelegateSegment::Base() {
+  return actual_->Base();
+}
+
+size_t InProcessSharedMem::DelegateSegment::SharedMutexSize() const {
+  return actual_->SharedMutexSize();
+}
+
+bool InProcessSharedMem::DelegateSegment::InitializeSharedMutex(
+    size_t offset, MessageHandler* handler) {
+  return actual_->InitializeSharedMutex(offset, handler);
+}
+
+AbstractMutex* InProcessSharedMem::DelegateSegment::AttachToSharedMutex(
+    size_t offset) {
+  return new DelegateMutex(actual_->MutexAt(offset), actual_);
+}
+
 InProcessSharedMem::InProcessSharedMem(ThreadSystem* thread_system)
     : thread_system_(thread_system) {}
 
-InProcessSharedMem::~InProcessSharedMem() { STLDeleteValues(&segments_); }
+InProcessSharedMem::~InProcessSharedMem() {}
 
 size_t InProcessSharedMem::SharedMutexSize() const {
   // We just store the pointer to the actual thread system mutex object inline.
@@ -141,13 +163,13 @@ size_t InProcessSharedMem::SharedMutexSize() const {
 
 AbstractSharedMemSegment* InProcessSharedMem::CreateSegment(
     const GoogleString& name, size_t size, MessageHandler* handler) {
-  Segment* seg = new Segment(thread_system_, size);
+  std::shared_ptr<Segment> seg(new Segment(thread_system_, size));
 
   SegmentMap::iterator prev = segments_.find(name);
   if (prev != segments_.end()) {
+    // Segment objects handed out for the previous one keep it alive.
     handler->Message(kError, "CreateSegment done twice for name:%s",
                      name.c_str());
-    delete prev->second;
   }
 
   segments_[name] = seg;
@@ -173,8 +195,7 @@ void InProcessSharedMem::DestroySegment(const GoogleString& name,
                                         MessageHandler* handler) {
   SegmentMap::iterator prev = segments_.find(name);
   if (prev != segments_.end()) {
-    // This deletes the actual Segment, but not any DelegateSegment.
-    delete prev->second;
+    // The Segment goes away once no DelegateSegment refers to it either.
     segments_.erase(prev);
   } else {
     handler->Message(kError, "DestroySegment unable to find segment:%s",

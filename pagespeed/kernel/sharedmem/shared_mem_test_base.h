@@ -58,6 +58,12 @@ class SharedMemTestEnv {
   // Called in a child to denote it exiting with failure
   virtual void ChildFailed() = 0;
 
+  // Whether the runtime takes over a shared mutex whose holder terminated
+  // while holding it, rather than leaving it locked forever (see
+  // AbstractSharedMemSegment::AttachToSharedMutexWithRecovery). Tests of that
+  // return early where it returns false: there, they would deadlock.
+  virtual bool RecoversAbandonedMutexes() const { return false; }
+
  private:
   DISALLOW_COPY_AND_ASSIGN(SharedMemTestEnv);
 };
@@ -92,6 +98,11 @@ class SharedMemTestBase : public testing::Test {
   // Test for mutex operation.
   void TestMutex();
 
+  // A mutex whose holder terminated while holding it must be usable again,
+  // and a recovery handler must hear about it exactly once.
+  void TestAbandonedMutex();
+  void TestAbandonedMutexRecoveryHandler();
+
  private:
   static const int kLarge = 0x1000 - 4;  // not a multiple of any page size, but
                                          // a multiple of 4.
@@ -119,6 +130,9 @@ class SharedMemTestBase : public testing::Test {
   bool IncrementStorm(AbstractSharedMemSegment* seg, size_t mutex_size);
 
   void MutexChild();
+
+  // Locks the default mutex and exits without unlocking it.
+  void AbandonMutexChild();
 
   scoped_ptr<SharedMemTestEnv> test_env_;
   scoped_ptr<AbstractSharedMem> shmem_runtime_;
@@ -171,10 +185,19 @@ TYPED_TEST_P(SharedMemTestTemplate, TestMutex) {
   SharedMemTestBase::TestMutex();
 }
 
+TYPED_TEST_P(SharedMemTestTemplate, TestAbandonedMutex) {
+  SharedMemTestBase::TestAbandonedMutex();
+}
+
+TYPED_TEST_P(SharedMemTestTemplate, TestAbandonedMutexRecoveryHandler) {
+  SharedMemTestBase::TestAbandonedMutexRecoveryHandler();
+}
+
 REGISTER_TYPED_TEST_CASE_P(SharedMemTestTemplate, TestRewrite,
                            TestRewriteReattach, TestLarge, TestDistinct,
                            TestDestroy, TestCreateTwice, TestTwoKids,
-                           TestMutex);
+                           TestMutex, TestAbandonedMutex,
+                           TestAbandonedMutexRecoveryHandler);
 
 }  // namespace net_instaweb
 

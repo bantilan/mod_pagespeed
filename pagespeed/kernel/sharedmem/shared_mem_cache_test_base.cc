@@ -23,15 +23,21 @@
 #include <unistd.h>
 #include <cstddef>                     // for size_t
 #include <map>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/logging.h"               // for Check_EQImpl, CHECK_EQ
+#include "pagespeed/kernel/base/abstract_mutex.h"
+#include "pagespeed/kernel/base/abstract_shared_mem.h"
 #include "pagespeed/kernel/base/function.h"
 #include "pagespeed/kernel/base/shared_string.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/thread_annotations.h"
 #include "pagespeed/kernel/base/thread_system.h"
 #include "pagespeed/kernel/cache/cache_interface.h"
 #include "pagespeed/kernel/sharedmem/shared_mem_cache.h"
+#include "pagespeed/kernel/sharedmem/shared_mem_cache_data.h"
 #include "pagespeed/kernel/sharedmem/shared_mem_cache_snapshot.pb.h"
 #include "pagespeed/kernel/util/platform.h"
 
@@ -293,6 +299,189 @@ void SharedMemCacheTestBase::TestEvict() {
   }
 
   small_cache->GlobalCleanup(shmem_runtime_.get(), kAltSegment, &handler_);
+}
+
+void SharedMemCacheTestBase::TestAbandonedSectorLocks() {
+  if (!test_env_->RecoversAbandonedMutexes()) {
+    // This runtime leaves an abandoned mutex locked; the takeover below
+    // would deadlock. (No GTEST_SKIP in this gtest; return instead.)
+    return;
+  }
+  CheckPut("200", "OK");
+  CheckGet("200", "OK");
+
+  // Baseline: cache setup already logs (e.g. the snapshot-registration
+  // notice); the retirements below must add exactly one warning per sector.
+  int warnings_before = handler_.MessagesOfType(kWarning);
+  ASSERT_TRUE(CreateChild(&SharedMemCacheTestBase::AbandonSectorLocksChild));
+  test_env_->WaitForChildren();
+
+  // The child terminated holding every sector's lock, so none of these may
+  // block. What the sectors hold can no longer be trusted, so from now on
+  // they act as empty: the old entry is gone and new ones are dropped.
+  CheckNotFound("200");
+  CheckPut("200", "OK");
+  CheckNotFound("200");
+  CheckDelete("200");
+
+  // Each sector reports being retired once, when its lock is first taken
+  // over. SanityCheck() in CheckDelete() has taken every sector's lock by
+  // now, and so does DumpStats().
+  cache_->DumpStats();
+  EXPECT_EQ(warnings_before + kSectors, handler_.MessagesOfType(kWarning));
+}
+
+void SharedMemCacheTestBase::TestAbandonedLockWhileWriterWaits() {
+  if (!test_env_->RecoversAbandonedMutexes()) {
+    // This runtime leaves an abandoned mutex locked; the takeover below
+    // would deadlock. (No GTEST_SKIP in this gtest; return instead.)
+    return;
+  }
+  CheckPut("200", "OK");
+
+  // Pretend that a reader is inside every entry, so that the next Put of
+  // "200" waits for it in EnsureReadyForWriting().
+  std::unique_ptr<AbstractSharedMemSegment> segment;
+  SectorVector sectors;
+  ASSERT_TRUE(AttachSectors(&segment, &sectors));
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    ScopedMutex lock(sectors[s]->mutex());
+    for (int e = 0; e < kSectorEntries; ++e) {
+      ++sectors[s]->EntryAt(e)->open_count;
+    }
+  }
+
+  // While the writer sleeps without the lock, a child takes every sector's
+  // lock and terminates. The writer must stop waiting and drop the write.
+  timer_.set_sleep_hook(
+      MakeFunction(this, &SharedMemCacheTestBase::AbandonSectorLocksAndWait));
+  CheckPut("200", "NEW");
+  CheckNotFound("200");
+}
+
+void SharedMemCacheTestBase::TestAbandonedReader() {
+  CheckPut("200", "OK");
+
+  // A reader that terminated while copying a value out leaves the entry's
+  // open count raised for good. Leave every entry in that state.
+  std::unique_ptr<AbstractSharedMemSegment> segment;
+  SectorVector sectors;
+  ASSERT_TRUE(AttachSectors(&segment, &sectors));
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    ScopedMutex lock(sectors[s]->mutex());
+    for (int e = 0; e < kSectorEntries; ++e) {
+      ++sectors[s]->EntryAt(e)->open_count;
+    }
+  }
+
+  // A write of "200" waits for that reader only for a while, then gives up
+  // on the entry. From then on the entry is skipped without waiting.
+  // Baseline: cache setup already logs (e.g. the snapshot-registration
+  // notice); the give-up below must add exactly one warning.
+  int warnings_before = handler_.MessagesOfType(kWarning);
+  CheckPut("200", "NEW");
+  CheckNotFound("200");
+  CheckPut("200", "NEWER");
+  CheckNotFound("200");
+  CheckDelete("200");
+  EXPECT_EQ(warnings_before + 1, handler_.MessagesOfType(kWarning));
+
+  // A read of the stuck entry misses and is not counted as a hit.
+  int64 hits = 0;
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    ScopedMutex lock(sectors[s]->mutex());
+    hits += sectors[s]->sector_stats()->num_get_hit;
+  }
+  CheckNotFound("200");
+  int64 hits_after = 0;
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    ScopedMutex lock(sectors[s]->mutex());
+    hits_after += sectors[s]->sector_stats()->num_get_hit;
+  }
+  EXPECT_EQ(hits, hits_after);
+
+  // If the reader leaves after all, the entry stays out of use: it keeps its
+  // block, and writes that need room evict everything around it but not it.
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    ScopedMutex lock(sectors[s]->mutex());
+    for (int e = 0; e < kSectorEntries; ++e) {
+      --sectors[s]->EntryAt(e)->open_count;
+    }
+  }
+  // 2000 values of 3 blocks each need about 3000 blocks in each of the two
+  // 2000-block sectors, and far more entries than a sector's 256, so the
+  // writes have to evict around the stuck entry.
+  for (int i = 0; i < 2000; ++i) {
+    cache_->Put(StrCat("evict", IntegerToString(i)), SharedString(large_));
+  }
+  SanityCheck();
+  CheckNotFound("200");
+  int stuck = 0;
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    ScopedMutex lock(sectors[s]->mutex());
+    for (int e = 0; e < kSectorEntries; ++e) {
+      const SharedMemCacheData::CacheEntry* entry = sectors[s]->EntryAt(e);
+      if (entry->creating) {
+        ++stuck;
+        EXPECT_NE(SharedMemCacheData::kInvalidBlock, entry->first_block);
+      }
+    }
+  }
+  EXPECT_EQ(1, stuck);
+}
+
+void SharedMemCacheTestBase::AbandonSectorLocksAndWait() {
+  EXPECT_TRUE(CreateChild(&SharedMemCacheTestBase::AbandonSectorLocksChild));
+  test_env_->WaitForChildren();
+}
+
+bool SharedMemCacheTestBase::AttachSectors(
+    std::unique_ptr<AbstractSharedMemSegment>* segment,
+    SectorVector* sectors) {
+  using SharedMemCacheData::Sector;
+  size_t sector_size = Sector<kBlockSize>::RequiredSize(
+      shmem_runtime_.get(), kSectorEntries, kSectorBlocks);
+  segment->reset(shmem_runtime_->AttachToSegment(
+      kSegment, kSectors * sector_size, &handler_));
+  if (segment->get() == NULL) {
+    return false;
+  }
+  for (int s = 0; s < kSectors; ++s) {
+    sectors->push_back(std::unique_ptr<Sector<kBlockSize> >(
+        new Sector<kBlockSize>(
+            segment->get(), s * sector_size, kSectorEntries, kSectorBlocks)));
+    if (!sectors->back()->Attach(&handler_)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void SharedMemCacheTestBase::AbandonSectorLocksChild()
+    NO_THREAD_SAFETY_ANALYSIS {
+  std::unique_ptr<AbstractSharedMemSegment> segment;
+  SectorVector sectors;
+  if (!AttachSectors(&segment, &sectors)) {
+    test_env_->ChildFailed();
+    return;
+  }
+  for (size_t s = 0; s < sectors.size(); ++s) {
+    sectors[s]->mutex()->Lock();
+    // Leave the sector as garbled as a holder killed half-way through an
+    // update might: every block list loops and every entry points out of
+    // range. A sector taken over this way must never be walked again.
+    for (int b = 0; b < kSectorBlocks; ++b) {
+      sectors[s]->SetBlockSuccessor(b, b);
+    }
+    for (int e = 0; e < kSectorEntries; ++e) {
+      SharedMemCacheData::CacheEntry* entry = sectors[s]->EntryAt(e);
+      entry->lru_prev = 0x7fffff00;
+      entry->lru_next = 0x7fffff00;
+      entry->first_block = 0x7fffff00;
+      entry->byte_size = 0x7fffff00;
+    }
+  }
+  // Return without unlocking anything.
 }
 
 void SharedMemCacheTestBase::CheckDumpsEqual(

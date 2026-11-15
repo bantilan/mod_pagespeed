@@ -39,6 +39,8 @@ Timer::~Timer() {}
 
 int64 Timer::NowMs() const { return NowUs() / 1000; }
 
+int64 Timer::NowMonotonicUs() const { return NowUs(); }
+
 void Timer::SleepMs(int64 ms) { SleepUs(ms * 1000); }
 
 }  // namespace net_instaweb

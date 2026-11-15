@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "base/logging.h"
+#include "pagespeed/kernel/base/abstract_shared_mem.h"
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/string.h"
@@ -36,7 +37,6 @@ namespace net_instaweb {
 
 class AbstractMutex;
 class AbstractSharedMem;
-class AbstractSharedMemSegment;
 class MessageHandler;
 
 namespace SharedMemCacheData {
@@ -84,7 +84,10 @@ struct SectorHeader {
   BlockNum free_list_front;
   EntryNum lru_list_front;
   EntryNum lru_list_rear;
-  int32 padding;
+
+  // Non-zero once the sector has been retired because a holder of its lock
+  // terminated while holding it. See Sector::OnOwnerDied().
+  int32 disabled;
 
   SectorStats stats;
 
@@ -119,7 +122,7 @@ struct CacheEntry {
 // methods affect only a single data structure at the time and do not
 // do anything to preserve cross-structure invariants.
 template <size_t kBlockSize>
-class Sector {
+class Sector : public AbstractSharedMemSegment::MutexRecoveryHandler {
  public:
   // Creates a wrapper to help operate on cache sectors in a given region of
   // memory with given geometry.  The sector should have had as much memory
@@ -132,7 +135,7 @@ class Sector {
   // separately, with lifetime longer than ours.
   Sector(AbstractSharedMemSegment* segment, size_t sector_offset,
          size_t cache_entries, size_t data_blocks);
-  ~Sector();
+  ~Sector() override;
 
   // This should be called from child processes to initialize client
   // state for the cache already formatted by a call to Initialize() in
@@ -156,6 +159,18 @@ class Sector {
 
   // The sector lock should be held while doing any metadata accesses.
   AbstractMutex* mutex() const LOCK_RETURNED(mutex_) { return mutex_.get(); }
+
+  // Whether the sector has been retired by OnOwnerDied(). Its directory,
+  // LRU, freelist and block successor list can then no longer be trusted,
+  // and the cache must treat the sector as empty and leave it alone.
+  bool disabled() const EXCLUSIVE_LOCKS_REQUIRED(mutex()) {
+    return sector_header_->disabled != 0;
+  }
+
+  // AbstractSharedMemSegment::MutexRecoveryHandler implementation, called
+  // with the sector lock held when it was taken over from a holder that
+  // terminated while holding it. Retires the sector.
+  void OnOwnerDied() override;
 
   // Block successor list ops.
   // ------------------------------------------------------------
@@ -274,6 +289,7 @@ class Sector {
 
   // Pointers to where various things are, and our sizes
   AbstractSharedMemSegment* segment_;
+  MessageHandler* handler_;  // Set by Attach(); may be NULL.
   std::unique_ptr<AbstractMutex> mutex_;
   SectorHeader* sector_header_;
   BlockNum* block_successors_ PT_GUARDED_BY(mutex());

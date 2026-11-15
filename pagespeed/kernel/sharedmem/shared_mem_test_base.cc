@@ -37,6 +37,19 @@ namespace net_instaweb {
 namespace {
   const char kTestSegment[] = "segment1";
   const char kOtherSegment[] = "segment2";
+
+class CountingRecoveryHandler
+    : public AbstractSharedMemSegment::MutexRecoveryHandler {
+ public:
+  CountingRecoveryHandler() : calls_(0) {}
+  virtual void OnOwnerDied() { ++calls_; }
+  int calls() const { return calls_; }
+
+ private:
+  int calls_;
+
+  DISALLOW_COPY_AND_ASSIGN(CountingRecoveryHandler);
+};
 }  // namespace
 
 SharedMemTestEnv::~SharedMemTestEnv() {
@@ -259,6 +272,73 @@ void SharedMemTestBase::MutexChild() {
     return;
   }
   mutex->Unlock();
+}
+
+void SharedMemTestBase::TestAbandonedMutex() NO_THREAD_SAFETY_ANALYSIS {
+  if (!test_env_->RecoversAbandonedMutexes()) {
+    // This runtime leaves an abandoned mutex locked; the takeover below
+    // would deadlock. (No GTEST_SKIP in this gtest; return instead.)
+    return;
+  }
+  size_t mutex_size = shmem_runtime_->SharedMutexSize();
+  scoped_ptr<AbstractSharedMemSegment> seg(
+      shmem_runtime_->CreateSegment(kTestSegment, mutex_size + 4, &handler_));
+  ASSERT_TRUE(seg.get() != NULL);
+  ASSERT_TRUE(seg->InitializeSharedMutex(0, &handler_));
+  ASSERT_TRUE(CreateChild(&SharedMemTestBase::AbandonMutexChild));
+  test_env_->WaitForChildren();
+
+  // The child terminated holding the mutex. It must be taken over rather
+  // than stay busy forever, and work normally after that.
+  scoped_ptr<AbstractMutex> mutex(seg->AttachToSharedMutex(0));
+  ASSERT_TRUE(mutex->TryLock());
+  mutex->Unlock();
+  ASSERT_TRUE(mutex->TryLock());
+  mutex->Unlock();
+  DestroyDefault();
+}
+
+void SharedMemTestBase::TestAbandonedMutexRecoveryHandler()
+    NO_THREAD_SAFETY_ANALYSIS {
+  if (!test_env_->RecoversAbandonedMutexes()) {
+    // This runtime leaves an abandoned mutex locked; the takeover below
+    // would deadlock. (No GTEST_SKIP in this gtest; return instead.)
+    return;
+  }
+  size_t mutex_size = shmem_runtime_->SharedMutexSize();
+  scoped_ptr<AbstractSharedMemSegment> seg(
+      shmem_runtime_->CreateSegment(kTestSegment, mutex_size + 4, &handler_));
+  ASSERT_TRUE(seg.get() != NULL);
+  ASSERT_TRUE(seg->InitializeSharedMutex(0, &handler_));
+  ASSERT_TRUE(CreateChild(&SharedMemTestBase::AbandonMutexChild));
+  test_env_->WaitForChildren();
+
+  CountingRecoveryHandler recovery;
+  scoped_ptr<AbstractMutex> mutex(
+      seg->AttachToSharedMutexWithRecovery(0, &recovery));
+  mutex->Lock();
+  EXPECT_EQ(1, recovery.calls());
+  mutex->Unlock();
+
+  // Later acquisitions are ordinary ones.
+  mutex->Lock();
+  mutex->Unlock();
+  EXPECT_EQ(1, recovery.calls());
+  DestroyDefault();
+}
+
+void SharedMemTestBase::AbandonMutexChild() NO_THREAD_SAFETY_ANALYSIS {
+  size_t mutex_size = shmem_runtime_->SharedMutexSize();
+  scoped_ptr<AbstractSharedMemSegment> seg(
+      shmem_runtime_->AttachToSegment(kTestSegment, mutex_size + 4, &handler_));
+  if (seg.get() == NULL) {
+    test_env_->ChildFailed();
+    return;
+  }
+  scoped_ptr<AbstractMutex> mutex(seg->AttachToSharedMutex(0));
+  mutex->Lock();
+  // Return without unlocking, so that this child process or thread
+  // terminates while holding the mutex.
 }
 
 // Returns if successful
