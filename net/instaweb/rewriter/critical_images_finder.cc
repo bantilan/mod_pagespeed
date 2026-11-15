@@ -105,6 +105,12 @@ const char CriticalImagesFinder::kCriticalImagesNotFoundCount[] =
 const char CriticalImagesFinder::kRenderedImageDimensionsProperty[] =
     "rendered_image_dimensions";
 
+const char CriticalImagesFinder::kLcpKindImg[] = "img";
+
+const char CriticalImagesFinder::kLcpKindBackground[] = "bg";
+
+const char CriticalImagesFinder::kLcpKindText[] = "text";
+
 CriticalImagesFinder::CriticalImagesFinder(const PropertyCache::Cohort* cohort,
                                            Statistics* statistics)
     : cohort_(cohort) {
@@ -179,6 +185,22 @@ const StringSet& CriticalImagesFinder::GetCssCriticalImages(
   CHECK(info != NULL);
 
   return info->css_critical_images;
+}
+
+GoogleString CriticalImagesFinder::GetLcpKind(RewriteDriver* driver) {
+  UpdateCriticalImagesSetInDriver(driver);
+  const CriticalImagesInfo* info = driver->critical_images_info();
+  CHECK(info != NULL);
+
+  return info->proto.lcp_kind();
+}
+
+GoogleString CriticalImagesFinder::GetLcpImageUrl(RewriteDriver* driver) {
+  UpdateCriticalImagesSetInDriver(driver);
+  const CriticalImagesInfo* info = driver->critical_images_info();
+  CHECK(info != NULL);
+
+  return info->proto.lcp_image_url();
 }
 
 StringSet* CriticalImagesFinder::mutable_html_critical_images(

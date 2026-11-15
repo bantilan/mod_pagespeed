@@ -33,10 +33,12 @@ namespace net_instaweb {
 // Rewriter that prioritizes the likely LCP image and applies native lazy
 // loading for later images. Hero selection prefers accepted LCP evidence
 // (the critical-images finder, fed by the LCP beacon) over document position:
-// 1) a learned-critical image takes the single hero slot wherever it appears
+// 1) a learned-critical image takes the single hero slot wherever it appears,
+//    matched by stamped hash or, for unstamped images, by loaded URL
 // 2) with no evidence at all, the first eligible image is the heuristic hero
-// 3) with evidence that matches nothing (e.g. a changed variant), the first
-//    image is left alone rather than guess-preloaded
+// 3) with evidence that matches nothing (e.g. a changed variant, or a text
+//    or background-image LCP that names no <img>), the first image is left
+//    alone rather than guess-preloaded
 // The hero gets loading="lazy" removed, fetchpriority="high", a preload hint
 // in <head>, and pagespeed_no_defer/data-pagespeed-no-defer to avoid defer
 // filters. Later images get loading="lazy" except learned-critical images

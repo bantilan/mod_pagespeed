@@ -74,6 +74,14 @@ class MockCriticalImagesFinder : public TestCriticalImagesFinder {
     rendered_images_.reset(rendered_images);
   }
 
+  void set_lcp_kind(const GoogleString& lcp_kind) {
+    lcp_kind_ = lcp_kind;
+  }
+
+  void set_lcp_image_url(const GoogleString& lcp_image_url) {
+    lcp_image_url_ = lcp_image_url;
+  }
+
   virtual bool IsCriticalImageInfoPresent(RewriteDriver* driver) {
     return true;
   }
@@ -83,6 +91,8 @@ class MockCriticalImagesFinder : public TestCriticalImagesFinder {
   scoped_ptr<StringSet> critical_images_;
   scoped_ptr<StringSet> css_critical_images_;
   scoped_ptr<RenderedImages> rendered_images_;
+  GoogleString lcp_kind_;
+  GoogleString lcp_image_url_;
   DISALLOW_COPY_AND_ASSIGN(MockCriticalImagesFinder);
 };
 

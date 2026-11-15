@@ -88,9 +88,15 @@ const char kBeaconUrlQueryParam[] = "url";
 const char kBeaconEtsQueryParam[] = "ets";
 const char kBeaconOptionsHashQueryParam[] = "oh";
 const char kBeaconLcpImageQueryParam[] = "lcp";
+const char kBeaconLcpKindQueryParam[] = "lcpk";
+const char kBeaconLcpUrlQueryParam[] = "lcpu";
 const char kBeaconRenderedDimensionsQueryParam[] = "rd";
 const char kBeaconCriticalCssQueryParam[] = "cs";
 const char kBeaconNonceQueryParam[] = "n";
+
+// Upper bound on an LCP image URL accepted from a beacon. Longer values are
+// dropped (the kind is still recorded) to bound property cache entries.
+const size_t kBeaconLcpUrlMaxLength = 2048;
 
 // Attributes that should not be automatically copied from inputs to outputs
 const char* kExcludedAttributes[] = {
@@ -129,7 +135,8 @@ class BeaconPropertyCallback : public PropertyPage {
                          StringSet* html_critical_images_set,
                          StringSet* css_critical_images_set,
                          StringSet* critical_css_selector_set,
-                         RenderedImages* rendered_images_set, StringPiece nonce)
+                         RenderedImages* rendered_images_set, StringPiece nonce,
+                         StringPiece lcp_kind, StringPiece lcp_image_url)
       : PropertyPage(kPropertyCachePage, url, options_signature_hash,
                      UserAgentMatcher::DeviceTypeSuffix(device_type),
                      request_context,
@@ -141,6 +148,8 @@ class BeaconPropertyCallback : public PropertyPage {
         critical_css_selector_set_(critical_css_selector_set),
         rendered_images_set_(rendered_images_set) {
     nonce.CopyToString(&nonce_);
+    lcp_kind.CopyToString(&lcp_kind_);
+    lcp_image_url.CopyToString(&lcp_image_url_);
   }
 
   const PropertyCache::CohortVector CohortList() {
@@ -158,7 +167,7 @@ class BeaconPropertyCallback : public PropertyPage {
     BeaconCriticalImagesFinder::UpdateCriticalImagesCacheEntry(
         html_critical_images_set_.get(), css_critical_images_set_.get(),
         rendered_images_set_.get(), nonce_, server_context_->beacon_cohort(),
-        this, server_context_->timer());
+        this, server_context_->timer(), lcp_kind_, lcp_image_url_);
     if (critical_css_selector_set_ != nullptr) {
       BeaconCriticalSelectorFinder::
           WriteCriticalSelectorsToPropertyCacheFromBeacon(
@@ -179,6 +188,8 @@ class BeaconPropertyCallback : public PropertyPage {
   std::unique_ptr<StringSet> critical_css_selector_set_;
   std::unique_ptr<RenderedImages> rendered_images_set_;
   GoogleString nonce_;
+  GoogleString lcp_kind_;
+  GoogleString lcp_image_url_;
   DISALLOW_COPY_AND_ASSIGN(BeaconPropertyCallback);
 };
 
@@ -630,6 +641,30 @@ bool ServerContext::HandleBeacon(StringPiece params, StringPiece user_agent,
     html_critical_images_set->insert(query_param_str);
   }
 
+  // LCP kind/URL fallback for unstamped and text LCP. A stamped hash implies
+  // an <img> LCP and takes precedence; the hash set is authoritative there.
+  GoogleString lcp_kind;
+  GoogleString lcp_image_url;
+  if (html_critical_images_set != nullptr) {
+    lcp_kind = CriticalImagesFinder::kLcpKindImg;
+  } else if (query_params.Lookup1Unescaped(kBeaconLcpKindQueryParam,
+                                           &query_param_str) &&
+             (query_param_str == CriticalImagesFinder::kLcpKindImg ||
+              query_param_str == CriticalImagesFinder::kLcpKindBackground ||
+              query_param_str == CriticalImagesFinder::kLcpKindText)) {
+    lcp_kind = query_param_str;
+    // An (empty) HTML set makes this beacon count toward beacon availability
+    // and decay stale image support, exactly like a stamped observation.
+    html_critical_images_set.reset(new StringSet());
+    if (query_param_str != CriticalImagesFinder::kLcpKindText &&
+        query_params.Lookup1Unescaped(kBeaconLcpUrlQueryParam,
+                                      &query_param_str) &&
+        !query_param_str.empty() &&
+        query_param_str.size() <= kBeaconLcpUrlMaxLength) {
+      lcp_image_url = query_param_str;
+    }
+  }
+
   std::unique_ptr<StringSet> critical_css_selector_set;
   if (query_params.Lookup1Unescaped(kBeaconCriticalCssQueryParam,
                                     &query_param_str)) {
@@ -662,7 +697,7 @@ bool ServerContext::HandleBeacon(StringPiece params, StringPiece user_agent,
         this, url_query_param.Spec(), options_hash_param, device_type,
         request_context, html_critical_images_set.release(),
         css_critical_images_set.release(), critical_css_selector_set.release(),
-        rendered_images.release(), nonce);
+        rendered_images.release(), nonce, lcp_kind, lcp_image_url);
     page_property_cache()->ReadWithCohorts(beacon_property_cb->CohortList(),
                                            beacon_property_cb);
   }

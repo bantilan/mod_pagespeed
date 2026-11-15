@@ -49,7 +49,8 @@ bool BeaconCriticalImagesFinder::UpdateCriticalImagesCacheEntry(
     const StringSet* css_critical_images_set,
     const RenderedImages* rendered_images_set, const StringPiece& nonce,
     const PropertyCache::Cohort* cohort, AbstractPropertyPage* page,
-    Timer* timer) {
+    Timer* timer, const StringPiece& lcp_kind,
+    const StringPiece& lcp_image_url) {
   DCHECK(cohort != nullptr);
   DCHECK(page != nullptr);
   PropertyValue* property_value =
@@ -66,6 +67,14 @@ bool BeaconCriticalImagesFinder::UpdateCriticalImagesCacheEntry(
           timer->NowMs(), nonce,
           critical_images.mutable_html_critical_image_support())) {
     return false;
+  }
+  if (!lcp_kind.empty()) {
+    lcp_kind.CopyToString(critical_images.mutable_lcp_kind());
+    if (!lcp_image_url.empty()) {
+      lcp_image_url.CopyToString(critical_images.mutable_lcp_image_url());
+    } else {
+      critical_images.clear_lcp_image_url();
+    }
   }
   return CriticalImagesFinder::UpdateAndWriteBackCriticalImagesCacheEntry(
       html_critical_images_set, css_critical_images_set, rendered_images_set,

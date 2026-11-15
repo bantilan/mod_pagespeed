@@ -408,6 +408,52 @@ TEST_F(BeaconCriticalImagesFinderTest, RebeaconBeforeTimeoutWithHeader) {
   VerifyNoBeaconing();
 }
 
+// An unstamped-LCP observation round-trips its kind and URL, and the
+// empty-set beacon still counts toward availability (decaying stale image
+// support like a stamped observation).
+TEST_F(BeaconCriticalImagesFinderTest, LcpKindAndUrlRoundTrip) {
+  Beacon();
+  StringSet empty;
+  EXPECT_TRUE(BeaconCriticalImagesFinder::UpdateCriticalImagesCacheEntry(
+      &empty, NULL, NULL, last_beacon_metadata_.nonce,
+      server_context()->beacon_cohort(), rewrite_driver()->property_page(),
+      server_context()->timer(), CriticalImagesFinder::kLcpKindBackground,
+      "http://www.example.com/bg.jpg"));
+  CriticalImages* images = GetCriticalImages();
+  EXPECT_EQ(1, images->html_critical_image_support().valid_beacons_received());
+  EXPECT_EQ(CriticalImagesFinder::kLcpKindBackground, images->lcp_kind());
+  EXPECT_EQ("http://www.example.com/bg.jpg", images->lcp_image_url());
+  EXPECT_EQ(CriticalImagesFinder::kLcpKindBackground,
+            finder_->GetLcpKind(rewrite_driver()));
+  EXPECT_EQ("http://www.example.com/bg.jpg",
+            finder_->GetLcpImageUrl(rewrite_driver()));
+}
+
+// LCP kind/URL are last-wins: a newer text observation clears a stale
+// image URL so consumers never match against it.
+TEST_F(BeaconCriticalImagesFinderTest, NewerLcpObservationReplacesKindAndUrl) {
+  Beacon();
+  StringSet empty;
+  EXPECT_TRUE(BeaconCriticalImagesFinder::UpdateCriticalImagesCacheEntry(
+      &empty, NULL, NULL, last_beacon_metadata_.nonce,
+      server_context()->beacon_cohort(), rewrite_driver()->property_page(),
+      server_context()->timer(), CriticalImagesFinder::kLcpKindImg,
+      "http://www.example.com/hero.jpg"));
+  EXPECT_EQ("http://www.example.com/hero.jpg",
+            GetCriticalImages()->lcp_image_url());
+  Beacon();
+  EXPECT_TRUE(BeaconCriticalImagesFinder::UpdateCriticalImagesCacheEntry(
+      &empty, NULL, NULL, last_beacon_metadata_.nonce,
+      server_context()->beacon_cohort(), rewrite_driver()->property_page(),
+      server_context()->timer(), CriticalImagesFinder::kLcpKindText, ""));
+  CriticalImages* images = GetCriticalImages();
+  EXPECT_EQ(CriticalImagesFinder::kLcpKindText, images->lcp_kind());
+  EXPECT_TRUE(images->lcp_image_url().empty());
+  EXPECT_EQ(CriticalImagesFinder::kLcpKindText,
+            finder_->GetLcpKind(rewrite_driver()));
+  EXPECT_TRUE(finder_->GetLcpImageUrl(rewrite_driver()).empty());
+}
+
 // Verify that sending enough beacons with the same critical image set puts us
 // into low frequency beaconing mode.
 TEST_F(BeaconCriticalImagesFinderTest, LowFrequencyBeaconing) {

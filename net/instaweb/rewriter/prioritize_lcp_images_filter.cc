@@ -259,6 +259,14 @@ void PrioritizeLcpImagesFilter::StartElementImpl(HtmlElement* element) {
       learned_critical =
           finder->IsHtmlCriticalImage(absolute_url, driver());
     }
+    if (!learned_critical) {
+      // Unstamped LCP images match by loaded URL: the beacon reports the
+      // URL the browser actually fetched, which equals the post-rewrite
+      // src this filter observes.
+      const GoogleString lcp_image_url = finder->GetLcpImageUrl(driver());
+      learned_critical =
+          !lcp_image_url.empty() && lcp_image_url == absolute_url;
+    }
   }
   if (learned_critical) {
     if (prioritized_count_ < kMaxPrioritizedImages) {

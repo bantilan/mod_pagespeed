@@ -75,6 +75,12 @@ class CriticalImagesFinder {
   // Property name for the rendered image dimensions retreived from webkit
   // render response for the page.
   static const char kRenderedImageDimensionsProperty[];
+  // Last-observed LCP kinds, stored in CriticalImages::lcp_kind: an <img>
+  // LCP, an image LCP on a non-img element (e.g. a CSS background), or a
+  // text LCP. Values match the beacon's lcpk parameter.
+  static const char kLcpKindImg[];
+  static const char kLcpKindBackground[];
+  static const char kLcpKindText[];
 
   CriticalImagesFinder(const PropertyCache::Cohort* cohort, Statistics* stats);
   virtual ~CriticalImagesFinder();
@@ -128,6 +134,15 @@ class CriticalImagesFinder {
   // image information.
   const StringSet& GetHtmlCriticalImages(RewriteDriver* driver);
   const StringSet& GetCssCriticalImages(RewriteDriver* driver);
+
+  // Last LCP kind observed by the beacon (one of the kLcpKind* values), or
+  // empty when no beacon has reported a kind yet.
+  GoogleString GetLcpKind(RewriteDriver* driver);
+  // Absolute LCP image URL for unstamped LCP images (unrewritten <img> or
+  // non-img element), or empty when unknown: stamped, text or unobserved
+  // LCP. Compare against post-rewrite absolute URLs; the beacon reports
+  // the URL the browser actually loaded.
+  GoogleString GetLcpImageUrl(RewriteDriver* driver);
 
   // Utility functions for manually setting the critical image sets. These
   // should only be used by unit tests that need to setup a specific set of

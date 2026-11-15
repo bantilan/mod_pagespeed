@@ -48,6 +48,13 @@ void MockCriticalImagesFinder::UpdateCriticalImagesSetInDriver(
     info->rendered_images_map = map;
   }
 
+  if (!lcp_kind_.empty()) {
+    info->proto.set_lcp_kind(lcp_kind_);
+  }
+  if (!lcp_image_url_.empty()) {
+    info->proto.set_lcp_image_url(lcp_image_url_);
+  }
+
   driver->set_critical_images_info(info);
 }
 

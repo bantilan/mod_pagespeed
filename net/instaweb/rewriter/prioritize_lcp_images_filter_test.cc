@@ -64,6 +64,17 @@ class PrioritizeLcpImagesFilterTest : public RewriteTestBase {
     server_context()->set_critical_images_finder(finder);
   }
 
+  // Installs LCP kind/URL evidence with an empty hash set, as reported for
+  // text, background-image, or unstamped-image LCP observations.
+  void SetLcpEvidence(const GoogleString& kind, const GoogleString& url) {
+    MockCriticalImagesFinder* finder =
+        new MockCriticalImagesFinder(statistics());
+    finder->set_critical_images(new StringSet());
+    finder->set_lcp_kind(kind);
+    finder->set_lcp_image_url(url);
+    server_context()->set_critical_images_finder(finder);
+  }
+
   // Extracts href="..." from the first auto preload link in output_.
   GoogleString FirstPreloadHref() {
     StringPiece out(output_);
@@ -217,6 +228,63 @@ TEST_F(PrioritizeLcpImagesFilterTest, EvidenceMissLeavesFirstImageAlone) {
       "<img src=\"/second.jpg\" loading=\"lazy\">"
       "</body>";
   Parse("evidence_miss_leaves_first_alone", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// An unstamped LCP image matches by loaded URL and takes the hero slot
+// wherever it appears, like hash-learned evidence.
+TEST_F(PrioritizeLcpImagesFilterTest, UnstampedLcpUrlBeatsFirstImage) {
+  SetLcpEvidence(CriticalImagesFinder::kLcpKindImg,
+                 "http://test.com/hero.jpg");
+  const GoogleString input =
+      "<head></head><body>"
+      "<img src=\"/logo.png\" width=\"120\" height=\"40\">"
+      "<img src=\"/hero.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head><link rel=\"preload\" as=\"image\" href=\"/hero.jpg\" "
+      "fetchpriority=\"high\"></head><body>"
+      "<img src=\"/logo.png\" width=\"120\" height=\"40\">"
+      "<img src=\"/hero.jpg\" fetchpriority=\"high\" "
+      "data-pagespeed-no-defer=\"1\" pagespeed_no_defer=\"1\">"
+      "</body>";
+  Parse("unstamped_lcp_url_beats_first_image", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// A text LCP names no <img>: available evidence with an empty set must not
+// produce a guess-preload for the first image.
+TEST_F(PrioritizeLcpImagesFilterTest, TextLcpSuppressesHeuristicPreload) {
+  SetLcpEvidence(CriticalImagesFinder::kLcpKindText, "");
+  const GoogleString input =
+      "<head></head><body>"
+      "<img src=\"/top.jpg\">"
+      "<img src=\"/second.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head></head><body>"
+      "<img src=\"/top.jpg\">"
+      "<img src=\"/second.jpg\" loading=\"lazy\">"
+      "</body>";
+  Parse("text_lcp_suppresses_heuristic", input);
+  EXPECT_EQ(AddHtmlBody(expected), output_);
+}
+
+// Same suppression for a background-image LCP whose URL matches no <img>.
+TEST_F(PrioritizeLcpImagesFilterTest, BackgroundLcpSuppressesHeuristicPreload) {
+  SetLcpEvidence(CriticalImagesFinder::kLcpKindBackground,
+                 "http://test.com/bg.jpg");
+  const GoogleString input =
+      "<head></head><body>"
+      "<img src=\"/top.jpg\">"
+      "<img src=\"/second.jpg\">"
+      "</body>";
+  const GoogleString expected =
+      "<head></head><body>"
+      "<img src=\"/top.jpg\">"
+      "<img src=\"/second.jpg\" loading=\"lazy\">"
+      "</body>";
+  Parse("background_lcp_suppresses_heuristic", input);
   EXPECT_EQ(AddHtmlBody(expected), output_);
 }
 

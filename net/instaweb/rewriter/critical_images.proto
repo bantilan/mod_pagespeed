@@ -28,11 +28,24 @@ package net_instaweb;
 // image information from multiple beacons, and so we store a history of
 // multiple critical image beacon responses to deal with noisy data.
 //
-// Next free id: 7
+// Next free id: 9
 message CriticalImages {
   // Ids 1-4 deleted, do not reuse.
 
   // Critical image information.
   optional CriticalKeys html_critical_image_support = 5;
   optional CriticalKeys css_critical_image_support = 6;
+
+  // Last observed LCP kind from the LCP beacon: "img" for an <img> LCP,
+  // "bg" for an image LCP on a non-img element (e.g. a CSS background),
+  // "text" for a text LCP. Last-wins across beacons; absent when no LCP
+  // beacon has reported a kind yet. A text/background kind with an empty
+  // critical set tells LCP consumers there is no <img> hero to preload.
+  optional string lcp_kind = 7;
+
+  // Absolute LCP image URL, set only when the LCP image carried no
+  // data-pagespeed-url-hash stamp (unrewritten <img> or non-img element).
+  // Cleared whenever a newer beacon reports text LCP or a stamped hash
+  // (the hash set is authoritative there). Last-wins.
+  optional string lcp_image_url = 8;
 }

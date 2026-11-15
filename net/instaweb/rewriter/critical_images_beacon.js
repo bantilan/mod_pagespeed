@@ -42,6 +42,12 @@ pagespeed.CriticalImages.Beacon_ = function(
   /** @private {string} */
   this.lcpImage_ = '';
 
+  /** @private {string} */
+  this.lcpUrl_ = '';
+
+  /** @private {string} */
+  this.lcpKind_ = '';
+
   /** @private {?Object} */
   this.lcpObserver_ = null;
 
@@ -53,17 +59,41 @@ pagespeed.CriticalImages.Beacon_ = function(
 
 
 /**
- * Records an LCP entry if it corresponds to a rewritten image hash.
+ * Records an LCP entry: the stamped hash when present, else the entry URL
+ * with the element kind (unstamped <img> vs other-element image, typically
+ * a CSS background), else a text marker. Later entries overwrite earlier
+ * ones; entries arrive in time order so the final state is the LCP.
  * @param {?Object} entry
  * @private
  */
 pagespeed.CriticalImages.Beacon_.prototype.trackLcpEntry_ = function(entry) {
-  if (!entry || !entry.element || !entry.element.getAttribute) {
+  if (!entry) {
     return;
   }
-  var key = entry.element.getAttribute('data-pagespeed-url-hash');
+  var element = entry.element;
+  var key = (element && element.getAttribute) ?
+      element.getAttribute('data-pagespeed-url-hash') : null;
   if (key) {
     this.lcpImage_ = key;
+    this.lcpUrl_ = '';
+    this.lcpKind_ = 'img';
+    return;
+  }
+  var url = entry.url || '';
+  if (url) {
+    var tag = (element && element.tagName) ?
+        String(element.tagName).toLowerCase() : '';
+    this.lcpImage_ = '';
+    this.lcpUrl_ = url;
+    // Only <img> LCP can match a document image server-side; anything else
+    // carrying a URL is a non-img (e.g. background) image LCP.
+    this.lcpKind_ = (tag == 'img') ? 'img' : 'bg';
+    return;
+  }
+  if (element) {
+    this.lcpImage_ = '';
+    this.lcpUrl_ = '';
+    this.lcpKind_ = 'text';
   }
 };
 
@@ -144,6 +174,21 @@ pagespeed.CriticalImages.Beacon_.prototype.checkCriticalImages_ = function() {
     if (data.length + lcp.length <= pagespeedutils.MAX_POST_SIZE) {
       data += lcp;
       isDataAvailable = true;
+    }
+  } else if (this.lcpKind_) {
+    // Unstamped or text LCP: the kind always fits, the URL is best-effort.
+    // Marking data available here is what lets text-LCP beacons go out at
+    // all; with no LCP entry of any kind this stays false as before.
+    var kind = '&lcpk=' + encodeURIComponent(this.lcpKind_);
+    if (data.length + kind.length <= pagespeedutils.MAX_POST_SIZE) {
+      data += kind;
+      isDataAvailable = true;
+    }
+    if (this.lcpUrl_) {
+      var lcpu = '&lcpu=' + encodeURIComponent(this.lcpUrl_);
+      if (data.length + lcpu.length <= pagespeedutils.MAX_POST_SIZE) {
+        data += lcpu;
+      }
     }
   }
 

@@ -4293,13 +4293,16 @@ pagespeed.CriticalImages.Beacon_ = function(a, b, c, d, e) {
   this.optionsHash_ = c;
   this.nonce_ = e;
   this.checkRenderedImageSizes_ = d;
-  this.lcpImage_ = "";
+  this.lcpKind_ = this.lcpUrl_ = this.lcpImage_ = "";
   this.lcpObserver_ = null;
   this.beaconSent_ = !1;
   this.setupLcpObserver_();
 };
 pagespeed.CriticalImages.Beacon_.prototype.trackLcpEntry_ = function(a) {
-  a && a.element && a.element.getAttribute && (a = a.element.getAttribute("data-pagespeed-url-hash")) && (this.lcpImage_ = a);
+  if (a) {
+    var b = a.element, c = b && b.getAttribute ? b.getAttribute("data-pagespeed-url-hash") : null;
+    c ? (this.lcpImage_ = c, this.lcpUrl_ = "", this.lcpKind_ = "img") : (a = a.url || "") ? (b = b && b.tagName ? String(b.tagName).toLowerCase() : "", this.lcpImage_ = "", this.lcpUrl_ = a, this.lcpKind_ = "img" == b ? "img" : "bg") : b && (this.lcpUrl_ = this.lcpImage_ = "", this.lcpKind_ = "text");
+  }
 };
 pagespeed.CriticalImages.Beacon_.prototype.setupLcpObserver_ = function() {
   if (window.PerformanceObserver) {
@@ -4342,6 +4345,8 @@ pagespeed.CriticalImages.Beacon_.prototype.checkCriticalImages_ = function() {
     if (this.lcpImage_) {
       var c = "&lcp=" + encodeURIComponent(this.lcpImage_);
       a.length + c.length <= pagespeedutils.MAX_POST_SIZE && (a += c, b = !0);
+    } else {
+      this.lcpKind_ && (c = "&lcpk=" + encodeURIComponent(this.lcpKind_), a.length + c.length <= pagespeedutils.MAX_POST_SIZE && (a += c, b = !0), this.lcpUrl_ && (c = "&lcpu=" + encodeURIComponent(this.lcpUrl_), a.length + c.length <= pagespeedutils.MAX_POST_SIZE && (a += c)));
     }
     this.checkRenderedImageSizes_ && (c = "&rd=" + encodeURIComponent(JSON.stringify(this.getImageRenderedMap())), a.length + c.length <= pagespeedutils.MAX_POST_SIZE && (a += c, b = !0));
     if (b || !this.lcpObserver_) {

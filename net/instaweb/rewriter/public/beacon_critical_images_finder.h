@@ -56,12 +56,18 @@ class BeaconCriticalImagesFinder : public CriticalImagesFinder {
 
   // Update the critical image entry in the property cache. This is meant to be
   // called in the beacon handler, where there is no RewriteDriver available.
+  // lcp_kind/lcp_image_url carry the beacon's LCP observation (see the
+  // kLcpKind* constants, plus the image URL when unstamped). An empty
+  // lcp_kind leaves both stored LCP fields untouched; a non-empty kind
+  // overwrites the stored kind and sets (or clears, when empty) the URL,
+  // so a newer text/stamped observation never leaves a stale URL behind.
   static bool UpdateCriticalImagesCacheEntry(
       const StringSet* html_critical_images_set,
       const StringSet* css_critical_images_set,
       const RenderedImages* rendered_images_set, const StringPiece& nonce,
       const PropertyCache::Cohort* cohort, AbstractPropertyPage* page,
-      Timer* timer);
+      Timer* timer, const StringPiece& lcp_kind = StringPiece(),
+      const StringPiece& lcp_image_url = StringPiece());
 
   bool ShouldBeacon(RewriteDriver* driver) override;
   // Check beacon interval and nonce state, and return appropriate
