@@ -1141,6 +1141,29 @@ TEST_F(ImageTest, JpegToAvifRecoversHostReapTest) {
   }
 }
 
+TEST_F(ImageTest, JpegToAvifNotClobberedByRecompressTest) {
+  // With recompress_jpeg on (as in the rewrite_images group), a successful
+  // AVIF conversion must stand alone: the JPEG-recompress fallback must
+  // not run after it (it appends, which used to produce AVIF+JPEG
+  // concatenations that the filter then dropped as no-saving).
+  if (RunningOnValgrind()) {
+    return;
+  }
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  options->convert_to_avif = true;
+  options->convert_jpeg_to_webp = true;
+  options->preferred_webp = WEBP_LOSSY;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+  options->recompress_jpeg = true;
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions("PhotoLarge.jpg", &buffer, options));
+  // output_size() runs the conversion; content_type() alone only detects.
+  EXPECT_LT(image->output_size(), image->input_size());
+  EXPECT_EQ(ContentType::kAvif, image->content_type()->type());
+  EXPECT_TRUE(AvifBytesLookComplete(image->Contents()));
+}
+
 TEST_F(ImageTest, JpegToAvifShedFallsBackTest) {
   // With the only encoder slot held, the conversion sheds to WebP without
   // spawning. No encoder runs, so no Valgrind guard needed.

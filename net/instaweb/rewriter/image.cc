@@ -1371,8 +1371,13 @@ bool ImageImpl::ComputeOutputContents() {
         }
         if (ok && image_type_ != IMAGE_AVIF) {
           image_type_ = IMAGE_WEBP;
-        } else if (MayConvert() &&
+        } else if (!ok && MayConvert() &&
                    (resized || options_->recompress_jpeg)) {
+          // NB: the !ok guard is load-bearing. Without it, a successful
+          // AVIF conversion falls through here (its type is AVIF, so the
+          // branch above never takes it) and the JPEG recompress APPENDS
+          // to the AVIF bytes, producing corrupt oversized output that the
+          // filter then drops as no-saving.
           JpegCompressionOptions jpeg_options;
           ConvertToJpegOptions(*options_.get(), &jpeg_options);
           ok = OptimizeJpegWithOptions(string_for_image, &output_contents_,
