@@ -59,6 +59,13 @@ class RewriteStats {
     return cached_output_missed_deadline_;
   }
   Variable* cached_output_misses() { return cached_output_misses_; }
+  // Resolved once here instead of per RewriteContext construction.
+  Variable* num_rewrites_abandoned_for_lock_contention() {
+    return num_rewrites_abandoned_for_lock_contention_;
+  }
+  Variable* num_deadline_alarm_invocations() {
+    return num_deadline_alarm_invocations_;
+  }
   Variable* cached_resource_fetches() { return cached_resource_fetches_; }
   Variable* failed_filter_resource_fetches() {
     return failed_filter_resource_fetches_;
@@ -135,6 +142,8 @@ class RewriteStats {
   Variable* cached_output_hits_;
   Variable* cached_output_missed_deadline_;
   Variable* cached_output_misses_;
+  Variable* num_rewrites_abandoned_for_lock_contention_;
+  Variable* num_deadline_alarm_invocations_;
   Variable* cached_resource_fetches_;
   Variable* failed_filter_resource_fetches_;
   Variable* num_cache_control_rewritable_resources_;

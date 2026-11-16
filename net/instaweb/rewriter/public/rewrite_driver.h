@@ -479,6 +479,13 @@ class RewriteDriver : public HtmlParse {
   // Return the options used for this RewriteDriver.
   const RewriteOptions* options() const { return options_.get(); }
 
+  // lock_hasher()->Hash(options()->signature()), memoized. Every
+  // RewriteContext in a request hashes the same frozen signature for its
+  // partition key; this computes it once per distinct signature instead.
+  // Returned by value: the bytes are tiny and the copy keeps callers safe
+  // against concurrent recomputation.
+  GoogleString partition_signature_hash();
+
   // Override HtmlParse's StartParseId to propagate any required options.
   // Note that if this (or other variants) returns true you should use
   // FinishParse(), otherwise Cleanup().
@@ -1617,6 +1624,14 @@ class RewriteDriver : public HtmlParse {
   SrcSetSlotCollectionSet srcset_collections_;
 
   std::unique_ptr<RewriteOptions> options_;
+
+  // Memoized lock_hasher()->Hash(options signature) for partition keys.
+  // Recomputed only when the signature string itself differs, so pooled
+  // drivers and option replacements stay correct without explicit hooks.
+  // Guarded by partition_hash_mutex_ (set up in SetServerContext).
+  GoogleString cached_partition_signature_;
+  GoogleString cached_partition_signature_hash_;
+  std::unique_ptr<AbstractMutex> partition_hash_mutex_;
 
   RewriteDriverPool* controlling_pool_;  // or NULL if this has custom options.
 

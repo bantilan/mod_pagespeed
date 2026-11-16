@@ -19,6 +19,7 @@
 
 #include "net/instaweb/rewriter/public/rewrite_stats.h"
 
+#include "net/instaweb/rewriter/public/rewrite_context.h"
 #include "net/instaweb/rewriter/public/server_context.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/stl_util.h"
@@ -159,6 +160,11 @@ RewriteStats::RewriteStats(bool has_waveforms, Statistics* stats,
       cached_output_missed_deadline_(
           stats->GetVariable(kCachedOutputMissedDeadline)),
       cached_output_misses_(stats->GetVariable(kCachedOutputMisses)),
+      num_rewrites_abandoned_for_lock_contention_(
+          stats->GetVariable(
+              RewriteContext::kNumRewritesAbandonedForLockContention)),
+      num_deadline_alarm_invocations_(
+          stats->GetVariable(RewriteContext::kNumDeadlineAlarmInvocations)),
       cached_resource_fetches_(stats->GetVariable(kResourceFetchesCached)),
       failed_filter_resource_fetches_(
           stats->GetVariable(kResourceFetchConstructFailures)),

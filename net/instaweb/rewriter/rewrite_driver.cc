@@ -914,6 +914,7 @@ void RewriteDriver::SetServerContext(ServerContext* server_context)
     NO_THREAD_SAFETY_ANALYSIS {
   DCHECK(server_context_ == NULL);
   server_context_ = server_context;
+  partition_hash_mutex_.reset(server_context->thread_system()->NewMutex());
   scheduler_ = server_context_->scheduler();
   ref_counts_.set_mutex(rewrite_mutex());
   set_timer(server_context->timer());
@@ -951,6 +952,17 @@ void RewriteDriver::SetServerContext(ServerContext* server_context)
   // These filters are needed to rewrite and trim urls in modified CSS files.
   domain_rewriter_.reset(new DomainRewriteFilter(this, statistics()));
   url_trim_filter_.reset(new UrlLeftTrimFilter(this, statistics()));
+}
+
+GoogleString RewriteDriver::partition_signature_hash() {
+  ScopedMutex lock(partition_hash_mutex_.get());
+  const GoogleString& signature = options_->signature();
+  if (cached_partition_signature_ != signature) {
+    cached_partition_signature_ = signature;
+    cached_partition_signature_hash_ =
+        server_context_->lock_hasher()->Hash(signature);
+  }
+  return cached_partition_signature_hash_;
 }
 
 PropertyCache::CohortVector RewriteDriver::GetCohortList(

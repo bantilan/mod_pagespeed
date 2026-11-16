@@ -93,6 +93,19 @@ const int kOtherDependencyPartitionIndex = -1;
 // How many inputs of a resource fetch are loaded at the same time.
 const int kMaxConcurrentFetchInputs = 4;
 
+// Resolves a per-context statistic, preferring the RewriteStats-cached
+// pointer. Decoding/stub server contexts carry statistics but no
+// RewriteStats; those resolve from their statistics exactly as before.
+Variable* ContextVariable(RewriteDriver* driver,
+                          Variable* (RewriteStats::*getter)(),
+                          const char* name) {
+  RewriteStats* rewrite_stats = driver->server_context()->rewrite_stats();
+  if (rewrite_stats != nullptr) {
+    return (rewrite_stats->*getter)();
+  }
+  return driver->statistics()->GetVariable(name);
+}
+
 }  // namespace
 
 // Manages freshening of all the inputs of the given context. If any of the
@@ -697,8 +710,9 @@ class RewriteContext::FetchContext {
         num_inputs_started_(0),
         input_bytes_(0),
         num_deadline_alarm_invocations_(
-            rewrite_context_->Driver()->statistics()->GetVariable(
-                kNumDeadlineAlarmInvocations)) {}
+            ContextVariable(rewrite_context_->Driver(),
+                            &RewriteStats::num_deadline_alarm_invocations,
+                            kNumDeadlineAlarmInvocations)) {}
 
   static void InitStats(Statistics* stats) {
     stats->AddVariable(kNumDeadlineAlarmInvocations);
@@ -1074,8 +1088,10 @@ RewriteContext::RewriteContext(RewriteDriver* driver, RewriteContext* parent,
       rewrite_uncacheable_(false),
       dependent_request_trace_(nullptr),
       num_rewrites_abandoned_for_lock_contention_(
-          Driver()->statistics()->GetVariable(
-              kNumRewritesAbandonedForLockContention)) {
+          ContextVariable(Driver(),
+                          &RewriteStats::
+                              num_rewrites_abandoned_for_lock_contention,
+                          kNumRewritesAbandonedForLockContention)) {
   DCHECK((driver == nullptr) !=
          (parent == nullptr));  // Exactly one is non-NULL.
   partitions_ = std::make_unique<OutputPartitions>();
@@ -1287,7 +1303,7 @@ void RewriteContext::SetPartitionKey() {
   StringVector url_keys;
   const Hasher* hasher = FindServerContext()->lock_hasher();
   GoogleString url_key;
-  GoogleString signature = hasher->Hash(Options()->signature());
+  GoogleString signature = Driver()->partition_signature_hash();
   GoogleString suffix = CacheKeySuffix();
 
   if (num_slots() == 1) {
