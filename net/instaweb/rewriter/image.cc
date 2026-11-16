@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -432,6 +433,7 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
   int64 child_cpu_ms = 0;
   bool child_reaped = false;
   bool was_timed_out = false;
+  bool echild_recoverable = false;
   if (ok) {
     int clamped_quality = std::max(0, std::min(100, configured_quality));
     int cq_level = 63 - ((clamped_quality * 63) / 100);
@@ -537,9 +539,16 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
         if (WIFEXITED(wait_status)) {
           exit_status = WEXITSTATUS(wait_status);
         }
+      } else if (got < 0 && errno == ECHILD && !was_timed_out) {
+        // The host reaped our encoder first (its SIGCHLD handler beat our
+        // blocked wait), so no exit status or rusage is available. The
+        // child is definitively dead; recover by validating its output
+        // below, since only a finished encoder writes plausible AVIF to
+        // its unique output path. Not applied past our own kill, where a
+        // torn write must never validate.
+        echild_recoverable = true;
+        PS_LOG_INFO(handler, "AVIF encoder reaped by host; validating output");
       } else if (got < 0) {
-        // Defensive: with a blocked waiter this should not happen, but a
-        // host that reaps children out from under us surfaces as ECHILD.
         PS_LOG_WARN(handler, "AVIF encoder wait failed: errno=%d", errno);
       }
       if (exit_status == 0) {
@@ -556,7 +565,7 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
       }
       wall_elapsed_ms = (timer->NowMonotonicUs() - start_us) / 1000;
     }
-    ok = (exit_status == 0);
+    ok = (exit_status == 0) || echild_recoverable;
     if (!ok) {
       PS_LOG_WARN(handler, "AVIF encoder failed: spawn=%d exit=%d",
                   spawn_status, exit_status);
@@ -585,6 +594,11 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
       }
       fclose(output_file);
       if (output_avif->empty()) {
+        ok = false;
+      } else if (echild_recoverable && !AvifBytesLookComplete(*output_avif)) {
+        // Recovered without an exit status: require plausible bytes.
+        PS_LOG_WARN(handler, "AVIF encoder output failed validation");
+        output_avif->clear();
         ok = false;
       }
     }
@@ -640,6 +654,18 @@ void ReleaseAvifEncoderSlot() {
   int32 remaining =
       g_avif_encoders_in_flight.NoBarrierIncrement(-1);
   DCHECK_GE(remaining, 0);
+}
+
+bool AvifBytesLookComplete(const StringPiece& data) {
+  // An ftyp box (8 bytes) plus major brand (4 bytes), with payload after.
+  // Real avifenc stills are kilobytes; anything this small is a stub.
+  static const size_t kMinAvifBytes = 32;
+  if (data.size() <= kMinAvifBytes) {
+    return false;
+  }
+  const char* bytes = data.data();
+  return memcmp(bytes + 4, "ftyp", 4) == 0 &&
+         memcmp(bytes + 8, "avif", 4) == 0;
 }
 
 // TODO(jmaessen): Put ImageImpl into private namespace.

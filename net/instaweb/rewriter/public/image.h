@@ -307,6 +307,16 @@ Image* BlankImageWithOptions(int width, int height, ImageType type,
 bool AcquireAvifEncoderSlot(int max_concurrent);
 void ReleaseAvifEncoderSlot();
 
+// True when bytes look like a complete AVIF file: larger than a bare
+// header with a valid ftyp box carrying the AVIF major brand. Used to
+// recover conversions whose encoder was reaped by the host process
+// (ECHILD), where no exit status is available; nothing else ever writes
+// the encoder's unique output path, so plausible bytes mean the encoder
+// finished. This is a smoke check, not a container parse: a crash torn
+// exactly across the header could still pass, exactly as in the
+// pre-deadline code path, which trusted the file on any exit.
+bool AvifBytesLookComplete(const StringPiece& data);
+
 }  // namespace net_instaweb
 
 #endif  // NET_INSTAWEB_REWRITER_PUBLIC_IMAGE_H_

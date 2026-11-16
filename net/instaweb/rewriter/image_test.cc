@@ -22,7 +22,10 @@
 #include "net/instaweb/rewriter/public/image.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
+#include <sys/wait.h>
+#include <thread>
 
 #include "net/instaweb/rewriter/cached_result.pb.h"
 #include "net/instaweb/rewriter/image_testing_peer.h"
@@ -276,6 +279,10 @@ class AvifVarChecker {
     EXPECT_EQ(failure, avif_vars_.failure_wall_ms->Count());
     EXPECT_EQ(child_cpu, avif_vars_.child_cpu_ms->Count());
   }
+
+  // Child-CPU samples exist only when this process reaped the encoder
+  // itself; a host (or thief) that reaps first leaves no rusage behind.
+  int child_cpu_count() const { return avif_vars_.child_cpu_ms->Count(); }
 
  private:
   scoped_ptr<ThreadSystem> thread_system_;
@@ -1068,6 +1075,70 @@ TEST_F(ImageTest, JpegToAvifRecordsMetricsTest) {
   image->output_size();
   EXPECT_EQ(ContentType::kAvif, image->content_type()->type());
   avif_vars.Test(0, 0, 1 /* success */, 0, 1 /* child_cpu */);
+}
+
+TEST_F(ImageTest, AvifBytesLookCompleteTest) {
+  // Synthetic contract checks (no encoder needed).
+  EXPECT_FALSE(AvifBytesLookComplete(""));
+  EXPECT_FALSE(AvifBytesLookComplete("xxxxftypavif"));
+  GoogleString short_valid("\0\0\0\0" "ftyp" "avif", 12);
+  EXPECT_FALSE(AvifBytesLookComplete(short_valid));
+  GoogleString bad_magic(64, 'x');
+  EXPECT_FALSE(AvifBytesLookComplete(bad_magic));
+  GoogleString wrong_brand("\0\0\0\0" "ftyp" "mif1", 12);
+  wrong_brand.append(64, 'x');
+  EXPECT_FALSE(AvifBytesLookComplete(wrong_brand));
+  GoogleString valid("\0\0\0\0" "ftyp" "avif", 12);
+  valid.append(64, 'x');
+  EXPECT_TRUE(AvifBytesLookComplete(valid));
+
+  // Tie the helper to reality: real encoder output must validate.
+  if (RunningOnValgrind()) {
+    return;
+  }
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  options->convert_to_avif = true;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+  image->output_size();
+  ASSERT_EQ(ContentType::kAvif, image->content_type()->type());
+  EXPECT_TRUE(AvifBytesLookComplete(image->Contents()));
+}
+
+TEST_F(ImageTest, JpegToAvifRecoversHostReapTest) {
+  // If the host reaps the encoder first (ECHILD for us), the conversion
+  // must still succeed by validating the encoder's output file. A thief
+  // thread spinning waitpid(-1) simulates the host reaper; whether or not
+  // it wins the race in a given run, the output must be AVIF with no
+  // timeout, shed, or failure recorded. (Child-CPU is recorded only when
+  // this process wins the reap, so it is not asserted.)
+  if (RunningOnValgrind()) {
+    return;
+  }
+  for (int round = 0; round < 3; ++round) {
+    Image::CompressionOptions* options = new Image::CompressionOptions;
+    AvifVarChecker avif_vars(options);
+    options->convert_to_avif = true;
+    options->webp_quality = 75;
+    options->jpeg_quality = 85;
+    GoogleString buffer;
+    ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+    std::atomic<bool> stop_thief(false);
+    std::thread thief([&stop_thief]() {
+      while (!stop_thief.load()) {
+        int status = 0;
+        waitpid(-1, &status, WNOHANG);
+      }
+    });
+    image->output_size();
+    stop_thief.store(true);
+    thief.join();
+    EXPECT_EQ(ContentType::kAvif, image->content_type()->type());
+    avif_vars.Test(0 /* timeout */, 0 /* shed */, 1 /* success */,
+                   0 /* failure */, avif_vars.child_cpu_count());
+  }
 }
 
 TEST_F(ImageTest, JpegToAvifShedFallsBackTest) {
