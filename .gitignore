@@ -8,6 +8,12 @@ hooks.timestamp
 build/gyp_helper.pyc
 build/landmine_utils.pyc
 out/
+# Build outputs of pagespeed/automatic merge (write-only transcripts/archive).
+pagespeed/automatic/merge.log
+pagespeed/automatic/rename.log
+pagespeed/automatic/*.a
+pagespeed/automatic/*.a.dirty
+pagespeed/automatic/*.o
 tools/closure/
 !devel/Makefile
 release/

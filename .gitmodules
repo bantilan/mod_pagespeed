@@ -14,6 +14,7 @@
 [submodule "third_party/aprutil/src"]
 	path = third_party/aprutil/src
 	url = https://github.com/apache/apr-util.git
+	ignore = untracked
 [submodule "third_party/re2/src"]
 	path = third_party/re2/src
 	url = https://github.com/google/re2.git
@@ -40,6 +41,7 @@
 [submodule "third_party/apr/src"]
 	path = third_party/apr/src
 	url = https://github.com/apache/apr.git
+	ignore = untracked
 [submodule "third_party/optipng"]
 	path = third_party/optipng
 	url = https://github.com/apache/incubator-pagespeed-optipng.git
@@ -53,6 +55,7 @@
 [submodule "third_party/grpc/src"]
 	path = third_party/grpc/src
 	url = https://github.com/grpc/grpc.git
+	ignore = untracked
 [submodule "third_party/protobuf/src"]
 	path = third_party/protobuf/src
 	url = https://github.com/google/protobuf.git
@@ -64,6 +67,7 @@
 [submodule "third_party/boringssl/src"]
 	path = third_party/boringssl/src
 	url = https://boringssl.googlesource.com/boringssl.git
+	ignore = untracked
 [submodule "third_party/chromium/src/base"]
 	path = third_party/chromium/src/base
 	url = https://chromium.googlesource.com/chromium/src/base
