@@ -21,6 +21,7 @@
 #define PAGESPEED_KERNEL_HTML_HTML_KEYWORDS_H_
 
 #include <algorithm>
+#include <bitset>
 #include <vector>
 
 #include "pagespeed/kernel/base/basictypes.h"
@@ -92,18 +93,32 @@ class HtmlKeywords {
   // if a StartElement for tag k2 is encountered.  E.g. <tr><tbody> should
   // be transformed to <tr></tr><tbody>.
   static bool IsAutoClose(HtmlName::Keyword k1, HtmlName::Keyword k2) {
-    return std::binary_search(singleton_->auto_close_.begin(),
-                              singleton_->auto_close_.end(),
-                              MakeKeywordPair(k1, k2));
+    int i1 = static_cast<int>(k1);
+    int i2 = static_cast<int>(k2);
+    if (((i1 | i2) & ~0xFF) != 0) {
+      // Out of bitset range: fall back to the vector so behavior stays
+      // exact no matter how the enum evolves.
+      return std::binary_search(singleton_->auto_close_.begin(),
+                                singleton_->auto_close_.end(),
+                                MakeKeywordPair(k1, k2));
+    }
+    return singleton_->auto_close_bits_.test((i1 << 8) | i2);
   }
 
   // Determines whether an open tag of type k1 should be automatically closed
   // if an EndElement for tag k2 is encountered.  E.g. <tbody></table> should
   // be transformed into <tbody></tbody></table>.
   static bool IsContained(HtmlName::Keyword k1, HtmlName::Keyword k2) {
-    return std::binary_search(singleton_->contained_.begin(),
-                              singleton_->contained_.end(),
-                              MakeKeywordPair(k1, k2));
+    int i1 = static_cast<int>(k1);
+    int i2 = static_cast<int>(k2);
+    if (((i1 | i2) & ~0xFF) != 0) {
+      // Out of bitset range: fall back to the vector so behavior stays
+      // exact no matter how the enum evolves.
+      return std::binary_search(singleton_->contained_.begin(),
+                                singleton_->contained_.end(),
+                                MakeKeywordPair(k1, k2));
+    }
+    return singleton_->contained_bits_.test((i1 << 8) | i2);
   }
 
   // Determines whether the specified HTML keyword is closed automatically
@@ -112,8 +127,14 @@ class HtmlKeywords {
   // the distinction with tags which are *implicitly* closed in HTML such as
   // <img> and <br>.
   static bool IsOptionallyClosedTag(HtmlName::Keyword keyword) {
-    return std::binary_search(singleton_->optionally_closed_.begin(),
-                              singleton_->optionally_closed_.end(), keyword);
+    int i = static_cast<int>(keyword);
+    if ((i & ~0xFF) != 0) {
+      // Out of bitset range: fall back to the vector so behavior stays
+      // exact no matter how the enum evolves.
+      return std::binary_search(singleton_->optionally_closed_.begin(),
+                                singleton_->optionally_closed_.end(), keyword);
+    }
+    return singleton_->optionally_closed_bits_.test(i);
   }
 
   // Wraps text in a pre-tag using the specified style arguments and sends it
@@ -126,6 +147,10 @@ class HtmlKeywords {
  private:
   typedef int32 KeywordPair;  // Encoded via shift & OR.
   typedef std::vector<KeywordPair> KeywordPairVec;
+  // Bitset indexed by (k1 << 8) | k2. All keyword values must fit a byte;
+  // lookups range-guard regardless (see IsAutoClose/IsContained).
+  typedef std::bitset<256 * 256> KeywordPairBits;
+  typedef std::bitset<256> KeywordBits;
   typedef std::vector<HtmlName::Keyword> KeywordVec;
 
   HtmlKeywords();
@@ -167,16 +192,17 @@ class HtmlKeywords {
   // E.g. if k1_list="a b" and k2_list="c d", then this adds (a,c),
   // (b,c), (a,d), (b,d) to kmap.
   void AddCrossProduct(const StringPiece& k1_list, const StringPiece& k2_list,
-                       KeywordPairVec* kmap);
+                       KeywordPairVec* kmap, KeywordPairBits* bits);
   void AddAutoClose(const StringPiece& k1_list, const StringPiece& k2_list) {
-    AddCrossProduct(k1_list, k2_list, &auto_close_);
+    AddCrossProduct(k1_list, k2_list, &auto_close_, &auto_close_bits_);
   }
   void AddContained(const StringPiece& k1_list, const StringPiece& k2_list) {
-    AddCrossProduct(k1_list, k2_list, &contained_);
+    AddCrossProduct(k1_list, k2_list, &contained_, &contained_bits_);
   }
 
   // Adds every space-delimited token in klist to kset.
-  void AddToSet(const StringPiece& klist, KeywordVec* kset);
+  void AddToSet(const StringPiece& klist, KeywordVec* kset,
+                KeywordBits* bits);
 
   static HtmlKeywords* singleton_;
 
@@ -209,6 +235,14 @@ class HtmlKeywords {
   KeywordPairVec auto_close_;
   KeywordPairVec contained_;
   KeywordVec optionally_closed_;
+
+  // Bitsets mirroring auto_close_/contained_. Lookups test bits (O(1))
+  // instead of searching the vectors; both representations are filled
+  // together in AddCrossProduct so they cannot diverge.
+  KeywordPairBits auto_close_bits_;
+  KeywordPairBits contained_bits_;
+  // Same idea for optionally_closed_: single-keyword index.
+  KeywordBits optionally_closed_bits_;
 
   DISALLOW_COPY_AND_ASSIGN(HtmlKeywords);
 };

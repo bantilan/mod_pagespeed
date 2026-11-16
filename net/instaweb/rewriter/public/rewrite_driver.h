@@ -31,6 +31,7 @@
 #include "net/instaweb/http/public/url_async_fetcher.h"
 #include "net/instaweb/rewriter/cached_result.pb.h"
 #include "net/instaweb/rewriter/public/critical_images_finder.h"
+#include "net/instaweb/rewriter/public/cacheable_resource_base.h"
 #include "net/instaweb/rewriter/public/critical_selector_finder.h"
 #include "net/instaweb/rewriter/public/csp.h"
 #include "net/instaweb/rewriter/public/downstream_cache_purger.h"
@@ -485,6 +486,11 @@ class RewriteDriver : public HtmlParse {
   // Returned by value: the bytes are tiny and the copy keeps callers safe
   // against concurrent recomputation.
   GoogleString partition_signature_hash();
+
+  // Memoized per-prefix resource statistics. Each distinct prefix pays one
+  // name lookup instead of one per resource construction.
+  void GetResourceStats(const GoogleString& prefix,
+                        CacheableResourceBase::StatSet* out);
 
   // Override HtmlParse's StartParseId to propagate any required options.
   // Note that if this (or other variants) returns true you should use
@@ -1632,6 +1638,12 @@ class RewriteDriver : public HtmlParse {
   GoogleString cached_partition_signature_;
   GoogleString cached_partition_signature_hash_;
   std::unique_ptr<AbstractMutex> partition_hash_mutex_;
+
+  // See GetResourceStats. Entries are appended under the mutex and never
+  // removed; prefixes are fixed per resource type (two in practice).
+  std::vector<std::pair<GoogleString, CacheableResourceBase::StatSet> >
+      resource_stats_;
+  std::unique_ptr<AbstractMutex> resource_stat_mutex_;
 
   RewriteDriverPool* controlling_pool_;  // or NULL if this has custom options.
 

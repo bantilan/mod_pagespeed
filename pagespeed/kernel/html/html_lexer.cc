@@ -821,20 +821,24 @@ void HtmlLexer::FinishParse() {
 
 void HtmlLexer::MakeAttribute(bool has_value) {
   if (!discard_until_start_state_for_error_recovery_) {
-    html_parse_->message_handler()->Check(element_ != nullptr,
-                                          "element_ == NULL");
+    if (element_ == nullptr) {
+      html_parse_->message_handler()->Check(false, "element_ == NULL");
+    }
   }
   HtmlName name = html_parse_->MakeName(attr_name_);
   attr_name_.clear();
   const char* value = nullptr;
-  html_parse_->message_handler()->Check(has_value == has_attr_value_,
-                                        "has_value != has_attr_value_");
+  if (!(has_value == has_attr_value_)) {
+    html_parse_->message_handler()->Check(false,
+                                          "has_value != has_attr_value_");
+  }
   if (has_value) {
     value = attr_value_.c_str();
     has_attr_value_ = false;
   } else {
-    html_parse_->message_handler()->Check(attr_value_.empty(),
-                                          "!attr_value_.empty()");
+    if (!attr_value_.empty()) {
+      html_parse_->message_handler()->Check(false, "!attr_value_.empty()");
+    }
   }
 
   if (!discard_until_start_state_for_error_recovery_) {

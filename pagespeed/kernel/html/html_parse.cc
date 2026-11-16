@@ -102,8 +102,9 @@ HtmlEventListIterator HtmlParse::Last() {
 void HtmlParse::CheckParentFromAddEvent(HtmlEvent* event) {
   HtmlNode* node = event->GetNode();
   if (node != nullptr) {
-    message_handler_->Check(lexer_->Parent() == node->parent(),
-                            "lexer_->Parent() != node->parent()");
+    if (!(lexer_->Parent() == node->parent())) {
+      message_handler_->Check(false, "lexer_->Parent() != node->parent()");
+    }
     DCHECK_EQ(lexer_->Parent(), node->parent()) << url_;
   }
 }
@@ -123,7 +124,9 @@ void HtmlParse::AddEvent(HtmlEvent* event) {
   HtmlLeafNode* leaf = event->GetLeafNode();
   if (leaf != nullptr) {
     leaf->set_iter(Last());
-    message_handler_->Check(IsRewritable(leaf), "!IsRewritable(leaf)");
+    if (!IsRewritable(leaf)) {
+      message_handler_->Check(false, "!IsRewritable(leaf)");
+    }
   }
   if (!event_listeners_.empty()) {
     running_filters_ = true;
@@ -503,25 +506,33 @@ void HtmlParse::SanityCheck() {
     HtmlElement* start_element = event->GetElementIfStartEvent();
     if (start_element != nullptr) {
       CheckEventParent(event, expect_parent, start_element->parent());
-      message_handler_->Check(start_element->begin() == current_,
-                              "start_element->begin() != current_");
-      message_handler_->Check(start_element->live(), "!start_element->live()");
+      if (!(start_element->begin() == current_)) {
+        message_handler_->Check(false, "start_element->begin() != current_");
+      }
+      if (!start_element->live()) {
+        message_handler_->Check(false, "!start_element->live()");
+      }
       element_stack.push_back(start_element);
       expect_parent = start_element;
     } else {
       HtmlElement* end_element = event->GetElementIfEndEvent();
       if (end_element != nullptr) {
-        message_handler_->Check(end_element->end() == current_,
-                                "end_element->end() != current_");
-        message_handler_->Check(end_element->live(), "!end_element->live()");
+        if (!(end_element->end() == current_)) {
+          message_handler_->Check(false, "end_element->end() != current_");
+        }
+        if (!end_element->live()) {
+          message_handler_->Check(false, "!end_element->live()");
+        }
         if (!element_stack.empty()) {
           // The element stack can be empty on End can happen due
           // to this sequence:
           //   <tag1>
           //     FLUSH
           //   </tag1>   <!-- tag1 close seen with empty stack -->
-          message_handler_->Check(element_stack.back() == end_element,
-                                  "element_stack.back() != end_element");
+          if (!(element_stack.back() == end_element)) {
+            message_handler_->Check(false,
+                                    "element_stack.back() != end_element");
+          }
           element_stack.pop_back();
         }
         expect_parent = element_stack.empty() ? nullptr : element_stack.back();
@@ -531,9 +542,13 @@ void HtmlParse::SanityCheck() {
         // a start_element.
         HtmlLeafNode* leaf_node = event->GetLeafNode();
         if (leaf_node != nullptr) {  // Start/EndDocument are not leaf nodes
-          message_handler_->Check(leaf_node->live(), "!leaf_node->live()");
-          message_handler_->Check(leaf_node->end() == current_,
-                                  "leaf_node->end() != current_");
+          if (!leaf_node->live()) {
+            message_handler_->Check(false, "!leaf_node->live()");
+          }
+          if (!(leaf_node->end() == current_)) {
+            message_handler_->Check(false,
+                                    "leaf_node->end() != current_");
+          }
           CheckEventParent(event, expect_parent, leaf_node->parent());
         }
       }

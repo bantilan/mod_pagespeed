@@ -855,6 +855,8 @@ CssFilter::CssFilter(RewriteDriver* driver, CacheExtender* cache_extender,
     : RewriteFilter(driver),
       in_style_element_(false),
       style_element_(nullptr),
+      rewrite_style_attributes_(false),
+      rewrite_style_attributes_with_url_(false),
       cache_extender_(cache_extender),
       image_rewrite_filter_(image_rewriter),
       image_combiner_(image_combiner) {
@@ -949,6 +951,10 @@ void CssFilter::AddRelatedOptions(StringPieceVector* target) {
 void CssFilter::StartDocumentImpl() {
   in_style_element_ = false;
   meta_tag_charset_.clear();
+  rewrite_style_attributes_ =
+      driver()->options()->Enabled(RewriteOptions::kRewriteStyleAttributes);
+  rewrite_style_attributes_with_url_ = driver()->options()->Enabled(
+      RewriteOptions::kRewriteStyleAttributesWithUrl);
 }
 
 void CssFilter::StartElementImpl(HtmlElement* element) {
@@ -960,10 +966,9 @@ void CssFilter::StartElementImpl(HtmlElement* element) {
   } else if (driver()->can_rewrite_resources()) {
     bool do_rewrite = false;
     bool check_for_url = false;
-    if (driver()->options()->Enabled(RewriteOptions::kRewriteStyleAttributes)) {
+    if (rewrite_style_attributes_) {
       do_rewrite = true;
-    } else if (driver()->options()->Enabled(
-                   RewriteOptions::kRewriteStyleAttributesWithUrl)) {
+    } else if (rewrite_style_attributes_with_url_) {
       check_for_url = true;
     }
 

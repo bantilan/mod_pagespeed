@@ -186,6 +186,12 @@ class CssFilter : public RewriteFilter {
   // This is meaningless if in_style_element_ is false:
   HtmlElement* style_element_;  // The element we are in.
 
+  // Per-parse snapshots of style-attribute options, resolved once in
+  // StartDocumentImpl instead of per element. Options are frozen for the
+  // parse, so the snapshot cannot go stale mid-document.
+  bool rewrite_style_attributes_;
+  bool rewrite_style_attributes_with_url_;
+
   // The charset extracted from a meta tag, if any.
   GoogleString meta_tag_charset_;
 

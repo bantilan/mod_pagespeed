@@ -915,6 +915,7 @@ void RewriteDriver::SetServerContext(ServerContext* server_context)
   DCHECK(server_context_ == NULL);
   server_context_ = server_context;
   partition_hash_mutex_.reset(server_context->thread_system()->NewMutex());
+  resource_stat_mutex_.reset(server_context->thread_system()->NewMutex());
   scheduler_ = server_context_->scheduler();
   ref_counts_.set_mutex(rewrite_mutex());
   set_timer(server_context->timer());
@@ -963,6 +964,22 @@ GoogleString RewriteDriver::partition_signature_hash() {
         server_context_->lock_hasher()->Hash(signature);
   }
   return cached_partition_signature_hash_;
+}
+
+void RewriteDriver::GetResourceStats(
+    const GoogleString& prefix, CacheableResourceBase::StatSet* out) {
+  ScopedMutex lock(resource_stat_mutex_.get());
+  for (size_t i = 0; i < resource_stats_.size(); ++i) {
+    if (resource_stats_[i].first == prefix) {
+      *out = resource_stats_[i].second;
+      return;
+    }
+  }
+  CacheableResourceBase::StatSet fresh;
+  CacheableResourceBase::ResolveStats(server_context_->statistics(), prefix,
+                                      &fresh);
+  resource_stats_.push_back(std::make_pair(prefix, fresh));
+  *out = fresh;
 }
 
 PropertyCache::CohortVector RewriteDriver::GetCohortList(

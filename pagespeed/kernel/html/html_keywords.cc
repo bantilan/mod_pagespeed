@@ -682,7 +682,8 @@ StringPiece HtmlKeywords::EscapeHelper(const StringPiece& unescaped,
 
 void HtmlKeywords::AddCrossProduct(const StringPiece& k1_list,
                                    const StringPiece& k2_list,
-                                   KeywordPairVec* kmap) {
+                                   KeywordPairVec* kmap,
+                                   KeywordPairBits* bits) {
   StringPieceVector v1, v2;
   SplitStringPieceToVector(k1_list, " ", &v1, true);
   SplitStringPieceToVector(k2_list, " ", &v2, true);
@@ -694,17 +695,32 @@ void HtmlKeywords::AddCrossProduct(const StringPiece& k1_list,
       DCHECK_NE(HtmlName::kNotAKeyword, k2) << v2[j];
       KeywordPair k1_k2 = MakeKeywordPair(k1, k2);
       kmap->push_back(k1_k2);
+      const int i1 = static_cast<int>(k1);
+      const int i2 = static_cast<int>(k2);
+      if (((i1 | i2) & ~0xFF) == 0) {
+        bits->set((i1 << 8) | i2);
+      } else {
+        LOG(DFATAL) << "Keyword value exceeds bitset range: " << i1 << ","
+                    << i2;
+      }
     }
   }
 }
 
-void HtmlKeywords::AddToSet(const StringPiece& klist, KeywordVec* kset) {
+void HtmlKeywords::AddToSet(const StringPiece& klist, KeywordVec* kset,
+                               KeywordBits* bits) {
   StringPieceVector v;
   SplitStringPieceToVector(klist, " ", &v, true);
   for (int i = 0, n = v.size(); i < n; ++i) {
     HtmlName::Keyword k = HtmlName::Lookup(v[i]);
     DCHECK_NE(HtmlName::kNotAKeyword, k) << v[i];
     kset->push_back(k);
+    const int ik = static_cast<int>(k);
+    if ((ik & ~0xFF) == 0) {
+      bits->set(ik);
+    } else {
+      LOG(DFATAL) << "Keyword value exceeds bitset range: " << ik;
+    }
   }
 }
 
@@ -795,10 +811,12 @@ void HtmlKeywords::InitContains() {
 //
 // Note that we will close any of these tags without warning.
 void HtmlKeywords::InitOptionallyClosedKeywords() {
-  AddToSet(kFormattingElements, &optionally_closed_);
-  AddToSet("body colgroup dd dt html optgroup option p", &optionally_closed_);
-  AddToSet(kListElements, &optionally_closed_);
-  AddToSet(kTableElements, &optionally_closed_);
+  AddToSet(kFormattingElements, &optionally_closed_,
+           &optionally_closed_bits_);
+  AddToSet("body colgroup dd dt html optgroup option p", &optionally_closed_,
+           &optionally_closed_bits_);
+  AddToSet(kListElements, &optionally_closed_, &optionally_closed_bits_);
+  AddToSet(kTableElements, &optionally_closed_, &optionally_closed_bits_);
   PrepareForBinarySearch(&optionally_closed_);
 }
 

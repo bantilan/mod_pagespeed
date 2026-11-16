@@ -598,15 +598,27 @@ CacheableResourceBase::CacheableResourceBase(StringPiece stat_prefix,
   set_proactive_resource_freshening(
       rewrite_options()->proactive_resource_freshening());
 
-  Statistics* stats = server_context()->statistics();
-  hits_ = stats->GetVariable(StrCat(stat_prefix, kHitSuffix));
-  recent_fetch_failures_ =
-      stats->GetVariable(StrCat(stat_prefix, kRecentFetchFailureSuffix));
-  recent_uncacheables_miss_ =
-      stats->GetVariable(StrCat(stat_prefix, kRecentUncacheableMiss));
-  recent_uncacheables_failure_ =
-      stats->GetVariable(StrCat(stat_prefix, kRecentUncacheableFailure));
-  misses_ = stats->GetVariable(StrCat(stat_prefix, kMissSuffix));
+  StatSet stat_set;
+  rewrite_driver->GetResourceStats(stat_prefix.as_string(), &stat_set);
+  hits_ = stat_set.hits;
+  recent_fetch_failures_ = stat_set.recent_fetch_failures;
+  recent_uncacheables_miss_ = stat_set.recent_uncacheables_miss;
+  recent_uncacheables_failure_ = stat_set.recent_uncacheables_failure;
+  misses_ = stat_set.misses;
+}
+
+// static
+void CacheableResourceBase::ResolveStats(Statistics* stats,
+                                         const GoogleString& prefix,
+                                         StatSet* out) {
+  out->hits = stats->GetVariable(StrCat(prefix, kHitSuffix));
+  out->recent_fetch_failures =
+      stats->GetVariable(StrCat(prefix, kRecentFetchFailureSuffix));
+  out->recent_uncacheables_miss =
+      stats->GetVariable(StrCat(prefix, kRecentUncacheableMiss));
+  out->recent_uncacheables_failure =
+      stats->GetVariable(StrCat(prefix, kRecentUncacheableFailure));
+  out->misses = stats->GetVariable(StrCat(prefix, kMissSuffix));
 }
 
 CacheableResourceBase::~CacheableResourceBase() {}

@@ -51,6 +51,19 @@ class Variable;
 
 class CacheableResourceBase : public Resource {
  public:
+  // Resolved per-prefix statistics. RewriteDriver memoizes one set per
+  // distinct prefix so each resource pays a map hit instead of five
+  // name lookups; see RewriteDriver::GetResourceStats.
+  struct StatSet {
+    Variable* hits;
+    Variable* recent_fetch_failures;
+    Variable* recent_uncacheables_miss;
+    Variable* recent_uncacheables_failure;
+    Variable* misses;
+  };
+  static void ResolveStats(Statistics* stats, const GoogleString& prefix,
+                           StatSet* out);
+
   // All the public methods here implement the Resource API.
 
   // All subclasses of this use the HTTP cache.
