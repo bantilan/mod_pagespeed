@@ -1126,6 +1126,8 @@ TEST_F(RewriteOptionsTest, LookupOptionByNameTest) {
     RewriteOptions::kImageWebpRecompressionQualityForSmallScreens,
     RewriteOptions::kImageWebpAnimatedRecompressionQuality,
     RewriteOptions::kImageWebpTimeoutMs,
+    RewriteOptions::kImageAvifTimeoutMs,
+    RewriteOptions::kImageAvifMaxConcurrentConversions,
     RewriteOptions::kImplicitCacheTtlMs,
     RewriteOptions::kIncreaseSpeedTracking,
     RewriteOptions::kInlineOnlyCriticalImages,

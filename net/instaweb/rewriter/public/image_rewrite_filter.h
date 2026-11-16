@@ -102,6 +102,11 @@ class ImageRewriteFilter : public RewriteFilter {
   static const char kImageWebpFromGifAnimatedFailureMs[];
   static const char kImageWebpFromGifAnimatedSuccessMs[];
   static const char kImageWebpFromGifAnimatedTimeouts[];
+  static const char kImageAvifTimeouts[];
+  static const char kImageAvifShed[];
+  static const char kImageAvifSuccessMs[];
+  static const char kImageAvifFailureMs[];
+  static const char kImageAvifChildCpuMs[];
 
   // The property cache property name used to store URLs discovered when
   // image_inlining_identify_and_cache_without_rewriting() is set in the
@@ -359,6 +364,7 @@ class ImageRewriteFilter : public RewriteFilter {
 
   // Sets of variables and histograms for various conversions to WebP.
   Image::ConversionVariables webp_conversion_variables_;
+  Image::AvifConversionVariables avif_conversion_variables_;
 
   // The options related to this filter.
   static StringPieceVector* related_options_;

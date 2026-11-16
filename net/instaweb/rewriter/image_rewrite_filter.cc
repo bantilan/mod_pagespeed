@@ -294,6 +294,17 @@ const char ImageRewriteFilter::kImageWebpWithAlphaSuccessMs[] =
 const char ImageRewriteFilter::kImageWebpWithAlphaFailureMs[] =
     "image_webp_alpha_failure_ms";
 
+const char ImageRewriteFilter::kImageAvifTimeouts[] =
+    "image_avif_conversion_timeouts";
+const char ImageRewriteFilter::kImageAvifShed[] =
+    "image_avif_conversion_shed";
+const char ImageRewriteFilter::kImageAvifSuccessMs[] =
+    "image_avif_conversion_success_ms";
+const char ImageRewriteFilter::kImageAvifFailureMs[] =
+    "image_avif_conversion_failure_ms";
+const char ImageRewriteFilter::kImageAvifChildCpuMs[] =
+    "image_avif_conversion_child_cpu_ms";
+
 const char ImageRewriteFilter::kImageWebpOpaqueTimeouts[] =
     "image_webp_opaque_timeouts";
 const char ImageRewriteFilter::kImageWebpOpaqueSuccessMs[] =
@@ -748,6 +759,17 @@ ImageRewriteFilter::ImageRewriteFilter(RewriteDriver* driver)
       Image::ConversionVariables::OPAQUE)->failure_ms =
       stats->GetHistogram(kImageWebpOpaqueFailureMs);
 
+  avif_conversion_variables_.timeout_count =
+      stats->GetVariable(kImageAvifTimeouts);
+  avif_conversion_variables_.shed_count =
+      stats->GetVariable(kImageAvifShed);
+  avif_conversion_variables_.success_wall_ms =
+      stats->GetHistogram(kImageAvifSuccessMs);
+  avif_conversion_variables_.failure_wall_ms =
+      stats->GetHistogram(kImageAvifFailureMs);
+  avif_conversion_variables_.child_cpu_ms =
+      stats->GetHistogram(kImageAvifChildCpuMs);
+
   image_rewrite_latency_ok_ms_ = stats->GetHistogram(kImageRewriteLatencyOkMs);
   image_rewrite_latency_failed_ms_ =
       stats->GetHistogram(kImageRewriteLatencyFailedMs);
@@ -810,6 +832,12 @@ void ImageRewriteFilter::InitStats(Statistics* statistics) {
   statistics->AddVariable(kImageWebpOpaqueTimeouts);
   statistics->AddHistogram(kImageWebpOpaqueSuccessMs);
   statistics->AddHistogram(kImageWebpOpaqueFailureMs);
+
+  statistics->AddVariable(kImageAvifTimeouts);
+  statistics->AddVariable(kImageAvifShed);
+  statistics->AddHistogram(kImageAvifSuccessMs);
+  statistics->AddHistogram(kImageAvifFailureMs);
+  statistics->AddHistogram(kImageAvifChildCpuMs);
 }
 
 void ImageRewriteFilter::Initialize() {
@@ -924,6 +952,11 @@ Image::CompressionOptions* ImageRewriteFilter::ImageOptionsForLoadedResource(
       !options->Enabled(RewriteOptions::kJpegSubsampling);
   image_options->webp_conversion_timeout_ms =
       options->image_webp_timeout_ms();
+  image_options->avif_conversion_timeout_ms =
+      options->image_avif_timeout_ms();
+  image_options->avif_max_concurrent_conversions =
+      options->image_avif_max_concurrent_conversions();
+  image_options->avif_conversion_variables = &avif_conversion_variables_;
 
   return image_options;
 }

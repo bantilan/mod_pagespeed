@@ -81,6 +81,23 @@ class Image {
     ConversionBySourceVariable vars[NUM_VARIABLE_TYPE];
   };
 
+  // Statistics sinks for external AVIF encoder conversions. All pointers
+  // may be NULL, in which case that measurement is skipped.
+  struct AvifConversionVariables {
+    AvifConversionVariables()
+        : timeout_count(NULL),
+          shed_count(NULL),
+          success_wall_ms(NULL),
+          failure_wall_ms(NULL),
+          child_cpu_ms(NULL) {}
+
+    Variable* timeout_count;   // # of conversions killed by the deadline.
+    Variable* shed_count;      // # refused by admission control.
+    Histogram* success_wall_ms;  // Wall time of successful conversions.
+    Histogram* failure_wall_ms;  // Wall time of failed, non-timed-out runs.
+    Histogram* child_cpu_ms;     // Encoder child CPU (user+sys) per reaping.
+  };
+
   struct CompressionOptions {
     CompressionOptions()
         : preferred_webp(pagespeed::image_compression::WEBP_NONE),
@@ -106,9 +123,12 @@ class Image {
           jpeg_num_progressive_scans(
               RewriteOptions::kDefaultImageJpegNumProgressiveScans),
           webp_conversion_timeout_ms(-1),
+          avif_conversion_timeout_ms(-1),
+          avif_max_concurrent_conversions(0),
           conversions_attempted(0),
           preserve_lossless(false),
-          webp_conversion_variables(NULL) {}
+          webp_conversion_variables(NULL),
+          avif_conversion_variables(NULL) {}
 
     // These options are set by the client to specify what type of
     // conversion to perform:
@@ -133,6 +153,14 @@ class Image {
     bool use_transparent_for_blank_image;
     int64 jpeg_num_progressive_scans;
     int64 webp_conversion_timeout_ms;
+    // Deadline for one external AVIF encoder run, in milliseconds.
+    // Negative disables the deadline (block until the encoder exits);
+    // zero always times out without spawning. Mirrors WebpTimeoutMs.
+    int64 avif_conversion_timeout_ms;
+    // Process-wide cap on concurrent external AVIF encoders. Values <= 0
+    // mean unbounded. Conversions past the cap are refused (shed) so the
+    // caller falls back to WebP/JPEG/PNG instead of queueing.
+    int avif_max_concurrent_conversions;
 
     // These fields are set by the conversion routines to report
     // characteristics of the conversion process.
@@ -140,6 +168,7 @@ class Image {
     bool preserve_lossless;
 
     ConversionVariables* webp_conversion_variables;
+    AvifConversionVariables* avif_conversion_variables;
   };
 
   virtual ~Image();
@@ -268,6 +297,15 @@ Image* BlankImageWithOptions(int width, int height, ImageType type,
                              const StringPiece& tmp_dir, Timer* timer,
                              MessageHandler* handler,
                              Image::CompressionOptions* options);
+
+// Process-wide admission control for external AVIF encoders. Returns true
+// and holds one encoder slot when fewer than max_concurrent conversions are
+// in flight (max_concurrent <= 0 means unbounded and always succeeds, while
+// still tracking the slot). A held slot must be released with
+// ReleaseAvifEncoderSlot(). Exposed for tests; conversions acquire and
+// release slots internally.
+bool AcquireAvifEncoderSlot(int max_concurrent);
+void ReleaseAvifEncoderSlot();
 
 }  // namespace net_instaweb
 

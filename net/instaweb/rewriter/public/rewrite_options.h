@@ -329,6 +329,8 @@ class RewriteOptions {
   static const char kImageWebpRecompressionQualityForSmallScreens[];
   static const char kImageWebpAnimatedRecompressionQuality[];
   static const char kImageWebpTimeoutMs[];
+  static const char kImageAvifTimeoutMs[];
+  static const char kImageAvifMaxConcurrentConversions[];
   static const char kImplicitCacheTtlMs[];
   static const char kIncreaseSpeedTracking[];
   static const char kInlineOnlyCriticalImages[];
@@ -883,6 +885,8 @@ class RewriteOptions {
   static const int64 kDefaultImageWebpAnimatedRecompressQuality;
   static const int64 kDefaultImageWebpRecompressQualityForSmallScreens;
   static const int64 kDefaultImageWebpTimeoutMs;
+  static const int64 kDefaultImageAvifTimeoutMs;
+  static const int kDefaultImageAvifMaxConcurrentConversions;
   static const int kDefaultDomainShardCount;
   static const int64 kDefaultOptionCookiesDurationMs;
   static const int64 kDefaultLoadFromFileCacheTtlMs;
@@ -2389,6 +2393,25 @@ class RewriteOptions {
     set_option(x, &image_webp_timeout_ms_);
   }
 
+  // Deadline for one external AVIF encoder run, in milliseconds. Negative
+  // disables the deadline; zero always times out without spawning.
+  int64 image_avif_timeout_ms() const {
+    return image_avif_timeout_ms_.value();
+  }
+  void set_image_avif_timeout_ms(int64 x) {
+    set_option(x, &image_avif_timeout_ms_);
+  }
+
+  // Process-wide cap on concurrent external AVIF encoders. Values <= 0
+  // mean unbounded. Conversions past the cap are shed to the WebP/original
+  // fallback instead of queueing.
+  int image_avif_max_concurrent_conversions() const {
+    return image_avif_max_concurrent_conversions_.value();
+  }
+  void set_image_avif_max_concurrent_conversions(int x) {
+    set_option(x, &image_avif_max_concurrent_conversions_);
+  }
+
   bool domain_rewrite_hyperlinks() const {
     return CheckMobilizeFiltersOption(domain_rewrite_hyperlinks_);
   }
@@ -3796,6 +3819,8 @@ class RewriteOptions {
   Option<int64> image_webp_animated_recompress_quality_;
   Option<int64> image_webp_quality_for_save_data_;
   Option<int64> image_webp_timeout_ms_;
+  Option<int64> image_avif_timeout_ms_;
+  Option<int> image_avif_max_concurrent_conversions_;
 
   Option<int> image_max_rewrites_at_once_;
   Option<int> max_url_segment_size_;  // For http://a/b/c.d, use strlen("c.d").

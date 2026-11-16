@@ -174,6 +174,9 @@ const char RewriteOptions::kImageWebpAnimatedRecompressionQuality[] =
 const char RewriteOptions::kImageWebpQualityForSaveData[] =
     "WebpQualityForSaveData";
 const char RewriteOptions::kImageWebpTimeoutMs[] = "WebpTimeoutMs";
+const char RewriteOptions::kImageAvifTimeoutMs[] = "AvifTimeoutMs";
+const char RewriteOptions::kImageAvifMaxConcurrentConversions[] =
+    "AvifMaxConcurrentConversions";
 const char RewriteOptions::kImplicitCacheTtlMs[] = "ImplicitCacheTtlMs";
 const char RewriteOptions::kInPlaceResourceOptimization[] =
     "InPlaceResourceOptimization";
@@ -485,6 +488,19 @@ const int64 RewriteOptions::kDefaultImageWebpQualityForSaveData = 50;
 // Timeout, in ms, for all WebP conversion attempts for each source
 // image. If negative, does not time out.
 const int64 RewriteOptions::kDefaultImageWebpTimeoutMs = -1;
+
+// Deadline, in ms, for one external AVIF encoder run. The external encoder
+// is a separate process that can stall or run far past any useful rewrite
+// window, so unlike WebP this bound is on by default. 30 s matches the
+// rewrite creation-lock lease: work that outlives the lease cannot be
+// claimed anyway. Measured legitimate conversions (up to ~0.6 s for a
+// 2.2 MB PNG) sit far below it. If negative, does not time out.
+const int64 RewriteOptions::kDefaultImageAvifTimeoutMs = 30000;
+
+// Process-wide cap on concurrent external AVIF encoders. Each encoder burns
+// roughly one core, so this sheds the most expensive conversions first under
+// a cold-image flood instead of saturating the box. If <= 0, unbounded.
+const int RewriteOptions::kDefaultImageAvifMaxConcurrentConversions = 2;
 
 const int64 RewriteOptions::kDefaultMaxCacheableResponseContentLength =
     16777216;  // 16 MB in bytes
@@ -1837,6 +1853,20 @@ void RewriteOptions::AddProperties() {
       kImageWebpTimeoutMs,
       kLegacyProcessScope,
       NULL, true);  // TODO(jmarantz): write help & doc for mod_pagespeed.
+  AddBaseProperty(
+      kDefaultImageAvifTimeoutMs,
+      &RewriteOptions::image_avif_timeout_ms_, "at",
+      kImageAvifTimeoutMs,
+      kLegacyProcessScope,
+      "Deadline in milliseconds for one external AVIF encoder run. "
+      "Negative disables the deadline; zero always times out.", true);
+  AddBaseProperty(
+      kDefaultImageAvifMaxConcurrentConversions,
+      &RewriteOptions::image_avif_max_concurrent_conversions_, "ac",
+      kImageAvifMaxConcurrentConversions,
+      kLegacyProcessScope,
+      "Bound on concurrent external AVIF encoders per process "
+      "(0 = unbounded).", true);
   AddBaseProperty(
       kDefaultMaxInlinedPreviewImagesIndex,
       &RewriteOptions::max_inlined_preview_images_index_, "mdii",

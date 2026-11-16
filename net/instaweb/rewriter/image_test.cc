@@ -75,6 +75,8 @@ namespace {
 const char kProgressiveHeader[] = "\xFF\xC2";
 const int kProgressiveHeaderStartIndex = 158;
 const char kMessagePatternDataTruncated[] = "*data truncated*";
+const char kMessagePatternFailedToCreateAvif[] = "*Failed to create avif*";
+const char kMessagePatternAvifEncoder[] = "*AVIF encoder*";
 const char kMessagePatternFailedToCreateWebp[] = "*Failed to create webp*";
 const char kMessagePatternFailedToEncodeWebp[] = "*Could not encode webp data*";
 const char kMessagePatternNoDimension[] = "*Couldn't find * dimensions*";
@@ -254,6 +256,33 @@ class ConversionVarChecker {
   Image::ConversionVariables webp_conversion_variables_;
 };
 
+class AvifVarChecker {
+ public:
+  explicit AvifVarChecker(Image::CompressionOptions* options)
+      : thread_system_(Platform::CreateThreadSystem()),
+        simple_stats_(thread_system_.get()) {
+    avif_vars_.timeout_count = simple_stats_.AddVariable("avif_timeout");
+    avif_vars_.shed_count = simple_stats_.AddVariable("avif_shed");
+    avif_vars_.success_wall_ms = simple_stats_.AddHistogram("avif_success");
+    avif_vars_.failure_wall_ms = simple_stats_.AddHistogram("avif_failure");
+    avif_vars_.child_cpu_ms = simple_stats_.AddHistogram("avif_child_cpu");
+    options->avif_conversion_variables = &avif_vars_;
+  }
+
+  void Test(int timeout, int shed, int success, int failure, int child_cpu) {
+    EXPECT_EQ(timeout, avif_vars_.timeout_count->Get());
+    EXPECT_EQ(shed, avif_vars_.shed_count->Get());
+    EXPECT_EQ(success, avif_vars_.success_wall_ms->Count());
+    EXPECT_EQ(failure, avif_vars_.failure_wall_ms->Count());
+    EXPECT_EQ(child_cpu, avif_vars_.child_cpu_ms->Count());
+  }
+
+ private:
+  scoped_ptr<ThreadSystem> thread_system_;
+  SimpleStats simple_stats_;
+  Image::AvifConversionVariables avif_vars_;
+};
+
 }  // namespace
 
 class ImageTest : public ImageTestBase {
@@ -265,6 +294,8 @@ class ImageTest : public ImageTestBase {
  protected:
   virtual void SetUp() {
     message_handler_.AddPatternToSkipPrinting(kMessagePatternAnimatedGif);
+    message_handler_.AddPatternToSkipPrinting(kMessagePatternFailedToCreateAvif);
+    message_handler_.AddPatternToSkipPrinting(kMessagePatternAvifEncoder);
     message_handler_.AddPatternToSkipPrinting(kMessagePatternDataTruncated);
     message_handler_.AddPatternToSkipPrinting(
         kMessagePatternFailedToCreateWebp);
@@ -943,6 +974,121 @@ TEST_F(ImageTest, JpegToAvifTest) {
       6468,  // Specific to this test
       1023, 766,
       241260, true);
+}
+
+TEST_F(ImageTest, AvifEncoderSlotTest) {
+  // Unbounded caps always succeed while still tracking their slots.
+  EXPECT_TRUE(AcquireAvifEncoderSlot(0));
+  EXPECT_TRUE(AcquireAvifEncoderSlot(-1));
+  ReleaseAvifEncoderSlot();
+  ReleaseAvifEncoderSlot();
+  // A cap of one serializes holders.
+  EXPECT_TRUE(AcquireAvifEncoderSlot(1));
+  EXPECT_FALSE(AcquireAvifEncoderSlot(1));
+  ReleaseAvifEncoderSlot();
+  EXPECT_TRUE(AcquireAvifEncoderSlot(1));
+  ReleaseAvifEncoderSlot();
+}
+
+TEST_F(ImageTest, JpegToAvifTimeoutZeroFallsBackTest) {
+  // A zero deadline disables AVIF without spawning: timeout accounting plus
+  // the normal WebP fallback. No encoder runs, so no Valgrind guard needed.
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  AvifVarChecker avif_vars(options);
+  options->convert_to_avif = true;
+  options->convert_jpeg_to_webp = true;
+  options->preferred_webp = WEBP_LOSSY;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+  options->avif_conversion_timeout_ms = 0;
+
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+  image->output_size();
+  EXPECT_EQ(ContentType::kWebp, image->content_type()->type());
+  avif_vars.Test(1 /* timeout */, 0 /* shed */, 0, 0, 0);
+}
+
+TEST_F(ImageTest, JpegToAvifDeadlineKillsAndFallsBackTest) {
+  // A 1 ms deadline kills the running encoder: the watchdog waits the
+  // deadline in real time while the child needs tens of milliseconds to
+  // exec and encode, so the kill always lands first.
+  if (RunningOnValgrind()) {
+    return;
+  }
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  AvifVarChecker avif_vars(options);
+  options->convert_to_avif = true;
+  options->convert_jpeg_to_webp = true;
+  options->preferred_webp = WEBP_LOSSY;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+  options->avif_conversion_timeout_ms = 1;
+
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+  image->output_size();
+  EXPECT_EQ(ContentType::kWebp, image->content_type()->type());
+  avif_vars.Test(1 /* timeout */, 0 /* shed */, 0, 0, 1 /* child_cpu */);
+}
+
+TEST_F(ImageTest, JpegToAvifSucceedsWithWatchdogTest) {
+  // A generous deadline leaves the happy path alone: the watchdog is
+  // cancelled on completion and the conversion records success metrics.
+  if (RunningOnValgrind()) {
+    return;
+  }
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  AvifVarChecker avif_vars(options);
+  options->convert_to_avif = true;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+  options->avif_conversion_timeout_ms = 60000;
+
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+  image->output_size();
+  EXPECT_EQ(ContentType::kAvif, image->content_type()->type());
+  avif_vars.Test(0, 0, 1 /* success */, 0, 1 /* child_cpu */);
+}
+
+TEST_F(ImageTest, JpegToAvifRecordsMetricsTest) {
+  // The happy path records wall time and per-child encoder CPU.
+  if (RunningOnValgrind()) {
+    return;
+  }
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  AvifVarChecker avif_vars(options);
+  options->convert_to_avif = true;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+  image->output_size();
+  EXPECT_EQ(ContentType::kAvif, image->content_type()->type());
+  avif_vars.Test(0, 0, 1 /* success */, 0, 1 /* child_cpu */);
+}
+
+TEST_F(ImageTest, JpegToAvifShedFallsBackTest) {
+  // With the only encoder slot held, the conversion sheds to WebP without
+  // spawning. No encoder runs, so no Valgrind guard needed.
+  EXPECT_TRUE(AcquireAvifEncoderSlot(1));
+  Image::CompressionOptions* options = new Image::CompressionOptions;
+  AvifVarChecker avif_vars(options);
+  options->convert_to_avif = true;
+  options->convert_jpeg_to_webp = true;
+  options->preferred_webp = WEBP_LOSSY;
+  options->webp_quality = 75;
+  options->jpeg_quality = 85;
+  options->avif_max_concurrent_conversions = 1;
+
+  GoogleString buffer;
+  ImagePtr image(ReadFromFileWithOptions(kPuzzle, &buffer, options));
+  image->output_size();
+  ReleaseAvifEncoderSlot();
+  EXPECT_EQ(ContentType::kWebp, image->content_type()->type());
+  avif_vars.Test(0, 1 /* shed */, 0, 0, 0);
 }
 
 TEST_F(ImageTest, ProgressiveJpegTest) {

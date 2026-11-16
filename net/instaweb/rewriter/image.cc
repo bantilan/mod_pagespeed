@@ -26,9 +26,16 @@
 #include <cstdlib>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
 #include <spawn.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 
 extern "C" {
 #ifdef USE_SYSTEM_ZLIB
@@ -44,12 +51,14 @@ extern "C" {
 #include "net/instaweb/rewriter/public/image_url_encoder.h"
 #include "net/instaweb/rewriter/public/webp_optimizer.h"
 #include "pagespeed/kernel/base/annotated_message_handler.h"
+#include "pagespeed/kernel/base/atomic_int32.h"
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/message_handler.h"
 #include "pagespeed/kernel/base/scoped_ptr.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/image/gif_reader.h"
 #include "pagespeed/kernel/image/image_analysis.h"
@@ -164,6 +173,152 @@ void UpdateWebpStats(bool ok, bool was_timed_out, int64 time_elapsed_ms,
   }
 }
 
+// Number of external AVIF encoders currently running in this process.
+AtomicInt32 g_avif_encoders_in_flight;
+
+// State shared with the AVIF watchdog thread. The converting thread owns
+// this on its stack and joins the watchdog before returning, so the
+// watchdog can never outlive it.
+struct AvifWatchdog {
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  Timer* timer;  // Not owned. Read for deadline checks only.
+  pid_t pid;
+  int pidfd;  // -1 when unavailable; pins the encoder against pid reuse.
+  int64 deadline_us;  // In timer->NowMonotonicUs() units.
+  bool done;
+  bool fired;
+};
+
+#ifdef __linux__
+int AvifPidfdOpen(pid_t pid) {
+#ifdef SYS_pidfd_open
+  return syscall(SYS_pidfd_open, pid, 0);
+#else
+  return -1;
+#endif
+}
+
+// Signals the exact process the pidfd was opened on. Unlike kill(pid),
+// this cannot hit an unrelated process if the pid was reused, and it
+// fails harmlessly (ESRCH) once the encoder has been reaped.
+int AvifPidfdKill(int pidfd) {
+#ifdef SYS_pidfd_send_signal
+  return syscall(SYS_pidfd_send_signal, pidfd, SIGKILL, NULL, 0);
+#else
+  return -1;
+#endif
+}
+#endif  // __linux__
+
+// Kills the encoder if the deadline passes before the converting thread
+// reports completion. The budget comes from the Timer, but the countdown
+// runs in real time: a mock Timer never advances during the wait, so
+// recomputing the remainder from it would never reach zero.
+void* AvifWatchdogMain(void* arg) {
+  AvifWatchdog* watchdog = static_cast<AvifWatchdog*>(arg);
+  int64 budget_us =
+      watchdog->deadline_us - watchdog->timer->NowMonotonicUs();
+  struct timespec real_start;
+  clock_gettime(CLOCK_MONOTONIC, &real_start);
+  int64 real_start_us = static_cast<int64>(real_start.tv_sec) * 1000000 +
+                        real_start.tv_nsec / 1000;
+  pthread_mutex_lock(&watchdog->mutex);
+  while (!watchdog->done) {
+    struct timespec real_now;
+    clock_gettime(CLOCK_MONOTONIC, &real_now);
+    int64 elapsed_us = static_cast<int64>(real_now.tv_sec) * 1000000 +
+                       real_now.tv_nsec / 1000 - real_start_us;
+    if (elapsed_us >= budget_us) {
+      break;
+    }
+    int64 wake_us = static_cast<int64>(real_now.tv_sec) * 1000000 +
+                    real_now.tv_nsec / 1000 + (budget_us - elapsed_us);
+    struct timespec wake = {static_cast<time_t>(wake_us / 1000000),
+                            static_cast<long>((wake_us % 1000000) * 1000)};
+    int wait_rc = pthread_cond_timedwait(&watchdog->cond, &watchdog->mutex,
+                                         &wake);
+    if (wait_rc != 0 && wait_rc != ETIMEDOUT) {
+      break;  // Unexpected error; kill rather than wait unbounded.
+    }
+  }
+  bool kill_child = !watchdog->done;
+  pid_t pid = watchdog->pid;
+  int pidfd = watchdog->pidfd;
+  if (kill_child) {
+    watchdog->fired = true;
+  }
+  pthread_mutex_unlock(&watchdog->mutex);
+  if (kill_child) {
+#ifdef __linux__
+    if (pidfd >= 0) {
+      AvifPidfdKill(pidfd);
+    } else {
+      kill(pid, SIGKILL);
+    }
+#else
+    kill(pid, SIGKILL);
+#endif
+  }
+  return NULL;
+}
+
+int64 TimevalToMs(const struct timeval& tv) {
+  return static_cast<int64>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
+}
+
+void UpdateAvifStats(bool ok, bool was_timed_out, int64 wall_elapsed_ms,
+                     int64 child_cpu_ms, bool child_reaped,
+                     Image::AvifConversionVariables* avif_vars) {
+  if (avif_vars == NULL) {
+    return;
+  }
+  if (was_timed_out) {
+    DCHECK(!ok);
+    if (avif_vars->timeout_count != NULL) {
+      avif_vars->timeout_count->Add(1);
+    }
+  } else if (ok) {
+    if (avif_vars->success_wall_ms != NULL) {
+      avif_vars->success_wall_ms->Add(wall_elapsed_ms);
+    }
+  } else {
+    if (avif_vars->failure_wall_ms != NULL) {
+      avif_vars->failure_wall_ms->Add(wall_elapsed_ms);
+    }
+  }
+  // Child CPU is reported for every reaped encoder, including killed ones:
+  // a killed runaway still burned the CPU it is accounted for.
+  if (child_reaped && avif_vars->child_cpu_ms != NULL) {
+    avif_vars->child_cpu_ms->Add(child_cpu_ms);
+  }
+}
+
+// Holds one process-wide AVIF encoder slot until released or destroyed, so
+// every early return in ConvertToAvifExternal releases its slot.
+class ScopedAvifEncoderSlot {
+ public:
+  ScopedAvifEncoderSlot() : held_(false) {}
+  ~ScopedAvifEncoderSlot() { Release(); }
+
+  bool TryAcquire(int max_concurrent) {
+    held_ = AcquireAvifEncoderSlot(max_concurrent);
+    return held_;
+  }
+
+  void Release() {
+    if (held_) {
+      held_ = false;
+      ReleaseAvifEncoderSlot();
+    }
+  }
+
+ private:
+  bool held_;
+
+  DISALLOW_COPY_AND_ASSIGN(ScopedAvifEncoderSlot);
+};
+
 // TODO(huibao): Unify ImageType and ImageFormat.
 ImageFormat ImageTypeToImageFormat(ImageType type) {
   ImageFormat format = pagespeed::image_compression::IMAGE_UNKNOWN;
@@ -195,13 +350,43 @@ ImageFormat ImageTypeToImageFormat(ImageType type) {
 bool ConvertToAvifExternal(const GoogleString& input_image,
                            const char* input_suffix,
                            int configured_quality,
+                           int64 timeout_ms,
+                           int max_concurrent,
+                           Image::AvifConversionVariables* avif_vars,
+                           Timer* timer,
                            GoogleString* output_avif,
                            MessageHandler* handler) {
+  // Admission control first: refuse before touching the filesystem, so a
+  // shed conversion costs no temp files, no spawn, and no worker wait. The
+  // caller falls back to WebP/JPEG/PNG on false.
+  ScopedAvifEncoderSlot encoder_slot;
+  if (!encoder_slot.TryAcquire(max_concurrent)) {
+    PS_LOG_INFO(handler, "AVIF encoder shed: %d conversions already running",
+                max_concurrent);
+    if (avif_vars != NULL && avif_vars->shed_count != NULL) {
+      avif_vars->shed_count->Add(1);
+    }
+    return false;
+  }
+
+  // A zero deadline disables AVIF with timeout accounting but without
+  // spawning a child just to kill it.
+  if (timeout_ms == 0) {
+    UpdateAvifStats(false /* ok */, true /* was_timed_out */,
+                    0 /* wall_elapsed_ms */, 0 /* child_cpu_ms */,
+                    false /* child_reaped */, avif_vars);
+    return false;
+  }
+  const int64 start_us = timer->NowMonotonicUs();
+
   char input_template[] = "/tmp/ps_avif_input_XXXXXX.bin";
   char output_template[] = "/tmp/ps_avif_output_XXXXXX.avif";
   int input_fd = mkstemps(input_template, 4);
   if (input_fd < 0) {
     PS_LOG_WARN(handler, "Failed to create temp input file for AVIF encoder");
+    UpdateAvifStats(false /* ok */, false /* was_timed_out */,
+                    0 /* wall_elapsed_ms */, 0 /* child_cpu_ms */,
+                    false /* child_reaped */, avif_vars);
     return false;
   }
   int output_fd = mkstemps(output_template, 5);
@@ -209,6 +394,9 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
     close(input_fd);
     unlink(input_template);
     PS_LOG_WARN(handler, "Failed to create temp output file for AVIF encoder");
+    UpdateAvifStats(false /* ok */, false /* was_timed_out */,
+                    0 /* wall_elapsed_ms */, 0 /* child_cpu_ms */,
+                    false /* child_reaped */, avif_vars);
     return false;
   }
   close(output_fd);
@@ -220,6 +408,9 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
     unlink(input_template);
     unlink(output_template);
     PS_LOG_WARN(handler, "Failed to set AVIF input extension");
+    UpdateAvifStats(false /* ok */, false /* was_timed_out */,
+                    0 /* wall_elapsed_ms */, 0 /* child_cpu_ms */,
+                    false /* child_reaped */, avif_vars);
     return false;
   }
 
@@ -237,6 +428,10 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
   }
   close(input_fd);
 
+  int64 wall_elapsed_ms = 0;
+  int64 child_cpu_ms = 0;
+  bool child_reaped = false;
+  bool was_timed_out = false;
   if (ok) {
     int clamped_quality = std::max(0, std::min(100, configured_quality));
     int cq_level = 63 - ((clamped_quality * 63) / 100);
@@ -275,12 +470,91 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
     }
     int exit_status = -1;
     if (spawn_status == 0) {
+      // wait4 (not waitpid) so the encoder's CPU is attributed per child.
+      // Process-global child-usage deltas would race between server threads.
+      // The wait stays blocking: the host process reaps stray children, so
+      // only an already-waiting waiter reliably reaps (a polling waiter
+      // observes ECHILD instead). The deadline is enforced by a watchdog
+      // thread that kills the encoder; see AvifWatchdogMain.
+      struct rusage child_usage;
+      AvifWatchdog watchdog;
+      pthread_t watchdog_thread = 0;
+      bool watchdog_running = false;
+      if (timeout_ms >= 0) {
+        watchdog.timer = timer;
+        watchdog.pid = pid;
+#ifdef __linux__
+        watchdog.pidfd = AvifPidfdOpen(pid);
+#else
+        watchdog.pidfd = -1;
+#endif
+        watchdog.deadline_us = start_us + timeout_ms * 1000;
+        watchdog.done = false;
+        watchdog.fired = false;
+        pthread_mutex_init(&watchdog.mutex, NULL);
+        pthread_condattr_t cond_attr;
+        pthread_condattr_init(&cond_attr);
+        pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+        pthread_cond_init(&watchdog.cond, &cond_attr);
+        pthread_condattr_destroy(&cond_attr);
+        if (pthread_create(&watchdog_thread, NULL, AvifWatchdogMain,
+                           &watchdog) == 0) {
+          watchdog_running = true;
+        } else {
+          PS_LOG_WARN(handler, "AVIF watchdog thread failed to start; "
+                               "encoder deadline unenforced");
+          pthread_cond_destroy(&watchdog.cond);
+          pthread_mutex_destroy(&watchdog.mutex);
+#ifdef __linux__
+          if (watchdog.pidfd >= 0) {
+            close(watchdog.pidfd);
+          }
+#endif
+        }
+      }
       int wait_status = 0;
-      while (waitpid(pid, &wait_status, 0) < 0 && errno == EINTR) {
+      pid_t got;
+      do {
+        got = wait4(pid, &wait_status, 0, &child_usage);
+      } while (got < 0 && errno == EINTR);
+      if (watchdog_running) {
+        pthread_mutex_lock(&watchdog.mutex);
+        watchdog.done = true;
+        was_timed_out = watchdog.fired;
+        pthread_cond_signal(&watchdog.cond);
+        pthread_mutex_unlock(&watchdog.mutex);
+        pthread_join(watchdog_thread, NULL);
+        pthread_cond_destroy(&watchdog.cond);
+        pthread_mutex_destroy(&watchdog.mutex);
+#ifdef __linux__
+        if (watchdog.pidfd >= 0) {
+          close(watchdog.pidfd);
+        }
+#endif
       }
-      if (WIFEXITED(wait_status)) {
-        exit_status = WEXITSTATUS(wait_status);
+      if (got == pid) {
+        child_reaped = true;
+        if (WIFEXITED(wait_status)) {
+          exit_status = WEXITSTATUS(wait_status);
+        }
+      } else if (got < 0) {
+        // Defensive: with a blocked waiter this should not happen, but a
+        // host that reaps children out from under us surfaces as ECHILD.
+        PS_LOG_WARN(handler, "AVIF encoder wait failed: errno=%d", errno);
       }
+      if (exit_status == 0) {
+        // A completed conversion counts as success even if the watchdog
+        // fired concurrently with the encoder's natural exit.
+        was_timed_out = false;
+      } else if (was_timed_out) {
+        PS_LOG_WARN(handler, "AVIF encoder exceeded %d ms deadline; killed",
+                    static_cast<int>(timeout_ms));
+      }
+      if (child_reaped) {
+        child_cpu_ms = TimevalToMs(child_usage.ru_utime) +
+                       TimevalToMs(child_usage.ru_stime);
+      }
+      wall_elapsed_ms = (timer->NowMonotonicUs() - start_us) / 1000;
     }
     ok = (exit_status == 0);
     if (!ok) {
@@ -316,6 +590,9 @@ bool ConvertToAvifExternal(const GoogleString& input_image,
     }
   }
 
+  UpdateAvifStats(ok, was_timed_out, wall_elapsed_ms, child_cpu_ms,
+                  child_reaped, avif_vars);
+
   unlink(input_path.c_str());
   unlink(output_template);
   return ok;
@@ -343,6 +620,27 @@ ScanlineWriterInterface* CreateUncompressedPngWriter(
 }
 
 }  // namespace
+
+bool AcquireAvifEncoderSlot(int max_concurrent) {
+  // Slots are always tracked so the in-flight count stays exact even with
+  // mixed per-conversion caps; only a positive cap can refuse.
+  while (true) {
+    int32 in_flight = g_avif_encoders_in_flight.value();
+    if (max_concurrent > 0 && in_flight >= max_concurrent) {
+      return false;
+    }
+    if (g_avif_encoders_in_flight.CompareAndSwap(in_flight, in_flight + 1) ==
+        in_flight) {
+      return true;
+    }
+  }
+}
+
+void ReleaseAvifEncoderSlot() {
+  int32 remaining =
+      g_avif_encoders_in_flight.NoBarrierIncrement(-1);
+  DCHECK_GE(remaining, 0);
+}
 
 // TODO(jmaessen): Put ImageImpl into private namespace.
 
@@ -1023,6 +1321,10 @@ bool ImageImpl::ComputeOutputContents() {
             options_->webp_quality > 0) {
           ok = ConvertToAvifExternal(string_for_image, ".jpg",
                                      options_->webp_quality,
+                                     options_->avif_conversion_timeout_ms,
+                                     options_->avif_max_concurrent_conversions,
+                                     options_->avif_conversion_variables,
+                                     timer_,
                                      &output_contents_, handler_.get());
           if (ok) {
             image_type_ = IMAGE_AVIF;
@@ -1278,8 +1580,12 @@ inline bool ImageImpl::ComputeOutputContentsFromGifOrPng(
       ok = MayConvert() &&
            ConvertToAvifExternal(string_for_image,
                                  (input_type == IMAGE_PNG) ? ".png" : ".jpg",
-                                 options_->webp_quality, &output_contents_,
-                                 handler_.get());
+                                 options_->webp_quality,
+                                 options_->avif_conversion_timeout_ms,
+                                 options_->avif_max_concurrent_conversions,
+                                 options_->avif_conversion_variables,
+                                 timer_,
+                                 &output_contents_, handler_.get());
       if (!ok) {
         if (!has_transparency && options_->jpeg_quality > 0) {
           output_type = IMAGE_JPEG;
