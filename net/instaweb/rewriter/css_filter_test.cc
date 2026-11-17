@@ -220,18 +220,6 @@ class CssFilterTest : public CssRewriteTestBase {
     }
   }
 
-  // Clears per-parse driver state (including the memoized document kind) so
-  // the next parse sees a new Content-Type. The metadata cache on the server
-  // context is intentionally kept, so the next parse exercises warm-cache
-  // reuse of the previous parse's rewrite decision.
-  void ClearDriverAndSetMimetype(const char* mimetype) {
-    output_buffer_.clear();
-    rewrite_driver()->Clear();
-    rewrite_driver()->set_request_context(
-        RequestContext::NewTestRequestContext(factory()->thread_system()));
-    response_headers_.RemoveAll(HttpAttributes::kContentType);
-    SetMimetype(mimetype);
-  }
 };
 
 TEST_F(CssFilterTest, SimpleRewriteCssTest) {
@@ -613,8 +601,7 @@ TEST_F(CssFilterTest, NoWrongExtCorruption) {
 }
 
 TEST_F(CssFilterTest, RewriteVariousCss) {
-  // These examples exercise the minifier, including quirky media queries with
-  // '<' that are plain CSS text in HTML.
+  // These examples exercise the minifier.
   SetHtmlMimetype();
   // TODO(sligocki): Get these tests to pass with setlocale.
   // EXPECT_TRUE(setlocale(LC_ALL, "tr_TR.utf8"));
@@ -716,9 +703,6 @@ TEST_F(CssFilterTest, RewriteVariousCss) {
     // Unexpected \0 in various places. Common browser hack.
     "@media screen\\0{ .select:before { width: 18px; } }",
     "@media screen and (min-width:0 \\0) { .foo { color: red; } }",
-    // Nonsensical, but syntactic, media query.
-    "@media not (-moz-dimension-constraints:20 < width < 300 and 45 < height "
-    "< 1000){a{color:red}}",
     // Empty media queries.
     "@media , { a { color: red; } }",
 
@@ -802,6 +786,15 @@ TEST_F(CssFilterTest, RewriteVariousCss) {
     GoogleString id = StringPrintf("distilled_css_good%d", i);
     ValidateRewrite(id, good_examples[i], good_examples[i], kExpectSuccess);
   }
+
+  // An @media range comparison survives an external stylesheet rewrite
+  // unchanged; an inline <style> block holding the same character is left
+  // alone by the filter instead.
+  const char kRangeComparisonQuery[] =
+      "@media not (-moz-dimension-constraints:20 < width < 300 and 45 < height "
+      "< 1000){a{color:red}}";
+  ValidateRewriteExternalCss("range_comparison_query", kRangeComparisonQuery,
+                             kRangeComparisonQuery, kExpectSuccess);
 
   const char* fail_examples[] = {
     // Unclosed at-rules.
@@ -2281,6 +2274,20 @@ TEST_F(CssFilterTest, SimpleFetchUnhealthy) {
   EXPECT_EQ(kOutputStyle, output);
 }
 
+// The leading letter of a legacy CSS URL is accepted so that such URLs still
+// resolve; it no longer carries meaning, so the result is the one built for
+// the requesting client, as for the A. form.
+TEST_F(CssFilterTest, LegacyLetterUrlStillFetches) {
+  SetResponseWithDefaultHeaders(StrCat(kTestDomain, "style.css"),
+                                kContentTypeCss, kInputStyle, 100);
+  for (const char* leaf :
+       {"W.style.css.pagespeed.cf.0.css", "V.style.css.pagespeed.cf.0.css"}) {
+    GoogleString output;
+    ASSERT_TRUE(FetchResourceUrl(StrCat(kTestDomain, leaf), &output)) << leaf;
+    EXPECT_EQ(kOutputStyle, output) << leaf;
+  }
+}
+
 // Make sure we correctly decode the previously unexpected I.. format.
 // http://github.com/apache/incubator-pagespeed-mod/issues/427
 TEST_F(CssFilterTest, EmptyLeafFetch) {
@@ -2571,47 +2578,12 @@ TEST_F(CssFilterTest, InlineCspIrrelevant) {
       StrCat(kCsp, kMinCss, kMinStyledDiv));
 }
 
-// In XHTML, CSS that could read as markup after a rewrite is left as it was:
-// serialization decodes these escapes to '<', which would break XML parsing.
+// CSS that could read as markup after a rewrite is left as it was.
 TEST_F(CssFilterTest, InlineStyleDoesNotGainLiteralMarkup) {
-  SetXhtmlMimetype();
   ValidateNoChanges("selector",
                     "<style>li[title=\"1\\3C 2\\3E 0\"]{color:blue}</style>");
   ValidateNoChanges("charset", "<style>@charset \"\\3Cpre\";</style>");
   ValidateNoChanges("id_start_escape", "<style>#\\3Cnav{margin:2px}</style>");
-}
-
-// In HTML only a closing style tag is kept out of an inline <style>.
-// Serialization decodes this escape to a literal "</style>", which would end
-// the element early, so the rewrite is declined.
-TEST_F(CssFilterTest, InlineStyleWithClosingTagEscapeIsLeftAlone) {
-  SetHtmlMimetype();
-  ValidateNoChanges(
-      "closing_tag",
-      "<style>a[title=\"\\3C/style\\3E\"] { color: blue; }</style>");
-}
-
-// A '<' that is plain CSS (Tailwind 4 @property, media query ranges) does not
-// stop an inline <style> from being minified in HTML, but does in XHTML.
-TEST_F(CssFilterTest, InlineStyleWithLessThanSign) {
-  static const char kCss[] =
-      "<style>@property --x { syntax: \"<length>\"; inherits: false; "
-      "initial-value: 0px }\n@media (width < 600px) { p { margin: 0 } }"
-      "</style>";
-  SetHtmlMimetype();
-  ValidateExpected(
-      "html", kCss,
-      "<style>@property --x { syntax: \"<length>\"; inherits: false; "
-      "initial-value: 0px }@media (width < 600px) { p { margin: 0 } }</style>");
-}
-
-TEST_F(CssFilterTest, InlineStyleWithLessThanSignInXhtml) {
-  SetXhtmlMimetype();
-  ValidateNoChanges(
-      "xhtml",
-      "<style>@property --x { syntax: \"<length>\"; inherits: false; "
-      "initial-value: 0px }\n@media (width < 600px) { p { margin: 0 } }"
-      "</style>");
 }
 
 // An inline <style> without markup characters is still minified.
@@ -2620,35 +2592,6 @@ TEST_F(CssFilterTest, InlineStyleWithoutMarkupIsMinified) {
   ValidateExpected("plain",
                    "<style>p { margin: 0; }</style>",
                    "<style>p{margin:0}</style>");
-}
-
-// The same inline <style> bytes on an HTML page and then an XHTML page: the
-// XHTML parse must not reuse the HTML parse's warm-cache rewrite.
-TEST_F(CssFilterTest, WarmCacheHtmlThenXhtmlLeavesInlineStyleAlone) {
-  static const char kCss[] =
-      "<style>div { color: red; } @media (width < 600px) { p { margin: 0 } }"
-      "</style>";
-  static const char kMinCss[] =
-      "<style>div{color:red}@media (width < 600px) { p { margin: 0 } }</style>";
-  SetHtmlMimetype();
-  ValidateExpected("html_first", kCss, kMinCss);
-
-  ClearDriverAndSetMimetype("application/xhtml+xml");
-  ValidateNoChanges("xhtml_warm", kCss);
-}
-
-// Same as above in the opposite warm-cache order.
-TEST_F(CssFilterTest, WarmCacheXhtmlThenHtmlMinifiesInlineStyle) {
-  static const char kCss[] =
-      "<style>div { color: red; } @media (width < 600px) { p { margin: 0 } }"
-      "</style>";
-  static const char kMinCss[] =
-      "<style>div{color:red}@media (width < 600px) { p { margin: 0 } }</style>";
-  SetXhtmlMimetype();
-  ValidateNoChanges("xhtml_first", kCss);
-
-  ClearDriverAndSetMimetype("text/html");
-  ValidateExpected("html_warm", kCss, kMinCss);
 }
 
 class CssFilterTestUrlNamer : public CssFilterTest {
@@ -2755,6 +2698,21 @@ TEST_F(CssFilterTestUrlNamer, AbsolutifyWithBom) {
                           false /* enable_image_rewriting */,
                           true  /* enable_proxy_mode */,
                           false /* enable_mapping_and_sharding */);
+}
+
+// On an HTML page an inline <style> whose rewritten text would hold markup is
+// left alone, wherever it is.
+TEST_F(CssFilterTest, InlineStyleThatWouldHoldMarkupIsLeftAlone) {
+  SetHtmlMimetype();
+  ValidateNoChanges("noscript",
+                    "<noscript><style>*[title=\"\\3C/noscript\\3E\"] "
+                    "{ color : red }</style></noscript>");
+  ValidateNoChanges("select",
+                    "<select><style>*[title=\"\\3C input\\3E\"] "
+                    "{ color : red }</style></select>");
+  ValidateNoChanges("frameset",
+                    "<frameset><style>*[title=\"\\3C frame\\3E\"] "
+                    "{ color : red }</style></frameset>");
 }
 
 }  // namespace

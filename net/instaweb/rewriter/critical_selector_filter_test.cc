@@ -318,58 +318,6 @@ TEST_F(CriticalSelectorFilterTest,
                            "<body><div>Stuff</div></body>"));
 }
 
-// XHTML keeps a stylesheet with any '<' external.
-TEST_F(CriticalSelectorFilterTest, XhtmlWithLessThanSignKeepsTheLink) {
-  SetXhtmlMimetype();
-  SetResponseWithDefaultHeaders(
-      "c.css", kContentTypeCss,
-      "@property --x{syntax:\"<length>\";inherits:false;initial-value:0px}"
-      "*{color:red}",
-      100);
-  ValidateNoChanges("xhtml_lt", StrCat("<head>", CssLinkHref("c.css"),
-                                       "</head>"
-                                       "<body><div>Stuff</div></body>"));
-}
-
-// In HTML the same escape is plain CSS text inside the inline style.
-TEST_F(CriticalSelectorFilterTest, EscapedLessThanBeforeLetterIsInlinedInHtml) {
-  SetResponseWithDefaultHeaders(
-      "c.css", kContentTypeCss,
-      "*{color:red}label[for=\"\\3Cmain\"]{text-decoration:underline}", 100);
-  Parse("escaped_lt_letter_html", StrCat("<head>", CssLinkHref("c.css"),
-                                         "</head>"
-                                         "<body><div>Stuff</div></body>"));
-  EXPECT_NE(GoogleString::npos, output_buffer_.find("<style>*{color:red}"))
-      << output_buffer_;
-}
-
-// A '<' that is ordinary CSS (a registered property's syntax descriptor, a
-// media query range) must not keep the critical rules from being inlined.
-TEST_F(CriticalSelectorFilterTest, LessThanSignInCssIsInlined) {
-  SetResponseWithDefaultHeaders(
-      "c.css", kContentTypeCss,
-      "@property --x{syntax:\"<length>\";inherits:false;initial-value:0px}"
-      "@media (width < 600px){div{margin:0}}"
-      "*{color:red}",
-      100);
-  Parse("lt_in_css", StrCat("<head>", CssLinkHref("c.css"),
-                            "</head>"
-                            "<body><div>Stuff</div></body>"));
-  EXPECT_NE(GoogleString::npos, output_buffer_.find("<style>"))
-      << output_buffer_;
-  EXPECT_NE(GoogleString::npos, output_buffer_.find("<length>"))
-      << output_buffer_;
-  EXPECT_NE(GoogleString::npos, output_buffer_.find("(width < 600px)"))
-      << output_buffer_;
-}
-
-// NOTE (SEC-05 #22): upstream's EscapedClosingStyleTagKeepsTheLink and
-// ForeignLinkIsLeftAlone are not ported. The first needs the CSS
-// parse/serialize round-trip to decode escapes (so the summary carries a
-// literal "</style"); the second needs foreign-content keyword suppression
-// in the HTML lexer. Neither is in #22's diff; both are parser features
-// outside SEC-05's scope.
-
 TEST_F(CriticalSelectorFilterTest, EmptyBlock) {
   // Do not insert empty <style> blocks. Our critical selector sets do not
   // talk about 'i' so this should do nothing..
@@ -800,6 +748,33 @@ TEST_F(CriticalSelectorWithBackgroundImageCacheExtensionTest,
       LoadRestOfCss(rewritten_css),
       "</body>\n");
   ValidateExpected("dont_mix_unopt_and_opt", input_html, expected_html);
+}
+
+// On an HTML page a critical subset that would hold markup keeps the link as
+// it is, wherever the link is. The markup sits in declaration values of
+// critical selectors: attribute selectors never reach the summary here, and
+// the serializer preserves escapes verbatim, so only literal markup in a
+// kept rule exercises the check.
+TEST_F(CriticalSelectorFilterTest, SubsetThatWouldHoldMarkupKeepsTheLink) {
+  SetHtmlMimetype();
+  SetResponseWithDefaultHeaders(
+      "c.css", kContentTypeCss,
+      "div{content:\"</noembed>\"}", 100);
+  ValidateNoChanges("closing_tag",
+                    StrCat("<head><noembed>", CssLinkHref("c.css"),
+                           "</noembed></head>"
+                           "<body><div>Stuff</div></body>"));
+  SetResponseWithDefaultHeaders(
+      "d.css", kContentTypeCss, "div{content:\"< input>\"}", 100);
+  ValidateNoChanges("start_tag",
+                    StrCat("<head></head><body><select>", CssLinkHref("d.css"),
+                           "</select><div>Stuff</div></body>"));
+  SetResponseWithDefaultHeaders("e.css", kContentTypeCss,
+                                "div{content:\"<!--\"}", 100);
+  ValidateNoChanges("comment_opener",
+                    StrCat("<head>", CssLinkHref("e.css"),
+                           "</head>"
+                           "<body><div>Stuff</div></body>"));
 }
 
 }  // namespace

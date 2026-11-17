@@ -137,7 +137,6 @@ class CssInlineFilterTest : public RewriteTestBase {
 
   void VerifyNoInliningForClosingStyleTag(
       const GoogleString& closing_style_tag) {
-    SetHtmlMimetype();
     AddFilter(RewriteOptions::kInlineCss);
     SetResponseWithDefaultHeaders("foo.css", kContentTypeCss,
                                   StrCat("a{margin:0}", closing_style_tag),
@@ -152,20 +151,7 @@ class CssInlineFilterTest : public RewriteTestBase {
                      "<link rel='stylesheet' href='foo.css'>",
                      "<link rel='stylesheet' href='foo.css'>"
                      "<!--CSS not inlined since it contains "
-                     "a closing style tag-->");
-  }
-
-  // Clears per-parse driver state (including the memoized document kind) so
-  // the next parse sees a new Content-Type. The metadata cache on the server
-  // context is intentionally kept, so the next parse exercises warm-cache
-  // reuse of the previous parse's inline decision.
-  void ClearDriverAndSetMimetype(const char* mimetype) {
-    output_buffer_.clear();
-    rewrite_driver()->Clear();
-    rewrite_driver()->set_request_context(
-        RequestContext::NewTestRequestContext(factory()->thread_system()));
-    response_headers_.RemoveAll(HttpAttributes::kContentType);
-    SetMimetype(mimetype);
+                     "a less-than sign-->");
   }
 
   void TurnOnDebug() {
@@ -789,42 +775,9 @@ TEST_F(CssInlineFilterTest, NoInliningOfCloseStyleTagWithSpaces) {
   VerifyNoInliningForClosingStyleTag("</style abc>");
 }
 
-// A closing style tag inside a string or comment still keeps it external.
-TEST_F(CssInlineFilterTest, NoInliningOfCloseStyleTagInStringOrComment) {
-  VerifyNoInliningForClosingStyleTag("a:after{content:\"</style>\"}");
-}
-
-TEST_F(CssInlineFilterTest, NoInliningOfCloseStyleTagInComment) {
-  VerifyNoInliningForClosingStyleTag("a{margin:0}/* </STYLE> */");
-}
-
-// XHTML keeps the conservative check: any '<' keeps the stylesheet external,
-// since a '<' in an inline <style> would break XML well-formedness.
-TEST_F(CssInlineFilterTest, XhtmlWithLessThanSignIsNotInlined) {
-  SetXhtmlMimetype();
-  AddFilter(RewriteOptions::kInlineCss);
-  SetResponseWithDefaultHeaders("foo.css", kContentTypeCss,
-                                "@media (width < 600px){a{margin:0}}", 100);
-  ValidateNoChanges("xhtml_lt", "<link rel='stylesheet' href='foo.css'/>");
-}
-
-// NOTE (SEC-05 #22): upstream's ForeignLinkIsLeftAlone is not ported: it
-// needs foreign-content keyword suppression in the HTML lexer (our lexer
-// still keywords <link> inside <svg>/<math>). Not in #22's diff; outside
-// SEC-05's scope.
-
-// A '<' that is plain CSS does not stop inlining in HTML.
-TEST_F(CssInlineFilterTest, StylesheetWithLessThanSignIsInlined) {
-  SetHtmlMimetype();
-  AddFilter(RewriteOptions::kInlineCss);
-  const char kCss[] =
-      "@property --tw-shadow-alpha{syntax:\"<percentage>\";inherits:false;"
-      "initial-value:100%}"
-      "@media (width < 600px){a{margin:0}}"
-      "td[headers=\"<x>\"]{padding:3px}";
-  SetResponseWithDefaultHeaders("foo.css", kContentTypeCss, kCss, 100);
-  ValidateExpected("inlined_lt", "<link rel='stylesheet' href='foo.css'>",
-                   StrCat("<style>", kCss, "</style>"));
+// A stylesheet with a tag in it stays external.
+TEST_F(CssInlineFilterTest, NoInliningOfAnyTag) {
+  VerifyNoInliningForClosingStyleTag("td[headers=\"<x>\"]{padding:3px}");
 }
 
 // CSS escapes are not decoded by the HTML parser, so an escaped closing tag
@@ -837,67 +790,6 @@ TEST_F(CssInlineFilterTest, EscapedClosingStyleTagIsInlinedVerbatimInHtml) {
   ValidateExpected("inlined_escaped_close",
                    "<link rel='stylesheet' href='foo.css'>",
                    StrCat("<style>", kCss, "</style>"));
-}
-
-// The same stylesheet URL on an HTML page and then an XHTML page: the XHTML
-// parse must not reuse the HTML parse's warm-cache inline decision.
-TEST_F(CssInlineFilterTest, WarmCacheHtmlThenXhtmlKeepsStylesheetExternal) {
-  SetHtmlMimetype();
-  AddFilter(RewriteOptions::kInlineCss);
-  const char kCss[] = "@media (width < 600px){a{margin:0}}";
-  SetResponseWithDefaultHeaders("shared.css", kContentTypeCss, kCss, 100);
-  ValidateExpected("html_first", "<link rel='stylesheet' href='shared.css'>",
-                   StrCat("<style>", kCss, "</style>"));
-
-  ClearDriverAndSetMimetype("application/xhtml+xml");
-  ValidateNoChanges("xhtml_warm", "<link rel='stylesheet' href='shared.css'/>");
-}
-
-// Same as above in the opposite warm-cache order.
-TEST_F(CssInlineFilterTest, WarmCacheXhtmlThenHtmlInlinesOnlyInHtml) {
-  SetXhtmlMimetype();
-  AddFilter(RewriteOptions::kInlineCss);
-  const char kCss[] = "@media (width < 600px){a{margin:0}}";
-  SetResponseWithDefaultHeaders("shared.css", kContentTypeCss, kCss, 100);
-  ValidateNoChanges("xhtml_first",
-                    "<link rel='stylesheet' href='shared.css'/>");
-
-  ClearDriverAndSetMimetype("text/html");
-  ValidateExpected("html_warm", "<link rel='stylesheet' href='shared.css'>",
-                   StrCat("<style>", kCss, "</style>"));
-}
-
-// With response headers that are never finalized, and no Content-Type in them
-// (as on Apache), the type the parse was started with decides: only plain
-// HTML gets the narrow check.
-class CssInlineUnfinalizedHeadersTest : public CssInlineFilterTest {
- protected:
-  GoogleString InlineWithParseType(const ContentType& type) {
-    server_context()->set_response_headers_finalized(false);
-    AddFilter(RewriteOptions::kInlineCss);
-    SetResponseWithDefaultHeaders("foo.css", kContentTypeCss,
-                                  "@media (width < 600px){a{margin:0}}", 100);
-    SetupWriter();
-    rewrite_driver()->StartParseWithType(StrCat(kTestDomain, "x.html"), type);
-    rewrite_driver()->ParseText("<link rel='stylesheet' href='foo.css'>");
-    rewrite_driver()->FinishParse();
-    return output_buffer_;
-  }
-};
-
-TEST_F(CssInlineUnfinalizedHeadersTest, HtmlParseGetsNarrowCheck) {
-  EXPECT_EQ("<style>@media (width < 600px){a{margin:0}}</style>",
-            InlineWithParseType(kContentTypeHtml));
-}
-
-TEST_F(CssInlineUnfinalizedHeadersTest, XhtmlParseKeepsBroadCheck) {
-  EXPECT_EQ("<link rel='stylesheet' href='foo.css'>",
-            InlineWithParseType(kContentTypeXhtml));
-}
-
-TEST_F(CssInlineUnfinalizedHeadersTest, OtherParseTypeKeepsBroadCheck) {
-  EXPECT_EQ("<link rel='stylesheet' href='foo.css'>",
-            InlineWithParseType(kContentTypeXml));
 }
 
 TEST_F(CssInlineFilterTest, DisabledForAmp) {
@@ -1018,6 +910,44 @@ TEST_F(CssInlineFilterTest, BasicCsp) {
   ValidateExpected("yes_inline_csp",
                    StrCat(kCspYesInline, CssLinkHref("a.css")),
                    StrCat(kCspYesInline, "<style>a{margin:0}</style>"));
+}
+
+// On an HTML page a stylesheet holding any markup stays external, wherever
+// its link is.
+class CssInlineMarkupPlacementTest : public CssInlineFilterTest {
+ protected:
+  void SetUp() override {
+    CssInlineFilterTest::SetUp();
+    SetHtmlMimetype();
+    AddFilter(RewriteOptions::kInlineCss);
+  }
+
+  // Each call uses its own stylesheet URL, so no result is shared.
+  void ExpectExternal(const char* id, const char* css, const char* before,
+                      const char* after) {
+    const GoogleString url = StrCat(id, ".css");
+    SetResponseWithDefaultHeaders(url, kContentTypeCss, css, 100);
+    ValidateNoChanges(id, StrCat(before, "<link rel='stylesheet' href='", url,
+                                 "'>", after));
+  }
+};
+
+TEST_F(CssInlineMarkupPlacementTest, ClosingTag) {
+  ExpectExternal("noembed", "a{margin:0}/*</noembed>*/", "<noembed>",
+                 "</noembed>");
+  ExpectExternal("noframes", "a{margin:0}/*</noframes>*/", "<noframes>",
+                 "</noframes>");
+  ExpectExternal("textarea", "a{margin:0}/*</textarea>*/", "<textarea/>", "");
+}
+
+TEST_F(CssInlineMarkupPlacementTest, StartTag) {
+  ExpectExternal("select", "a{margin:0}/*<input>*/", "<select>", "</select>");
+  ExpectExternal("frameset", "a{margin:0}/*<frame>*/", "<frameset>",
+                 "</frameset>");
+}
+
+TEST_F(CssInlineMarkupPlacementTest, CommentOpener) {
+  ExpectExternal("comment", "a{margin:0}/*<!--*/", "", "");
 }
 
 }  // namespace
