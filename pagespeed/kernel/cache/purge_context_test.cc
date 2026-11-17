@@ -87,7 +87,9 @@ class PurgeContextTest : public ::testing::Test,
         scheduler_(thread_system_.get(), &timer_),
         lock_manager_(&file_system_, kBasePath, &scheduler_,
                       &message_handler_),
-        lock_tester_(thread_system_.get()) {
+        lock_tester_(thread_system_.get()),
+        num_refused_(0),
+        num_clobbers_(0) {
     if (HasValidStats()) {
       statistics_.reset(new SimpleStats(thread_system_.get()));
     } else {
@@ -127,6 +129,25 @@ class PurgeContextTest : public ::testing::Test,
   }
   PurgeContext::PurgeCallback* ExpectFailure() {
     return NewCallback(this, &PurgeContextTest::ExpectFailureHelper);
+  }
+
+  void ExpectPurgeSetFullHelper(bool x, StringPiece reason) {
+    EXPECT_FALSE(x);
+    EXPECT_EQ(PurgeContext::kPurgeSetFull, reason);
+    ++num_refused_;
+  }
+  PurgeContext::PurgeCallback* ExpectPurgeSetFull() {
+    return NewCallback(this, &PurgeContextTest::ExpectPurgeSetFullHelper);
+  }
+
+  // Overwrites a file the purge context just wrote, so its verify fails.
+  void ClobberFile(const GoogleString& filename) {
+    ++num_clobbers_;
+    ASSERT_TRUE(file_system_.WriteFile(filename.c_str(), "clobbered",
+                                       &message_handler_));
+  }
+  MemFileSystem::FileCallback* ClobberOnWrite() {
+    return NewCallback(this, &PurgeContextTest::ClobberFile);
   }
 
   int64 LockContentionStart(PurgeContext::PurgeCallback* callback) {
@@ -197,6 +218,8 @@ class PurgeContextTest : public ::testing::Test,
   CopyOnWrite<PurgeSet> purge_set2_;
   scoped_ptr<NamedLock> lock_;
   NamedLockTester lock_tester_;
+  int num_refused_;
+  int num_clobbers_;
 };
 
 TEST_P(PurgeContextTest, Empty) {
@@ -281,6 +304,73 @@ TEST_P(PurgeContextTest, InvalidationSharing) {
   EXPECT_FALSE(PollAndTest2("b", 700000));
   EXPECT_TRUE(PollAndTest2("b", 700001));
   EXPECT_EQ(0, file_parse_failures());
+}
+
+TEST_P(PurgeContextTest, NonEvictingPurgeRefusedWhenSetIsFull) {
+  // Each record costs its URL plus 8 bytes: two of these fit in kMaxBytes.
+  const GoogleString url1 = StrCat("http://a.example/", GoogleString(20, '1'));
+  const GoogleString url2 = StrCat("http://a.example/", GoogleString(20, '2'));
+  const GoogleString url3 = StrCat("http://a.example/", GoogleString(20, '3'));
+  scheduler_.AdvanceTimeMs(1000);
+  const int64 cached_ms = timer_.NowMs();  // when another site cached "b"
+  scheduler_.AdvanceTimeMs(1000);
+  purge_context1_->AddPurgeUrlWithoutEviction(url1, timer_.NowMs(),
+                                              ExpectSuccess());
+  scheduler_.AdvanceTimeMs(1000);
+  purge_context1_->AddPurgeUrlWithoutEviction(url2, timer_.NowMs(),
+                                              ExpectSuccess());
+  scheduler_.AdvanceTimeMs(1000);
+  purge_context1_->AddPurgeUrlWithoutEviction(url3, timer_.NowMs(),
+                                              ExpectPurgeSetFull());
+  scheduler_.AdvanceTimeMs(10 * Timer::kSecondMs);  // force poll
+  EXPECT_EQ(1, num_refused_);
+
+  // The refused purge evicted nothing, so the whole-cache invalidation
+  // timestamp did not move and other entries stay valid, in this context and
+  // in the other one sharing the file.
+  EXPECT_TRUE(PollAndTest1("b", cached_ms));
+  EXPECT_TRUE(PollAndTest2("b", cached_ms));
+  EXPECT_FALSE(PollAndTest1(url1, cached_ms + 1000));
+  EXPECT_FALSE(PollAndTest2(url2, cached_ms + 2000));
+  EXPECT_TRUE(PollAndTest1(url3, cached_ms));
+
+  // An evicting purge (the whole-server console) still makes room.
+  purge_context1_->AddPurgeUrl(url3, timer_.NowMs(), ExpectSuccess());
+  scheduler_.AdvanceTimeMs(10 * Timer::kSecondMs);  // force poll
+  EXPECT_FALSE(PollAndTest1(url3, cached_ms));
+  EXPECT_FALSE(PollAndTest1("b", cached_ms));
+  EXPECT_EQ(0, file_parse_failures());
+}
+
+TEST_P(PurgeContextTest, RefusedOnlyRoundLeavesPurgeFileAlone) {
+  // Two of these fill kMaxBytes.
+  const GoogleString url1 = StrCat("http://a.example/", GoogleString(20, '1'));
+  const GoogleString url2 = StrCat("http://a.example/", GoogleString(20, '2'));
+  const GoogleString url3 = StrCat("http://a.example/", GoogleString(20, '3'));
+  scheduler_.AdvanceTimeMs(1000);
+  purge_context1_->AddPurgeUrlWithoutEviction(url1, timer_.NowMs(),
+                                              ExpectSuccess());
+  scheduler_.AdvanceTimeMs(1000);
+  purge_context1_->AddPurgeUrlWithoutEviction(url2, timer_.NowMs(),
+                                              ExpectSuccess());
+  scheduler_.AdvanceTimeMs(1000);
+  GoogleString before;
+  ASSERT_TRUE(file_system_.ReadFile(kPurgeFile, &before, &message_handler_));
+  const int writes_before = file_writes();
+
+  // A round in which the only purge is refused writes nothing: a write here
+  // would be clobbered and fail its verify.
+  file_system_.set_write_callback(ClobberOnWrite());
+  purge_context1_->AddPurgeUrlWithoutEviction(url3, timer_.NowMs(),
+                                              ExpectPurgeSetFull());
+  scheduler_.AdvanceTimeMs(10 * Timer::kSecondMs);
+  EXPECT_EQ(1, num_refused_);
+  EXPECT_EQ(0, num_clobbers_);
+  EXPECT_EQ(writes_before, file_writes());
+  GoogleString after;
+  ASSERT_TRUE(file_system_.ReadFile(kPurgeFile, &after, &message_handler_));
+  EXPECT_EQ(before, after);
+  file_system_.set_write_callback(NULL);
 }
 
 TEST_P(PurgeContextTest, EmptyPurgeFile) {

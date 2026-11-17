@@ -55,7 +55,7 @@ class MockProxyFetch : public ProxyFetch {
   MockProxyFetch(AsyncFetch* async_fetch,
                  ProxyFetchFactory* factory,
                  ServerContext* server_context)
-      : ProxyFetch("http://www.google.com", false,
+      : ProxyFetch("http://www.google.com", false, false,
                    NULL,  // callback
                    async_fetch,
                    NULL,  // no original content fetch

@@ -58,6 +58,7 @@ ResourceCombiner::ResourceCombiner(RewriteDriver* driver,
       partnership_(driver),
       prev_num_components_(0),
       accumulated_leaf_size_(0),
+      refused_for_size_(false),
       // TODO(jmarantz): The URL overhead computation is arguably fragile.
       // Another approach is to put a CHECK that the final URL with the
       // resource naming does not exceed the limit.
@@ -134,6 +135,7 @@ TimedBool ResourceCombiner::AddResourceNoFetch(const ResourcePtr& resource,
       handler->Message(kInfo, "Cannot combine %s: %s", resource->url().c_str(),
                        failure_reason);
       RemoveLastResource();
+      refused_for_size_ = true;
       added = false;
     }
   } else {
@@ -306,6 +308,7 @@ void ResourceCombiner::Reset() {
   partnership_.Reset(rewrite_driver_->base_url());
   prev_num_components_ = 0;
   accumulated_leaf_size_ = 0;
+  refused_for_size_ = false;
   resolved_base_.clear();
 }
 

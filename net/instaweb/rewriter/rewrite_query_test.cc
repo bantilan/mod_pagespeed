@@ -20,8 +20,13 @@
 
 #include "net/instaweb/rewriter/public/rewrite_query.h"
 
+#include <algorithm>
+#include <memory>
+
 #include "base/logging.h"
 #include "net/instaweb/http/public/request_context.h"
+#include "net/instaweb/rewriter/public/resource_namer.h"
+#include "net/instaweb/rewriter/public/rewrite_filter.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
 #include "net/instaweb/rewriter/public/rewrite_test_base.h"
 #include "net/instaweb/rewriter/public/test_rewrite_driver_factory.h"
@@ -30,6 +35,7 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/ref_counted_ptr.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/html/html_parse_test_base.h"
 #include "pagespeed/kernel/http/google_url.h"
 #include "pagespeed/kernel/http/http_names.h"
@@ -41,6 +47,12 @@ const char kHtmlUrl[] = "http://www.test.com/index.jsp";
 
 class RewriteQueryTest : public RewriteTestBase {
  protected:
+  // Parses an options segment the way a fetch of an optimized URL does.
+  static RewriteQuery::Status ParseResourceOptionForTest(
+      StringPiece value, RewriteOptions* options, const RewriteFilter* filter) {
+    return RewriteQuery::ParseResourceOption(value, options, filter);
+  }
+
   virtual void SetUp() {
     RewriteTestBase::SetUp();
     allow_related_options_ = false;
@@ -899,6 +911,117 @@ TEST_F(RewriteQueryTest, RequestOptionOverrideNotProvidedWhenRequired) {
   EXPECT_TRUE(options == NULL);
 }
 
+TEST_F(RewriteQueryTest, ResponseOverrideTokenHonouredAndRemoved) {
+  // The origin's token unlocks its option headers.  The option headers and
+  // the token are all removed from the response.
+  RequestHeaders request_headers;
+  ResponseHeaders response_headers;
+  GoogleString out_query, out_req_string, out_resp_string;
+  request_option_override_ = "abc";
+  response_headers.Add("PageSpeedFilters", "remove_quotes");
+  response_headers.Add("PageSpeedRequestOptionOverride", "abc");
+  const RewriteOptions* options = ParseAndScan(
+      kHtmlUrl, "", StringPiece(), &request_headers, &response_headers,
+      &out_query, &out_req_string, &out_resp_string);
+  ASSERT_TRUE(options != NULL);
+  EXPECT_TRUE(options->Enabled(RewriteOptions::kRemoveQuotes));
+  EXPECT_EQ(0, response_headers.NumAttributes());
+}
+
+TEST_F(RewriteQueryTest, ResponseOverrideTokenRemovedWhenWrong) {
+  // A token that does not match unlocks nothing and is removed all the same.
+  RequestHeaders request_headers;
+  ResponseHeaders response_headers;
+  GoogleString out_query, out_req_string, out_resp_string;
+  request_option_override_ = "abc";
+  response_headers.Add("PageSpeedFilters", "remove_quotes");
+  response_headers.Add("ModPagespeedRequestOptionOverride", "def");
+  const RewriteOptions* options = ParseAndScan(
+      kHtmlUrl, "", StringPiece(), &request_headers, &response_headers,
+      &out_query, &out_req_string, &out_resp_string);
+  EXPECT_TRUE(options == NULL);
+  ASSERT_EQ(1, response_headers.NumAttributes());
+  EXPECT_STREQ("PageSpeedFilters", response_headers.Name(0));
+}
+
+TEST_F(RewriteQueryTest, ResponseOverrideTokenRemovedWhenNotConfigured) {
+  // Without the directive the token means nothing; it is still removed.
+  RequestHeaders request_headers;
+  ResponseHeaders response_headers;
+  GoogleString out_query, out_req_string, out_resp_string;
+  response_headers.Add("PageSpeedRequestOptionOverride", "abc");
+  response_headers.Add("Content-Type", "text/html");
+  ParseAndScan(kHtmlUrl, "", StringPiece(), &request_headers, &response_headers,
+               &out_query, &out_req_string, &out_resp_string);
+  ASSERT_EQ(1, response_headers.NumAttributes());
+  EXPECT_STREQ("Content-Type", response_headers.Name(0));
+}
+
+TEST_F(RewriteQueryTest, ResponseOverrideTokenRemovedOnInvalidQuery) {
+  // An invalid query value ends the scan before the response headers are
+  // read; the token is removed anyway.
+  RequestHeaders request_headers;
+  ResponseHeaders response_headers;
+  GoogleString out_query, out_req_string, out_resp_string;
+  request_option_override_ = "abc";
+  response_headers.Add("PageSpeedRequestOptionOverride", "abc");
+  EXPECT_EQ(
+      RewriteQuery::kInvalid,
+      Parse(kHtmlUrl, "PageSpeed=junk", StringPiece(), &request_headers,
+            &response_headers, &out_query, &out_req_string, &out_resp_string));
+  EXPECT_EQ(0, response_headers.NumAttributes());
+}
+
+TEST_F(RewriteQueryTest, ResponseOverrideTokenRemovedOnInvalidRequestHeader) {
+  // Same when the invalid value is in a request header.
+  RequestHeaders request_headers;
+  ResponseHeaders response_headers;
+  GoogleString out_query, out_req_string, out_resp_string;
+  request_option_override_ = "abc";
+  request_headers.Add("PageSpeed", "junk");
+  response_headers.Add("PageSpeedRequestOptionOverride", "abc");
+  EXPECT_EQ(
+      RewriteQuery::kInvalid,
+      Parse(kHtmlUrl, "", StringPiece(), &request_headers, &response_headers,
+            &out_query, &out_req_string, &out_resp_string));
+  EXPECT_EQ(0, response_headers.NumAttributes());
+}
+
+TEST_F(RewriteQueryTest, OverrideTokenNameIgnoresCase) {
+  EXPECT_TRUE(RewriteQuery::IsRequestOptionOverrideName(
+      "PageSpeedRequestOptionOverride"));
+  EXPECT_TRUE(RewriteQuery::IsRequestOptionOverrideName(
+      "modpagespeedrequestoptionoverride"));
+  EXPECT_FALSE(RewriteQuery::IsRequestOptionOverrideName("PageSpeedFilters"));
+  EXPECT_FALSE(RewriteQuery::IsRequestOptionOverrideName("PageSpeed"));
+}
+
+TEST_F(RewriteQueryTest, LoggedQueryValuesAreEscaped) {
+  // A rejected value from the query is quoted in a warning.  Control
+  // characters in it are escaped, so the warning stays one message line.
+  RequestContextPtr null_request_context;
+  GoogleUrl bad_mode(StrCat(kHtmlUrl, "?PageSpeed=x%0Asecond"));
+  EXPECT_EQ(RewriteQuery::kInvalid,
+            rewrite_query_.Scan(false, false, "", null_request_context,
+                                factory(), server_context(), &bad_mode, NULL,
+                                NULL, message_handler()));
+  GoogleUrl bad_filter(StrCat(kHtmlUrl, "?PageSpeedFilters=x%0Asecond"));
+  rewrite_query_.Scan(false, false, "", null_request_context, factory(),
+                      server_context(), &bad_filter, NULL, NULL,
+                      message_handler());
+
+  GoogleString messages;
+  StringWriter writer(&messages);
+  message_handler()->Dump(&writer);
+  EXPECT_NE(GoogleString::npos,
+            messages.find("Invalid value for PageSpeed: x\\nsecond"))
+      << messages;
+  EXPECT_NE(GoogleString::npos,
+            messages.find("Invalid filter name: x\\nsecond"))
+      << messages;
+  EXPECT_EQ(GoogleString::npos, messages.find("\nWsecond")) << messages;
+}
+
 TEST_F(RewriteQueryTest, GenerateEmptyResourceOption) {
   EXPECT_EQ("", RewriteQuery::GenerateResourceOption("ic", rewrite_driver()));
 }
@@ -981,6 +1104,58 @@ TEST_F(RewriteQueryTest, OnlyAllowWhitelistedResources) {
   EXPECT_TRUE(ParseAndScan(image_url_, "", "") == NULL);
   image = AddOptionsToEncodedUrl(image_url_, "rdm=10");
   EXPECT_TRUE(ParseAndScan(image_url_, "", "") == NULL);
+}
+
+namespace {
+
+// A filter whose URL options list names the given options, to check what an
+// options segment may set whatever a real filter lists.
+class ListedOptionsFilter : public RewriteFilter {
+ public:
+  ListedOptionsFilter(RewriteDriver* driver, StringPieceVector options)
+      : RewriteFilter(driver), options_(options) {
+    std::sort(options_.begin(), options_.end());
+  }
+
+  const char* id() const override { return "lo"; }
+  const char* Name() const override { return "ListedOptions"; }
+  const StringPieceVector* RelatedOptions() const override { return &options_; }
+
+ protected:
+  void StartDocumentImpl() override {}
+  void StartElementImpl(HtmlElement* element) override {}
+  void EndElementImpl(HtmlElement* element) override {}
+
+ private:
+  StringPieceVector options_;
+};
+
+}  // namespace
+
+// An options segment sets only options valid at directory scope or narrower,
+// whatever a filter lists: a server or process setting is refused.
+TEST_F(RewriteQueryTest, OptionSegmentCannotSetServerScopeOption) {
+  StringPieceVector listed;
+  listed.push_back(RewriteOptions::kMaxCacheableResponseContentLength);
+  listed.push_back(RewriteOptions::kImageJpegRecompressionQuality);
+  ListedOptionsFilter filter(rewrite_driver(), listed);
+  const int64 configured = server_context()
+                               ->global_options()
+                               ->max_cacheable_response_content_length();
+  const GoogleString server_value = Integer64ToString(configured / 2 + 1);
+
+  std::unique_ptr<RewriteOptions> parsed(
+      server_context()->factory()->NewRewriteOptionsForQuery());
+  EXPECT_EQ(RewriteQuery::kInvalid,
+            ParseResourceOptionForTest(StrCat("rcl=", server_value),
+                                       parsed.get(), &filter));
+  EXPECT_NE(configured / 2 + 1,
+            parsed->max_cacheable_response_content_length());
+
+  // A listed option of query scope is still accepted.
+  parsed.reset(server_context()->factory()->NewRewriteOptionsForQuery());
+  EXPECT_EQ(RewriteQuery::kSuccess,
+            ParseResourceOptionForTest("iq=61", parsed.get(), &filter));
 }
 
 TEST_F(RewriteQueryTest, ClientOptionsEmptyHeader) {
@@ -1086,6 +1261,23 @@ TEST_F(RewriteQueryTest, CacheControlNoTransform) {
   ASSERT_TRUE(options != NULL);
   EXPECT_FALSE(options->enabled());
   EXPECT_TRUE(request_headers.Lookup1(HttpAttributes::kCacheControl) != NULL);
+}
+
+TEST_F(RewriteQueryTest, CacheControlNoTransformInAnySpelling) {
+  // No-transform turns optimization off however the client spells it.
+  static const char* const kControls[] = {
+      "No-Transform", "max-age=0, no-transform", "x-ext; no-transform"};
+  for (int i = 0, n = arraysize(kControls); i < n; ++i) {
+    RequestHeaders request_headers;
+    request_headers.Replace(HttpAttributes::kCacheControl, kControls[i]);
+    ResponseHeaders response_headers;
+    GoogleString in_query, out_query, out_req_string, out_resp_string;
+    const RewriteOptions* options = ParseAndScan(
+        kHtmlUrl, in_query, StringPiece(), &request_headers, &response_headers,
+        &out_query, &out_req_string, &out_resp_string);
+    ASSERT_TRUE(options != NULL) << kControls[i];
+    EXPECT_FALSE(options->enabled()) << kControls[i];
+  }
 }
 
 TEST_F(RewriteQueryTest, DisableFiltersWithXHR) {

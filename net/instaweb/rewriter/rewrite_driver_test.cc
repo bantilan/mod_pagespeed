@@ -2296,6 +2296,31 @@ TEST_F(RewriteDriverTest, SetRequestHeadersPopulatesWebpNoAccept) {
   EXPECT_FALSE(request_properties->SupportsWebpLosslessAlpha());
 }
 
+// Past the parse limit a page's text is passed through, and flushes in the
+// tail release it; the whole input arrives intact. (There is no event
+// hold-back machinery on this tree, so nothing to assert about it.)
+TEST_F(RewriteDriverTest, ABlankTailPastTheLimitIsNotHeldBack) {
+  RewriteDriver* driver = rewrite_driver();
+  ResponseHeaders headers;
+  driver->set_response_headers_ptr(&headers);
+  options()->DisableFilter(RewriteOptions::kCollapseWhitespace);
+  driver->AddFilters();
+  SetupWriter();
+  ASSERT_TRUE(driver->StartParse("http://example.com/index.html"));
+  driver->set_pass_through_after(1000);
+  GoogleString input = "<!-- note 1 -->";
+  driver->ParseText(input);
+  const GoogleString blank(8 * 1024, '\n');
+  for (int i = 0; i < 20; ++i) {
+    driver->ParseText(blank);
+    driver->Flush();
+    input += blank;
+  }
+  EXPECT_TRUE(driver->passing_through());
+  driver->FinishParse();
+  EXPECT_EQ(input, output_buffer_);
+}
+
 // Test classes created for using a managed rewrite driver, so that downstream
 // caching behavior (especially cache purging) can be tested. Since managed
 // rewrite drivers need their filters to be setup before the custom rewrite

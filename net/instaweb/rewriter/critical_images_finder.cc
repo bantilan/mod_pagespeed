@@ -21,6 +21,7 @@
 #include "net/instaweb/rewriter/public/critical_images_finder.h"
 
 #include <map>
+#include <tuple>
 
 #include "base/logging.h"
 #include "net/instaweb/http/public/request_context.h"
@@ -74,18 +75,100 @@ CriticalImagesInfo* CriticalImagesInfoFromPropertyValue(
   return info.release();
 }
 
-// Setup a map for RenderedImages and their dimensions.
-void SetupRenderedImageDimensionsMap(
-    const RenderedImages& rendered_images,
-    RenderedImageDimensionsMap* map) {
+// Setup a map for RenderedImages and their dimensions. A size is used only
+// once enough beacon results were merged into the stored value and the size
+// has at least support_percentage of the maximum possible support, the rule
+// that GetCriticalKeysFromProto applies to critical images. With a percentage
+// above 50 at most one size per image qualifies.
+void SetupRenderedImageDimensionsMap(const RenderedImages& rendered_images,
+                                     int support_percentage,
+                                     RenderedImageDimensionsMap* map) {
+  if (rendered_images.beacons_received() <
+      CriticalImagesFinder::kMinBeaconsForRenderedDimensions) {
+    return;
+  }
+  const int64 support_threshold =
+      (support_percentage == 0)
+          ? 1
+          : static_cast<int64>(support_percentage) *
+                rendered_images.maximum_possible_support();
   for (int i = 0; i < rendered_images.image_size(); ++i) {
     const RenderedImages_Image& images = rendered_images.image(i);
+    const int64 support = images.support();
+    if (support <= 0 || support * 100 < support_threshold) {
+      continue;
+    }
     // In case of beacons returning these rendered dimensions, images.src()
     // will be a hash of the image url. Hence when we do a lookup in
     // rendered_images_map we need to hash the url.
     (*map)[images.src()] = std::make_pair(
         images.rendered_width(), images.rendered_height());
   }
+}
+
+// Decay a support value by support_interval / (support_interval + 1),
+// rounding down, as critical keys do.
+int32 DecayRenderedSupport(int support_interval, int64 support) {
+  support *= support_interval;
+  support /= support_interval + 1;
+  return static_cast<int32>(support);
+}
+
+int32 SaturatingAdd(int32 a, int64 b) {
+  int64 sum = a + b;
+  return sum > kint32max ? kint32max : static_cast<int32>(sum);
+}
+
+// Merge the rendered sizes of one beacon result into the stored value: the
+// support of every stored size decays (a size whose support falls to 0 is
+// dropped), and each size the result reports gains support_interval. A
+// result counts once per image. Stored entries without support (written by
+// an earlier version, which kept only the last result) are dropped.
+void MergeRenderedImages(const RenderedImages& report, int support_interval,
+                         RenderedImages* stored) {
+  RenderedImages merged;
+  std::map<std::tuple<GoogleString, int32, int32>, int> index;
+  for (int i = 0; i < stored->image_size(); ++i) {
+    const RenderedImages_Image& image = stored->image(i);
+    const int32 support =
+        DecayRenderedSupport(support_interval, image.support());
+    if (support <= 0) {
+      continue;
+    }
+    RenderedImages_Image* kept = merged.add_image();
+    *kept = image;
+    kept->set_support(support);
+    index[std::make_tuple(image.src(), image.rendered_width(),
+                          image.rendered_height())] = merged.image_size() - 1;
+  }
+  merged.set_maximum_possible_support(
+      SaturatingAdd(DecayRenderedSupport(support_interval,
+                                         stored->maximum_possible_support()),
+                    support_interval));
+  merged.set_beacons_received(SaturatingAdd(stored->beacons_received(), 1));
+  StringSet reported;
+  for (int i = 0; i < report.image_size(); ++i) {
+    const RenderedImages_Image& image = report.image(i);
+    if (!reported.insert(image.src()).second) {
+      continue;
+    }
+    std::tuple<GoogleString, int32, int32> key = std::make_tuple(
+        image.src(), image.rendered_width(), image.rendered_height());
+    std::map<std::tuple<GoogleString, int32, int32>, int>::iterator found =
+        index.find(key);
+    if (found != index.end()) {
+      RenderedImages_Image* entry = merged.mutable_image(found->second);
+      entry->set_support(SaturatingAdd(entry->support(), support_interval));
+    } else {
+      RenderedImages_Image* entry = merged.add_image();
+      entry->set_src(image.src());
+      entry->set_rendered_width(image.rendered_width());
+      entry->set_rendered_height(image.rendered_height());
+      entry->set_support(support_interval);
+      index[key] = merged.image_size() - 1;
+    }
+  }
+  stored->Swap(&merged);
 }
 
 }  // namespace
@@ -267,6 +350,7 @@ void CriticalImagesFinder::UpdateCriticalImagesSetInDriver(
         ExtractRenderedImageDimensionsFromCache(driver));
     if (rendered_images != NULL) {
       SetupRenderedImageDimensionsMap(*rendered_images,
+                                      PercentSeenForCritical(),
                                       &info->rendered_images_map);
     }
   }
@@ -336,7 +420,8 @@ bool CriticalImagesFinder::UpdateCriticalImagesCacheEntry(
   PopulateCriticalImagesFromPropertyValue(property_value, &critical_images);
   return UpdateAndWriteBackCriticalImagesCacheEntry(
       html_critical_images_set, css_critical_images_set, rendered_images_set,
-      support_interval, cohort, page, &critical_images);
+      support_interval, false /* require_prior_support */, cohort, page,
+      &critical_images);
 }
 
 bool CriticalImagesFinder::UpdateAndWriteBackCriticalImagesCacheEntry(
@@ -344,18 +429,33 @@ bool CriticalImagesFinder::UpdateAndWriteBackCriticalImagesCacheEntry(
     const StringSet* css_critical_images_set,
     const RenderedImages* rendered_images_set,
     int support_interval,
-    const PropertyCache::Cohort* cohort,
-    AbstractPropertyPage* page,
-    CriticalImages* critical_images) {
-  // Update RenderedImages proto in property Cache.
+    bool require_prior_support, const PropertyCache::Cohort* cohort,
+    AbstractPropertyPage* page, CriticalImages* critical_images) {
+  bool updated = UpdateCriticalImages(html_critical_images_set,
+                                      css_critical_images_set, support_interval,
+                                      require_prior_support, critical_images);
+  // Merge the rendered image sizes into the RenderedImages proto in the
+  // property cache, so that the stored sizes reflect recent beacon results
+  // rather than the last one.
   if (rendered_images_set != NULL) {
-    UpdateInPropertyCache(
-        *rendered_images_set, cohort, kRenderedImageDimensionsProperty,
-        false /* don't write cohort */, page);
+    scoped_ptr<RenderedImages> stored(new RenderedImages());
+    PropertyValue* dimensions_value =
+        page->GetProperty(cohort, kRenderedImageDimensionsProperty);
+    if (dimensions_value != NULL && dimensions_value->has_value()) {
+      ArrayInputStream input(dimensions_value->value().data(),
+                             dimensions_value->value().size());
+      if (!stored->ParseFromZeroCopyStream(&input)) {
+        stored->Clear();
+      }
+    }
+    MergeRenderedImages(*rendered_images_set, support_interval, stored.get());
+    UpdateInPropertyCache(*stored, cohort, kRenderedImageDimensionsProperty,
+                          false /* don't write cohort */, page);
+    // critical_images is written back below in this case too, which stores
+    // the nonce this result used as used.
+    updated = true;
   }
-  if (!UpdateCriticalImages(
-      html_critical_images_set, css_critical_images_set,
-      support_interval, critical_images)) {
+  if (!updated) {
     return false;
   }
 
@@ -380,11 +480,12 @@ bool CriticalImagesFinder::UpdateCriticalImages(
     const StringSet* html_critical_images,
     const StringSet* css_critical_images,
     int support_interval,
+    bool require_prior_support,
     CriticalImages* critical_images) {
   DCHECK(critical_images != NULL);
   if (html_critical_images != NULL) {
     UpdateCriticalKeys(
-        false /* require_prior_support */,
+        require_prior_support,
         *html_critical_images,
         support_interval,
         critical_images->mutable_html_critical_image_support());

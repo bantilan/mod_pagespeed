@@ -63,6 +63,7 @@
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_hash.h"
 #include "pagespeed/kernel/base/string_util.h"
+#include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/cache/lru_cache.h"
 #include "pagespeed/kernel/html/html_element.h"
@@ -1120,6 +1121,30 @@ TEST_F(ServerContextTest, TestHandleBeaconInvalidUrl) {
       UserAgentMatcherTestBase::kChromeUserAgent, CreateRequestContext()));
 }
 
+TEST_F(ServerContextTest, TestHandleBeaconRejectedValueEscapedInLog) {
+  // A rejected beacon is quoted in a warning.  Control characters from the
+  // client are escaped, so each warning stays one message line.
+  EXPECT_FALSE(server_context()->HandleBeacon(
+      "url=not-a-url%0Asecond&ets=load:34",
+      UserAgentMatcherTestBase::kChromeUserAgent, CreateRequestContext()));
+  EXPECT_FALSE(server_context()->HandleBeacon(
+      "ets=load:34\nsecond", UserAgentMatcherTestBase::kChromeUserAgent,
+      CreateRequestContext()));
+
+  GoogleString messages;
+  StringWriter writer(&messages);
+  message_handler()->Dump(&writer);
+  EXPECT_NE(
+      GoogleString::npos,
+      messages.find("Invalid URL parameter in beacon: not-a-url\\nsecond"))
+      << messages;
+  EXPECT_NE(
+      GoogleString::npos,
+      messages.find("Missing URL parameter in beacon: ets=load:34\\nsecond"))
+      << messages;
+  EXPECT_EQ(GoogleString::npos, messages.find("\nWsecond")) << messages;
+}
+
 TEST_F(ServerContextTest, TestHandleBeaconMissingValue) {
   EXPECT_FALSE(server_context()->HandleBeacon(
       "url=http%3A%2F%2Flocalhost%3A8080%2Findex.html&ets=load:",
@@ -1201,6 +1226,12 @@ class BeaconTest : public ServerContextTest {
             PrepareForBeaconInsertion(rewrite_driver());
     ASSERT_EQ(kBeaconWithNonce, last_beacon_metadata_.status);
     ASSERT_FALSE(last_beacon_metadata_.nonce.empty());
+    // Register the page's images, as CriticalImagesBeaconFilter does at the end
+    // of an instrumented document.
+    server_context()
+        ->critical_images_finder()
+        ->UpdateCandidateImagesForBeaconing(
+            candidate_image_hashes_, rewrite_driver(), true /* beaconing */);
     rewrite_driver()->property_page()->WriteCohort(
         server_context()->beacon_cohort());
   }
@@ -1261,6 +1292,8 @@ class BeaconTest : public ServerContextTest {
   scoped_ptr<RenderedImages> rendered_images_;
   // This field holds candidate critical css selectors.
   StringSet candidates_;
+  // This field holds the hashes of the images on the page.
+  StringSet candidate_image_hashes_;
   BeaconMetadata last_beacon_metadata_;
 };
 
@@ -1289,6 +1322,7 @@ TEST_F(BeaconTest, HandleBeaconRenderedDimensionsofImages) {
   images->set_rendered_height(50);
   GoogleString json_map_rendered_dimensions = StrCat(
       "{\"", hash1, "\":{\"rw\":40,", "\"rh\":50,\"ow\":160,\"oh\":200}}");
+  candidate_image_hashes_.insert(hash1);
   InsertImageBeacon(UserAgentMatcherTestBase::kChromeUserAgent);
   TestBeacon(NULL, NULL, &json_map_rendered_dimensions,
               UserAgentMatcherTestBase::kChromeUserAgent);
@@ -1307,6 +1341,8 @@ TEST_F(BeaconTest, HandleBeaconCritImages) {
   GoogleString hash2 = IntegerToString(
       HashString<CasePreserve, unsigned>(img2.c_str(), img2.size()));
 
+  candidate_image_hashes_.insert(hash1);
+  candidate_image_hashes_.insert(hash2);
   StringSet critical_image_hashes;
   critical_image_hashes.insert(hash1);
   InsertImageBeacon(UserAgentMatcherTestBase::kChromeUserAgent);
@@ -1346,6 +1382,12 @@ TEST_F(BeaconTest, HandleBeaconCritImages) {
              UserAgentMatcherTestBase::kChromeUserAgent);
   EXPECT_STREQ(hash1, JoinCollection(critical_html_images_, ","));
 }
+
+// NOTE: no HandleBeaconKeepsOnlyPageImages here: this fixture's beacon
+// ingestion is broken on this tree (HandleBeaconCritImages fails identically
+// without any of this port's changes), so it cannot pin the new behavior.
+// BeaconCriticalImagesFinderTest.BeaconKeepsOnlyPageImages covers the same
+// logic through direct calls.
 
 TEST_F(BeaconTest, HandleBeaconCriticalCss) {
   InsertCssBeacon(UserAgentMatcherTestBase::kChromeUserAgent);
@@ -1658,6 +1700,18 @@ TEST_F(ServerContextCacheControlTest, NoStoreMixedCase) {
   EXPECT_TRUE(HasCacheControl("no-cache"));
   EXPECT_TRUE(HasCacheControl("no-store"));
   EXPECT_TRUE(HasCacheControl("max-age=0"));
+}
+
+TEST_F(ServerContextCacheControlTest, NoStoreJoinedToAnotherDirective) {
+  // A no-store an origin joined to another directive with a semicolon still
+  // propagates to the output.
+  ResourcePtr joined_no_store_200 =
+      CreateCustomCachingResource("nos_joined_200", 200, ",x-ext; no-store");
+  resources_.push_back(implicit_public_100_);
+  resources_.push_back(joined_no_store_200);
+  server_context()->ApplyInputCacheControl(resources_, &response_headers_);
+  EXPECT_FALSE(HasCacheControl("public"));
+  EXPECT_TRUE(HasCacheControl("no-store"));
 }
 
 TEST_F(ServerContextCacheControlTest, ExplicitPublicMixedCase) {

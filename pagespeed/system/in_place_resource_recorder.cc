@@ -31,6 +31,7 @@
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/base/timer.h"
+#include "pagespeed/kernel/http/caching_headers.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/kernel/http/response_headers.h"
@@ -96,8 +97,10 @@ bool StatesCacheLifetime(const ResponseHeaders& headers) {
                                true /* omit_empty_strings */);
       for (StringPiece directive : directives) {
         TrimWhitespace(&directive);
-        if (StringCaseStartsWith(directive, "max-age") ||
-            StringCaseStartsWith(directive, "s-maxage")) {
+        // Any element that mentions a lifetime counts, a malformed one too:
+        // ComputeCaching reads that as stale.
+        if (CachingHeaders::ReadLifetimeDirective(directive).name !=
+            CachingHeaders::LifetimeDirective::kNone) {
           return true;
         }
       }

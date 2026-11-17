@@ -189,6 +189,19 @@ void PurgeSet::EvictNotify(int64 evicted_record_timestamp_ms) {
       std::max(evicted_record_timestamp_ms, global_invalidation_timestamp_ms_);
 }
 
+bool PurgeSet::PutWithoutEviction(const GoogleString& key, int64 timestamp_ms) {
+  if (lru_->GetNoFreshen(key) == nullptr) {
+    // The same accounting as LRUCacheBase::EvictIfNecessary().
+    size_t bytes_needed = key.size() + sizeof(timestamp_ms);
+    size_t max_bytes = lru_->max_bytes_in_cache();
+    if ((bytes_needed >= max_bytes) ||
+        (lru_->size_bytes() + bytes_needed > max_bytes)) {
+      return false;
+    }
+  }
+  return Put(key, timestamp_ms);
+}
+
 bool PurgeSet::Put(const GoogleString& key, int64 timestamp_ms) {
   if (!SanitizeTimestamp(&timestamp_ms)) {
     return true;

@@ -29,9 +29,9 @@
 #include "pagespeed/kernel/html/html_element.h"
 #include "pagespeed/kernel/html/html_name.h"
 #include "pagespeed/kernel/html/html_node.h"
+#include "pagespeed/kernel/html/html_parse.h"
 
 namespace net_instaweb {
-class HtmlParse;
 
 namespace {
 
@@ -76,7 +76,8 @@ void CollapseWhitespaceFilter::EndElement(HtmlElement* element) {
 }
 
 void CollapseWhitespaceFilter::Characters(HtmlCharactersNode* characters) {
-  if (keyword_stack_.empty()) {
+  // Text passed through unparsed can hold any markup, pre included.
+  if (keyword_stack_.empty() && !html_parse_->passing_through()) {
     // Mutate the contents-string in-place for speed.
     GoogleString* contents = characters->mutable_contents();
     // It is safe to directly mutate the bytes in the string because

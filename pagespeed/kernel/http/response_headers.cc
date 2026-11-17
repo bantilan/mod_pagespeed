@@ -827,17 +827,21 @@ GoogleString ResponseHeaders::CacheControlValuesToPreserve() {
   // Cache-Control directive names are case-insensitive (RFC 7234 5.2), so a
   // mixed-case No-Transform or No-Store must survive the rewrite as well.
   GoogleString to_preserve;
-  if (HasValueCaseInsensitive(HttpAttributes::kCacheControl, "no-transform")) {
+  if (HasCacheControlDirective("no-transform")) {
     to_preserve = ", no-transform";
   }
-  if (HasValueCaseInsensitive(HttpAttributes::kCacheControl, "no-store")) {
+  if (HasCacheControlDirective("no-store")) {
     to_preserve += ", no-store";
   }
 
   ConstStringStarVector cc_values;
   Lookup(HttpAttributes::kCacheControl, &cc_values);
-  for (auto value : cc_values) {
-    if (StringCaseStartsWith(*value, "s-maxage=")) {
+  for (int i = 0, n = cc_values.size(); i < n; ++i) {
+    const GoogleString* value = cc_values[i];
+    CachingHeaders::LifetimeDirective lifetime =
+        CachingHeaders::ReadLifetimeDirective(*value);
+    if (lifetime.name == CachingHeaders::LifetimeDirective::kSMaxAge &&
+        !lifetime.embedded) {
       to_preserve += ", " + *value;
     }
   }
@@ -1285,18 +1289,27 @@ bool ResponseHeaders::ApplySMaxAge(int s_maxage_sec,
   StringPieceVector segments;
   SplitStringPieceToVector(existing_cache_control, ",", &segments,
                            true /* omit empty strings */);
-  for (StringPiece& segment : segments) {
+  for (int i = 0, n = segments.size(); i < n; ++i) {
+    StringPiece& segment = segments[i];
     TrimWhitespace(&segment);
-    if (StringCaseEqual(segment, "no-transform")) {
+    if (CachingHeaders::ElementHasDirective(segment, "no-transform")) {
       // We're not allowed to touch this, so don't.
       return false;
     }
-    if (StringCaseEqual(segment, "no-cache") ||
-        StringCaseEqual(segment, "no-store") ||
-        StringCaseEqual(segment, "private")) {
+    if (CachingHeaders::ElementHasDirective(segment, "no-cache") ||
+        CachingHeaders::ElementHasDirective(segment, "no-store") ||
+        CachingHeaders::ElementHasDirective(segment, "private")) {
       // Downstream shared caches shouldn't be caching these, and adding
       // s-maxage might confuse one into thinking that it should actually go
       // ahead and cache, so if any of these are present, don't add it.
+      return false;
+    }
+    CachingHeaders::LifetimeDirective lifetime =
+        CachingHeaders::ReadLifetimeDirective(segment);
+    if (lifetime.name != CachingHeaders::LifetimeDirective::kNone &&
+        !lifetime.readable) {
+      // A lifetime we cannot read makes the response stale for us, so don't
+      // invite a shared cache to keep it.
       return false;
     }
   }
@@ -1306,23 +1319,20 @@ bool ResponseHeaders::ApplySMaxAge(int s_maxage_sec,
   // to update them individually, so let's do that.
   bool found_existing_s_maxage = false;
   bool updated_existing_s_maxage = false;
-  for (StringPiece& segment : segments) {
-    if (StringCaseStartsWith(segment, "s-maxage=")) {
+  for (int i = 0, n = segments.size(); i < n; ++i) {
+    StringPiece& segment = segments[i];
+    CachingHeaders::LifetimeDirective lifetime =
+        CachingHeaders::ReadLifetimeDirective(segment);
+    if (lifetime.name == CachingHeaders::LifetimeDirective::kSMaxAge) {
       // Found existing s-maxage.  If it's larger than s_maxage_sec update it.
       found_existing_s_maxage = true;
-
-      StringPiece existing_value_s = segment;
-      existing_value_s.remove_prefix(STATIC_STRLEN("s-maxage="));
-      int existing_value;
-      if (!StringToInt(existing_value_s, &existing_value)) {
-        // Failed to parse existing s-maxage value; leave it alone.
-      } else if (existing_value <= s_maxage_sec) {
-        // It's already small enough, don't change this one.  But there might be
-        // additional ones that need to be lowered, so keep going.
-      } else {
+      if (lifetime.seconds > s_maxage_sec) {
         segment = s_maxage_str;
         updated_existing_s_maxage = true;
       }
+      // Otherwise it's already small enough, don't change this one.  But
+      // there might be additional ones that need to be lowered, so keep
+      // going.
     }
   }
   if (found_existing_s_maxage) {
@@ -1340,16 +1350,14 @@ bool ResponseHeaders::ApplySMaxAge(int s_maxage_sec,
   // lowest existing max-age header.
   bool found_existing_maxage = false;
   int lowest_existing_maxage_value = s_maxage_sec+1;
-  for (StringPiece& segment : segments) {
-    if (StringCaseStartsWith(segment, "max-age=")) {
+  for (int i = 0, n = segments.size(); i < n; ++i) {
+    StringPiece& segment = segments[i];
+    CachingHeaders::LifetimeDirective lifetime =
+        CachingHeaders::ReadLifetimeDirective(segment);
+    if (lifetime.name == CachingHeaders::LifetimeDirective::kMaxAge) {
       found_existing_maxage = true;
-      StringPiece existing_value_s = segment;
-      existing_value_s.remove_prefix(STATIC_STRLEN("max-age="));
-      int existing_value;
-      if (!StringToInt(existing_value_s, &existing_value)) {
-        // Failed to parse existing max-age value; ignore it.
-      } else if (existing_value < lowest_existing_maxage_value) {
-        lowest_existing_maxage_value = existing_value;
+      if (lifetime.seconds < lowest_existing_maxage_value) {
+        lowest_existing_maxage_value = lifetime.seconds;
       }
     }
   }

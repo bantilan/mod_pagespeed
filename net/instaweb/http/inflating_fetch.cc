@@ -26,6 +26,7 @@
 #include "pagespeed/kernel/base/stack_buffer.h"
 #include "pagespeed/kernel/base/string.h"
 #include "pagespeed/kernel/base/string_writer.h"
+#include "pagespeed/kernel/html/html_page_limit.h"
 #include "pagespeed/kernel/http/http_names.h"
 #include "pagespeed/kernel/http/request_headers.h"
 #include "pagespeed/kernel/http/response_headers.h"
@@ -112,7 +113,10 @@ bool InflatingFetch::UnGzipValueIfCompressed(const HTTPValue& src,
     StringWriter inflate_writer(&inflated);
     StringPiece content;
     src.ExtractContents(&content);
-    if (GzipInflater::Inflate(content, GzipInflater::kGzip, &inflate_writer)) {
+    // Bound the memory spent unzipping a stored value: past the page limit
+    // the value is treated like a corrupt one.
+    if (GzipInflater::InflateWithLimit(content, GzipInflater::kGzip,
+                                       kHtmlPageLimitBytes, &inflate_writer)) {
       if (!headers->HasValue(HttpAttributes::HttpAttributes::kVary,
                              HttpAttributes::kAcceptEncoding)) {
         headers->Add(HttpAttributes::HttpAttributes::kVary,

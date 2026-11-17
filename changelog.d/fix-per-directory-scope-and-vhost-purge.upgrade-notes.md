@@ -1,0 +1,2 @@
+- **An ExperimentSpec in the main configuration that sets options above directory scope now fails at load.** Set such options outside the ExperimentSpec.
+- **An ExperimentSpec that sets an alternate origin domain is now refused in directory-level sources.** Set it in the server or virtual-host configuration.

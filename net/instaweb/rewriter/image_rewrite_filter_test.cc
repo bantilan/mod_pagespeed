@@ -35,6 +35,7 @@
 #include "net/instaweb/rewriter/public/dom_stats_filter.h"
 #include "net/instaweb/rewriter/public/domain_lawyer.h"
 #include "net/instaweb/rewriter/public/image.h"
+#include "net/instaweb/rewriter/public/image_data_lookup.h"
 #include "net/instaweb/rewriter/public/mock_critical_images_finder.h"
 #include "net/instaweb/rewriter/public/resource.h"
 #include "net/instaweb/rewriter/public/resource_namer.h"
@@ -4137,6 +4138,39 @@ TEST_F(ImageRewriteTest, JpegInResolutionLimitNoResizing) {
   TestResolutionLimit(kResolutionLimitBytes, kResolutionLimitJpegFile,
                       kContentTypeJpeg, true /*try_webp*/,
                       false /*try_resize*/, true /*expect_rewritten*/);
+}
+
+// The resolution limit applies to the canvas a GIF is decoded at. When the
+// header declares a screen smaller than the first frame, the frame reader
+// grows the canvas to that frame, so the frame's size is what counts.
+TEST_F(ImageRewriteTest, GifResolutionLimitCountsTheDecodedCanvas) {
+  options()->EnableFilter(RewriteOptions::kConvertGifToPng);
+  // transparent.gif is 320x320. The limit admits a 320x160 image but not the
+  // whole frame.
+  options()->set_image_resolution_limit_bytes(320 * 320 * 4 - 1);
+  rewrite_driver()->AddFilters();
+
+  GoogleString gif;
+  ASSERT_TRUE(LoadFile("transparent.gif", &gif));
+  // The logical screen height is the 16-bit little-endian field after the
+  // width (ImageHeaders::kGifDimStart + kGifIntSize). Halve it.
+  const size_t height_pos =
+      ImageHeaders::kGifDimStart + ImageHeaders::kGifIntSize;
+  ASSERT_GT(gif.size(), height_pos + 1);
+  gif[height_pos] = static_cast<char>(160);
+  gif[height_pos + 1] = 0;
+
+  const GoogleString url = StrCat(kTestDomain, "short_screen.gif");
+  SetResponseWithDefaultHeaders(url, kContentTypeGif, gif, 100);
+  ParseUrl(StrCat(kTestDomain, "short_screen.html"),
+           StrCat("<img src='", url, "'>"));
+
+  EXPECT_EQ(
+      0, statistics()->GetVariable(ImageRewriteFilter::kImageRewrites)->Get());
+  EXPECT_EQ(
+      1, statistics()
+             ->GetVariable(ImageRewriteFilter::kImageNoRewritesHighResolution)
+             ->Get());
 }
 
 TEST_F(ImageRewriteTest, AnimatedGifToWebpWithWebpAnimatedUa) {

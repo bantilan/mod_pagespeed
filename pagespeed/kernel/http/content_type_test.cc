@@ -120,6 +120,14 @@ TEST_F(ContentTypeTest, TestMimeType) {
   EXPECT_EQ(ContentType::kOctetStream, MimeToType("binary/octet-stream"));
 }
 
+TEST_F(ContentTypeTest, XhtmlTypesAreXmlLike) {
+  EXPECT_TRUE(kContentTypeXhtml.IsXmlLike());
+  EXPECT_TRUE(kContentTypeCeHtml.IsXmlLike());
+  EXPECT_TRUE(kContentTypeXml.IsXmlLike());
+  EXPECT_FALSE(kContentTypeHtml.IsXmlLike());
+  EXPECT_FALSE(kContentTypeJavascript.IsXmlLike());
+}
+
 TEST_F(ContentTypeTest, ConstantSanityCheck) {
   EXPECT_EQ(ContentType::kHtml, kContentTypeHtml.type());
   EXPECT_EQ(ContentType::kXhtml, kContentTypeXhtml.type());

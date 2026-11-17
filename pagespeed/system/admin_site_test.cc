@@ -38,6 +38,8 @@
 #include "pagespeed/system/system_rewrite_options.h"
 #include "pagespeed/system/system_server_context.h"
 #include "pagespeed/kernel/base/gmock.h"
+#include "pagespeed/kernel/cache/purge_set.h"
+#include "pagespeed/kernel/util/copy_on_write.h"
 #include "pagespeed/kernel/base/gtest.h"
 #include "pagespeed/kernel/base/message_handler.h"
 #include "pagespeed/kernel/base/base64_util.h"
@@ -546,6 +548,120 @@ TEST_F(AdminSiteTest, DeleteAllowedWhenPurgeEnabled) {
                          factory()->statistics(), &global_options);
   EXPECT_NE(HttpStatus::kForbidden, fetch.response_headers()->status_code());
   EXPECT_THAT(body, ::testing::Not(::testing::HasSubstr("Deleting not enabled")));
+}
+
+TEST_F(AdminSiteTest, VhostPurgeSetListsOwnHostOnly) {
+  // The purge set of a cache path holds every site's records.  A per-vhost
+  // console lists its own host's records and the whole-cache line; the
+  // global console lists them all.
+  scoped_ptr<RewriteOptions> options(rewrite_driver()->options()->Clone());
+  options->UpdateCacheInvalidationTimestampMs(1000);
+  CopyOnWrite<PurgeSet> purges(options->purge_set());
+  purges.MakeWriteable()->Put("http://example.com/own.css", 2000);
+  purges.MakeWriteable()->Put("http://EXAMPLE.com/upper.css", 2000);
+  purges.MakeWriteable()->Put("http://example.com:8081/other-port.css", 2000);
+  purges.MakeWriteable()->Put("http://other.example.org/theirs.css?k=v", 2000);
+  ASSERT_TRUE(options->UpdateCachePurgeSet(purges));
+
+  SystemRewriteOptions global_options(thread_system_.get());
+  GoogleUrl gurl("http://example.com/pagespeed_admin/cache?new_set=");
+  QueryParams query_params;
+  query_params.ParseFromUrl(gurl);
+  GoogleString vhost_body;
+  StringAsyncFetch vhost_fetch(rewrite_driver()->request_context(),
+                               &vhost_body);
+  admin_site_->AdminPage(false, gurl, query_params, options.get(), nullptr,
+                         &vhost_fetch, nullptr, nullptr, nullptr, nullptr,
+                         nullptr, server_context_.get(), factory()->statistics(),
+                         factory()->statistics(), &global_options);
+  EXPECT_EQ(HttpStatus::kOK, vhost_fetch.response_headers()->status_code());
+  EXPECT_THAT(vhost_body, ::testing::HasSubstr("Global@"));
+  EXPECT_THAT(vhost_body,
+              ::testing::HasSubstr("http://example.com/own.css@"));
+  EXPECT_THAT(vhost_body, ::testing::HasSubstr("upper.css@"));
+  EXPECT_THAT(vhost_body, ::testing::Not(::testing::HasSubstr("other-port")));
+  EXPECT_THAT(vhost_body, ::testing::Not(::testing::HasSubstr("theirs.css")));
+
+  GoogleString global_body;
+  StringAsyncFetch global_fetch(rewrite_driver()->request_context(),
+                                &global_body);
+  admin_site_->AdminPage(true, gurl, query_params, options.get(), nullptr,
+                         &global_fetch, nullptr, nullptr, nullptr, nullptr,
+                         nullptr, server_context_.get(), factory()->statistics(),
+                         factory()->statistics(), &global_options);
+  EXPECT_THAT(global_body, ::testing::HasSubstr("Global@"));
+  EXPECT_THAT(global_body, ::testing::HasSubstr("own.css@"));
+  EXPECT_THAT(global_body, ::testing::HasSubstr("other-port.css@"));
+  EXPECT_THAT(global_body, ::testing::HasSubstr("theirs.css"));
+}
+
+// Records how the console asked for a purge instead of making it.
+class PurgeRecordingAdminSite : public AdminSite {
+ public:
+  PurgeRecordingAdminSite(StaticAssetManager* assets, Timer* timer,
+                          MessageHandler* handler)
+      : AdminSite(assets, timer, handler), handler_(handler) {}
+
+  void Purge(StringPiece url, SystemCachePath* cache_path, AsyncFetch* fetch,
+             bool allow_eviction) override {
+    ++num_purges_;
+    url.CopyToString(&last_url_);
+    last_allow_eviction_ = allow_eviction;
+    fetch->response_headers()->SetStatusAndReason(HttpStatus::kOK);
+    fetch->Write("{}", handler_);
+    fetch->Done(true);
+  }
+
+  int num_purges() const { return num_purges_; }
+  GoogleString last_url() const { return last_url_; }
+  bool last_allow_eviction() const { return last_allow_eviction_; }
+
+ private:
+  MessageHandler* handler_;
+  int num_purges_ = 0;
+  GoogleString last_url_;
+  bool last_allow_eviction_ = true;
+};
+
+TEST_F(AdminSiteTest, VhostConsolePurgeMayNotEvict) {
+  // A single-URL purge from a per-vhost console must not evict another
+  // site's purge record; the whole-server console may.
+  scoped_ptr<RewriteOptions> options(rewrite_driver()->options()->Clone());
+  options->set_enable_cache_purge(true);
+  PurgeRecordingAdminSite site(factory()->static_asset_manager(), timer(),
+                               message_handler());
+  SystemRewriteOptions global_options(thread_system_.get());
+
+  GoogleUrl vhost_gurl(
+      "http://example.com/pagespeed_admin/cache"
+      "?purge=http://example.com/x.css");
+  QueryParams vhost_params;
+  vhost_params.ParseFromUrl(vhost_gurl);
+  GoogleString vhost_body;
+  StringAsyncFetch vhost_fetch(rewrite_driver()->request_context(),
+                               &vhost_body);
+  site.AdminPage(false, vhost_gurl, vhost_params, options.get(), nullptr,
+                 &vhost_fetch, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 server_context_.get(), factory()->statistics(),
+                 factory()->statistics(), &global_options);
+  ASSERT_EQ(1, site.num_purges());
+  EXPECT_EQ("http://example.com/x.css", site.last_url());
+  EXPECT_FALSE(site.last_allow_eviction());
+
+  GoogleUrl global_gurl(
+      "http://example.com/pagespeed_global_admin/cache"
+      "?purge=http://example.com/x.css");
+  QueryParams global_params;
+  global_params.ParseFromUrl(global_gurl);
+  GoogleString global_body;
+  StringAsyncFetch global_fetch(rewrite_driver()->request_context(),
+                                &global_body);
+  site.AdminPage(true, global_gurl, global_params, options.get(), nullptr,
+                 &global_fetch, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 server_context_.get(), factory()->statistics(),
+                 factory()->statistics(), &global_options);
+  ASSERT_EQ(2, site.num_purges());
+  EXPECT_TRUE(site.last_allow_eviction());
 }
 }  // namespace
 

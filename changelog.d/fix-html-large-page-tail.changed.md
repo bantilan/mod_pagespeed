@@ -1,0 +1,2 @@
+- **HTML past 64 MiB is served unoptimized.** The first 64 MiB of an uncompressed page are optimized and the rest is passed through byte for byte. Stored values that inflate past 64 MiB are treated like corrupt ones.
+- **An HTML response larger than 1 MiB is sent as it is optimized**, about 1 MiB at a time, rather than held whole until the end. Responses of up to 1 MiB are unchanged.

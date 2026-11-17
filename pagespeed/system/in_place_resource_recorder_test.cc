@@ -299,6 +299,30 @@ TEST_F(InPlaceResourceRecorderTest, StoredLifetimeIsClampedToServer) {
   EXPECT_LE(headers_out.cache_ttl_ms(), 30 * Timer::kSecondMs);
 }
 
+TEST_F(InPlaceResourceRecorderTest, UnreadableServerLifetimeStoresNothingFresh) {
+  ResponseHeaders origin_headers;
+  origin_headers.set_status_code(HttpStatus::kOK);
+  origin_headers.Add(HttpAttributes::kCacheControl, "public, max-age=3600");
+
+  ResponseHeaders server_headers;
+  SetDefaultLongCacheHeaders(&kContentTypeCss, &server_headers);
+  server_headers.Replace(HttpAttributes::kCacheControl,
+                         "public, max-age=abc");
+  server_headers.ComputeCaching();
+
+  scoped_ptr<InPlaceResourceRecorder> recorder(MakeRecorder(kTestUrl));
+  recorder->ConsiderResponseHeaders(
+      InPlaceResourceRecorder::kPreliminaryHeaders, &origin_headers);
+  recorder->Write(kHello, message_handler());
+  recorder.release()->DoneAndSetHeaders(&server_headers, true);
+
+  HTTPValue value_out;
+  ResponseHeaders headers_out;
+  ASSERT_EQ(kFoundResult,
+            HttpBlockingFind(kTestUrl, http_cache(), &value_out, &headers_out));
+  EXPECT_EQ(0, headers_out.cache_ttl_ms());
+}
+
 TEST_F(InPlaceResourceRecorderTest, ServerNoStorePolicyPreventsSharedStore) {
   ResponseHeaders origin_headers;
   origin_headers.set_status_code(HttpStatus::kOK);

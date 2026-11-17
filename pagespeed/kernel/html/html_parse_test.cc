@@ -39,8 +39,10 @@
 #include "pagespeed/kernel/html/html_element.h"
 #include "pagespeed/kernel/html/html_event.h"
 #include "pagespeed/kernel/html/html_filter.h"
+#include "pagespeed/kernel/html/html_lexer.h"
 #include "pagespeed/kernel/html/html_name.h"
 #include "pagespeed/kernel/html/html_node.h"
+#include "pagespeed/kernel/html/html_page_limit.h"
 #include "pagespeed/kernel/html/html_parse.h"
 #include "pagespeed/kernel/html/html_parse_test_base.h"
 #include "pagespeed/kernel/html/html_testing_peer.h"
@@ -230,6 +232,20 @@ TEST_F(HtmlParseTest, AvoidFalseXmlComment) {
      "<script type=\"text/javascript\">\n"
      "// <!-- this looks like a comment but is not\n"
      "</script>");
+}
+
+TEST_F(HtmlParseTest, CommentEndsWhereBrowsersEndIt) {
+  ValidateExpected("empty_comment", "<!-->a<b>c</b>-->", "<!---->a<b>c</b>-->");
+  ValidateExpected("empty_comment_dash", "<!--->a<b>c</b>-->",
+                   "<!---->a<b>c</b>-->");
+  ValidateExpected("comment_end_bang", "<!--x--!>a<b>c</b>-->",
+                   "<!--x-->a<b>c</b>-->");
+  // "--!" not followed by ">" is part of the comment, as is a ">" that does
+  // not directly follow "<!--" or "<!---".
+  ValidateNoChanges("bang_inside", "<!--x--!y-->");
+  ValidateNoChanges("bang_then_end", "<!--x--!-->");
+  ValidateNoChanges("gt_inside", "<!-- > -->");
+  ValidateNoChanges("dash_gt_inside", "<!--x->-->");
 }
 
 TEST_F(HtmlParseTest, RetainBogusEndTag) {
@@ -2394,6 +2410,168 @@ class CountingCallbacksFilter : public EmptyHtmlFilter {
 
   DISALLOW_COPY_AND_ASSIGN(CountingCallbacksFilter);
 };
+
+// Past the pass-through point the rest of a document is not parsed: it is
+// written exactly as it came in, as characters.
+class PassThroughCounter : public CountingCallbacksFilter {
+ public:
+  PassThroughCounter() : num_comments_(0) {}
+  int num_comments() const { return num_comments_; }
+
+ protected:
+  virtual void StartDocument() {
+    CountingCallbacksFilter::StartDocument();
+    num_comments_ = 0;
+  }
+  virtual void Comment(HtmlCommentNode* comment) { ++num_comments_; }
+
+ private:
+  int num_comments_;
+};
+
+class HtmlPassThroughTest : public HtmlParseTestNoBodyNoHtml {
+ protected:
+  HtmlPassThroughTest() { html_parse_.AddFilter(&counter_); }
+
+  // Parses input in pieces of at most piece bytes, flushing after each, with
+  // the rest passed through after limit bytes.
+  void ParseInPieces(StringPiece input, int64 limit, size_t piece) {
+    SetupWriter();
+    html_parse_.set_pass_through_after(limit);
+    html_parse_.StartParse("http://example.com/large.html");
+    for (size_t at = 0; at < input.size(); at += piece) {
+      html_parse_.ParseText(input.substr(at, piece));
+      html_parse_.Flush();
+    }
+    html_parse_.FinishParse();
+  }
+
+  PassThroughCounter counter_;
+};
+
+const char kPassThroughHead[] =
+    "<!doctype html><html><head><title>Notes</title>"
+    "<style>p { margin: 0 }</style></head><body><div><p class=first>One";
+const char kPassThroughTail[] =
+    "<p>Two<br><!-- note 3 --><pre>  four  </pre>"
+    "<script>if (a < b) { c(); }</script><p>Five</div></body></html>";
+
+TEST_F(HtmlPassThroughTest, NothingPastTheLimitIsParsed) {
+  const GoogleString head = kPassThroughHead;
+  const GoogleString input = StrCat(head, kPassThroughTail);
+  ParseInPieces(input, head.size(), input.size());
+  EXPECT_EQ(input, output_buffer_);
+  EXPECT_TRUE(html_parse_.passing_through());
+  // html, head, title, style, body, div and p: the tail adds no element,
+  // comment or end tag; the open elements are closed without output.
+  EXPECT_EQ(7, counter_.num_start_elements());
+  EXPECT_EQ(0, counter_.num_comments());
+}
+
+TEST_F(HtmlPassThroughTest, TheRestIsWrittenAsItCameWhereverTheLimitFalls) {
+  const GoogleString input = StrCat(kPassThroughHead, kPassThroughTail);
+  for (size_t limit = 0; limit <= input.size(); ++limit) {
+    const size_t pieces[] = {1, input.size()};
+    for (int j = 0; j < 2; ++j) {
+      size_t piece = pieces[j];
+      ParseInPieces(input, limit, piece);
+      EXPECT_EQ(input, output_buffer_)
+          << "limit " << limit << " piece " << piece;
+    }
+  }
+}
+
+TEST_F(HtmlPassThroughTest, TheLimitIsTakenBetweenTokens) {
+  const GoogleString head = kPassThroughHead;
+  const GoogleString input = StrCat(head, kPassThroughTail);
+  // In the middle of a tag: that element is still parsed, the next is not.
+  ParseInPieces(input, head.size() + 1, input.size());
+  EXPECT_EQ(input, output_buffer_);
+  EXPECT_EQ(8, counter_.num_start_elements());
+  // In the middle of a script: all of the script is parsed, nothing after it.
+  const size_t script = input.find("if (a");
+  ASSERT_NE(GoogleString::npos, script);
+  ParseInPieces(input, script, 3);
+  EXPECT_EQ(input, output_buffer_);
+  EXPECT_EQ(11, counter_.num_start_elements());
+  EXPECT_EQ(1, counter_.num_comments());
+}
+
+TEST_F(HtmlPassThroughTest, APageWithinTheLimitIsParsedWhole) {
+  const GoogleString input = StrCat(kPassThroughHead, kPassThroughTail);
+  ParseInPieces(input, input.size(), 5);
+  EXPECT_EQ(input, output_buffer_);
+  EXPECT_FALSE(html_parse_.passing_through());
+  EXPECT_EQ(12, counter_.num_start_elements());
+  EXPECT_EQ(1, counter_.num_comments());
+  // And at the page limit every port uses.
+  ParseInPieces(input, kHtmlPageLimitBytes, 5);
+  EXPECT_EQ(input, output_buffer_);
+  EXPECT_FALSE(html_parse_.passing_through());
+  EXPECT_EQ(12, counter_.num_start_elements());
+}
+
+// Past the nesting cap the element that would go deeper is not created, and
+// it and the rest of the page are written as they came, wherever the input is
+// cut into pieces: nothing after the cap is lost.
+TEST_F(HtmlPassThroughTest, ContentPastTheNestingCapIsWritten) {
+  const int kDepth = HtmlLexer::kMaxNestingDepth;
+  GoogleString input = "<html><body>";
+  for (int i = 0; i < kDepth + 100; ++i) {
+    input += "<span>";
+  }
+  input += "inside";
+  for (int i = 0; i < kDepth + 100; ++i) {
+    input += "</span>";
+  }
+  input += "<p>after</p><script>a()</script></body></html>";
+  const size_t pieces[] = {1, 7, input.size()};
+  for (int j = 0; j < 3; ++j) {
+    size_t piece = pieces[j];
+    ParseInPieces(input, -1, piece);
+    EXPECT_EQ(input, output_buffer_) << "piece " << piece;
+    EXPECT_TRUE(html_parse_.passing_through());
+    // html, body and the spans up to the cap.
+    EXPECT_EQ(kDepth, counter_.num_start_elements()) << "piece " << piece;
+  }
+}
+
+// The element at the cap can be brief-closed or a literal element: neither is
+// created, and nothing is closed or read as its content.
+TEST_F(HtmlPassThroughTest, ElementAtTheNestingCapIsWrittenAsText) {
+  const int kDepth = HtmlLexer::kMaxNestingDepth;
+  GoogleString open, close;
+  for (int i = 0; i < kDepth; ++i) {
+    open += "<div>";
+    close += "</div>";
+  }
+  const char* at_caps[] = {"<x/>y", "<textarea><b>z</b></textarea>", "<br>w"};
+  for (int j = 0; j < 3; ++j) {
+    const char* at_cap = at_caps[j];
+    const GoogleString input = StrCat(open, at_cap, close, "<p>after</p>");
+    ParseInPieces(input, -1, input.size());
+    EXPECT_EQ(input, output_buffer_) << at_cap;
+    EXPECT_EQ(kDepth, counter_.num_start_elements()) << at_cap;
+  }
+}
+
+TEST_F(HtmlPassThroughTest, CommentsPastTheLimitAreNotNodes) {
+  // A long run of comments costs a node each while it is parsed; past the
+  // limit it costs one piece of text per call, however many comments.
+  GoogleString input = "<html><body>";
+  for (int i = 0; i < 5000; ++i) {
+    StrAppend(&input, "<!-- note ", IntegerToString(i), " -->");
+  }
+  StrAppend(&input, "</body></html>");
+  const size_t limit = 1000;
+  const size_t piece = 100;
+  ParseInPieces(input, limit, piece);
+  EXPECT_EQ(input, output_buffer_);
+  EXPECT_GT(counter_.num_comments(), 10);
+  EXPECT_LT(counter_.num_comments(), 100);
+  EXPECT_LE(counter_.num_char_elements(),
+            static_cast<int>((input.size() - limit) / piece + 2));
+}
 
 TEST_F(HtmlParseTest, BufferEventsOnEventListener) {
   CountingCallbacksFilter counter_that_stays_enabled;

@@ -1,0 +1,2 @@
+- **A per-host purge from the admin console is refused when the purge set is full.** The console answers with an error; a purge from the global admin console clears the set.
+- **Work limits set in ExperimentSpec arms are capped at the configured values.** CssParseMaxBytes, MaxHtmlParseBytes and ImageResolutionLimitBytes can be lowered there but not raised above the values of the configuration the arm runs under.

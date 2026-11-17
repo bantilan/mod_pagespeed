@@ -50,6 +50,7 @@
 #include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/base/timer.h"
 #include "pagespeed/kernel/cache/purge_context.h"
+#include "pagespeed/kernel/cache/purge_set.h"
 #include "pagespeed/kernel/html/html_keywords.h"
 #include "pagespeed/kernel/http/content_type.h"
 #include "pagespeed/kernel/http/google_url.h"
@@ -573,6 +574,50 @@ class SlotReleasingFetch : public SharedAsyncFetch {
   AdminSite* site_;
   ExpensiveLeaf leaf_;
 };
+
+// The explicit port of a URL, or 0 when it is the scheme's default or absent,
+// so that https://h and https://h:443 (and http://h and http://h:80) both
+// read as 0; that keeps a console behind a TLS-terminating proxy working
+// while still telling h:8080 apart from h.
+int ExplicitPort(const GoogleUrl& url) {
+  const int port = url.IntPort();
+  return GoogleUrl::isPortGurlUnspecified(port) ? 0 : port;
+}
+
+// A per-vhost console may only touch URLs of the host and port it serves.
+bool TargetBelongsToRequestHost(const GoogleUrl& request_url,
+                                const GoogleUrl& target) {
+  return StringCaseEqual(request_url.Host(), target.Host()) &&
+         ExplicitPort(request_url) == ExplicitPort(target);
+}
+
+// The purge set of a cache path holds the records of every site on that path.
+// A per-vhost console lists only the records of its own host and port, in
+// the PurgeSet::ToString() format.  The first line, the whole-cache flush
+// time, names no URL and applies to this site too, so it stays.
+GoogleString PurgeSetStringForRequestHost(const PurgeSet& purge_set,
+                                          const GoogleUrl& request_url) {
+  GoogleString str("Global@");
+  GoogleString buf;
+  int64 global_ms = purge_set.global_invalidation_timestamp_ms();
+  StrAppend(&str, ConvertTimeToString(global_ms, &buf)
+                      ? buf
+                      : Integer64ToString(global_ms));
+  for (PurgeSet::Iterator it = purge_set.Begin(), end = purge_set.End();
+       it != end; ++it) {
+    GoogleUrl target(it.Key());
+    if (!target.IsWebValid() ||
+        !TargetBelongsToRequestHost(request_url, target)) {
+      continue;
+    }
+    buf.clear();
+    StrAppend(&str, "\n", it.Key(), "@",
+              ConvertTimeToString(it.Value(), &buf)
+                  ? buf
+                  : Integer64ToString(it.Value()));
+  }
+  return str;
+}
 
 }  // namespace
 
@@ -1582,11 +1627,55 @@ void AdminSite::PrintCaches(
     ResponseHeaders* response_headers = fetch->response_headers();
     response_headers->SetStatusAndReason(HttpStatus::kOK);
     response_headers->Add(HttpAttributes::kContentType, "text/html");
-    fetch->Write(options->PurgeSetString(), message_handler_);
+    GoogleString purge_set = is_global
+                                 ? options->PurgeSetString()
+                                 : PurgeSetStringForRequestHost(
+                                       *options->purge_set(), stripped_gurl);
+    fetch->Write(purge_set, message_handler_);
     fetch->Done(true);
   } else if ((source == kPageSpeedAdmin) &&
              query_params.Lookup1Unescaped("purge", &url)) {
     ResponseHeaders* response_headers = fetch->response_headers();
+    // A per-vhost console is scoped to its own host: a whole-cache purge is
+    // global-only, and a single-URL purge may only target this host.  These
+    // scope checks run ahead of the "purge enabled" check below so a
+    // disabled purge does not mask a cross-scope request as a soft failure.
+    if (!is_global) {
+      if (url == "*") {
+        response_headers->SetStatusAndReason(HttpStatus::kForbidden);
+        response_headers->Add(HttpAttributes::kContentType, "text/html");
+        fetch->Write("global purge is available from the global admin console",
+                     message_handler_);
+        fetch->Done(true);
+        return;
+      }
+      if (!url.empty()) {
+        GoogleUrl origin(stripped_gurl.Origin());
+        GoogleUrl resolved(origin, url);
+        if (resolved.IsWebValid()) {
+          // PurgeHandler reads any target ending in '*' as the whole-cache
+          // purge, whatever host the URL names; judge the resolved form, the
+          // exact string the purge below would act on.
+          if (strings::EndsWith(resolved.Spec(), "*")) {
+            response_headers->SetStatusAndReason(HttpStatus::kForbidden);
+            response_headers->Add(HttpAttributes::kContentType, "text/html");
+            fetch->Write(
+                "global purge is available from the global admin console",
+                message_handler_);
+            fetch->Done(true);
+            return;
+          }
+          if (!TargetBelongsToRequestHost(stripped_gurl, resolved)) {
+            response_headers->SetStatusAndReason(HttpStatus::kForbidden);
+            response_headers->Add(HttpAttributes::kContentType, "text/html");
+            fetch->Write("URL belongs to another host; use that host's console",
+                         message_handler_);
+            fetch->Done(true);
+            return;
+          }
+        }
+      }
+    }
     if (!options->enable_cache_purge()) {
       response_headers->SetStatusAndReason(HttpStatus::kOK);
       response_headers->Add(HttpAttributes::kContentType, "text/html");
@@ -1621,7 +1710,8 @@ void AdminSite::PrintCaches(
         fetch->Write(StrCat("Invalid URL: ", escaped_url), message_handler_);
         fetch->Done(true);
       } else {
-        PurgeHandler(resolved.Spec(), cache_path, fetch);
+        Purge(resolved.Spec(), cache_path, fetch,
+              is_global /* allow_eviction */);
       }
     }
   } else {
@@ -2023,8 +2113,8 @@ class PurgeFetchCallbackGasket {
 
 }  // namespace
 
-void AdminSite::PurgeHandler(StringPiece url, SystemCachePath* cache_path,
-                             AsyncFetch* fetch) {
+void AdminSite::Purge(StringPiece url, SystemCachePath* cache_path,
+                      AsyncFetch* fetch, bool allow_eviction) {
   PurgeContext* purge_context = cache_path->purge_context();
   int64 now_ms = timer_->NowMs();
   PurgeFetchCallbackGasket* gasket =
@@ -2036,8 +2126,10 @@ void AdminSite::PurgeHandler(StringPiece url, SystemCachePath* cache_path,
     // ignore any sub-paths in the expression.  We can only purge the
     // entire cache, or specific URLs, not general wildcards.
     purge_context->SetCachePurgeGlobalTimestampMs(now_ms, callback);
-  } else {
+  } else if (allow_eviction) {
     purge_context->AddPurgeUrl(url, now_ms, callback);
+  } else {
+    purge_context->AddPurgeUrlWithoutEviction(url, now_ms, callback);
   }
 }
 

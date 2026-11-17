@@ -42,6 +42,7 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/statistics.h"
 #include "pagespeed/kernel/base/string.h"
+#include "pagespeed/kernel/base/string_writer.h"
 #include "pagespeed/kernel/cache/lru_cache.h"
 #include "pagespeed/kernel/html/empty_html_filter.h"
 #include "pagespeed/kernel/html/html_element.h"
@@ -1063,6 +1064,30 @@ TEST_F(JsCombineFilterTest, AllDifferentCharsets) {
   EXPECT_EQ(kJsUrl4, scripts[3].url);
 }
 
+// The reason a script is not combined is logged.  The charsets in it come
+// from the page and are escaped, so the message stays one line.
+TEST_F(JsCombineFilterTest, CharsetMismatchReasonEscapedInLog) {
+  ResponseHeaders default_header;
+  SetDefaultLongCacheHeaders(&kContentTypeJavascript, &default_header);
+  SetFetchResponse(StrCat(kTestDomain, kJsUrl1), default_header, "var a;");
+  SetFetchResponse(StrCat(kTestDomain, kJsUrl2), default_header, "var b;");
+
+  ScriptInfoVector scripts;
+  PrepareToCollectScriptsInto(&scripts);
+  ParseUrl(StrCat(kTestDomain, "charset.html"),
+           StrCat("<script src=", kJsUrl1, " charset=utf-8></script>",
+                  "<script src=", kJsUrl2,
+                  " charset=\"iso-8859-1&#10;second\"></script>"));
+  EXPECT_EQ(2, scripts.size());
+
+  GoogleString messages;
+  StringWriter writer(&messages);
+  message_handler()->Dump(&writer);
+  EXPECT_NE(GoogleString::npos, messages.find("file is iso-8859-1\\nsecond"))
+      << messages;
+  EXPECT_EQ(GoogleString::npos, messages.find("\nIsecond")) << messages;
+}
+
 // A combination is decided by the charset known at hand-off: a <meta charset>
 // in a later flush window does not change the decision for scripts handed off
 // before it. Here a.js names its charset and b.js takes the page's, which is
@@ -1151,6 +1176,67 @@ TEST_F(JsCombineFilterTest, PagesInDifferentCharsetsDoNotShareDecision) {
   Parse("latin1_second", latin1_page);
   ASSERT_EQ(3, scripts.size());
   VerifyCombined(scripts[0], MultiUrl(kJsUrl1, kJsUrl2));
+}
+
+// Each script is wrapped in a string literal escaped byte by byte, and the
+// combination is decoded in the page's charset. In Big5 the character U+529F
+// is the bytes A5 5C, whose second byte is also a backslash, so the escaper
+// would change what the script means: a script in such a charset is not
+// combined. ASCII scripts on the same page still are.
+TEST_F(JsCombineFilterTest, NonAsciiScriptOnMultibytePageIsNotCombined) {
+  const char kBig5Url[] = "big5.js";
+  SimulateJsResource(kBig5Url, "var s = \"\xA5\x5Cn\"; var t = 1;");
+  const char kBig5Page[] = "<head><meta charset=\"Big5\"></head>";
+
+  ScriptInfoVector scripts;
+  PrepareToCollectScriptsInto(&scripts);
+  ParseUrl(StrCat(kTestDomain, "big5.html"),
+           StrCat(kBig5Page, "<script src=", kBig5Url, "></script>",
+                  "<script src=", kJsUrl2, "></script>"));
+  ASSERT_EQ(2, scripts.size());
+  EXPECT_EQ(kBig5Url, scripts[0].url);
+  EXPECT_EQ(kJsUrl2, scripts[1].url);
+
+  scripts.clear();
+  ParseUrl(StrCat(kTestDomain, "big5_ascii.html"),
+           StrCat(kBig5Page, TestHtml()));
+  ASSERT_EQ(3, scripts.size());
+  VerifyCombined(scripts[0], MultiUrl(kJsUrl1, kJsUrl2));
+  VerifyUse(scripts[1], kJsUrl1);
+  VerifyUse(scripts[2], kJsUrl2);
+}
+
+// A UTF-8 script is combined on a UTF-8 page, where none of its escaped bytes
+// is part of a longer character, but not on a page in another charset or in
+// none, which the browser then guesses.
+TEST_F(JsCombineFilterTest, NonAsciiUtf8ScriptIsCombinedOnlyOnUtf8Page) {
+  const char kUtf8Url[] = "utf8.js";
+  SimulateJsResource(kUtf8Url, "var s = \"caf\xC3\xA9\"; var t = 1;");
+  const GoogleString scripts_html =
+      StrCat("<script src=", kUtf8Url, " charset=utf-8></script>",
+             "<script src=", kJsUrl2, " charset=utf-8></script>");
+
+  ScriptInfoVector scripts;
+  PrepareToCollectScriptsInto(&scripts);
+  ParseUrl(StrCat(kTestDomain, "utf8.html"),
+           StrCat("<head><meta charset=\"utf-8\"></head>", scripts_html));
+  ASSERT_EQ(3, scripts.size());
+  VerifyCombined(scripts[0], MultiUrl(kUtf8Url, kJsUrl2));
+  VerifyUse(scripts[1], kUtf8Url);
+  VerifyUse(scripts[2], kJsUrl2);
+
+  scripts.clear();
+  ParseUrl(StrCat(kTestDomain, "sjis.html"),
+           StrCat("<head><meta charset=\"Shift_JIS\"></head>", scripts_html));
+  ASSERT_EQ(2, scripts.size());
+  EXPECT_EQ(kUtf8Url, scripts[0].url);
+  EXPECT_EQ(kJsUrl2, scripts[1].url);
+
+  scripts.clear();
+  ParseUrl(StrCat(kTestDomain, "nocharset.html"), scripts_html);
+  ASSERT_EQ(2, scripts.size());
+  EXPECT_EQ(kUtf8Url, scripts[0].url);
+  EXPECT_EQ(kJsUrl2, scripts[1].url);
 }
 
 TEST_F(JsCombineFilterTest, BomMismatch) {

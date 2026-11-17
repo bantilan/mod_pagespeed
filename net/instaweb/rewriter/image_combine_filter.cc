@@ -1082,6 +1082,12 @@ class ImageCombineFilter::Context : public RewriteContext {
       if (!added) {
         for (int j = 0, m = combinations.size(); j < m; ++j) {
           ImageCombination* combo = combinations[j];
+          // Skip a combination that has refused an image for size: it is
+          // full, and every refused add costs work proportional to its size.
+          // The image goes to a combination with room, or starts a new one.
+          if (combo->refused_for_size()) {
+            continue;
+          }
           if (combo->AddResourceNoFetch(resource, handler).value) {
             combo->AddResourceToPartition(resource.get(), i);
             urls_to_combos[resource_url] = combo;

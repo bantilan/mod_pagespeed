@@ -109,6 +109,19 @@ TEST_F(RemoveCommentsFilterTest, CommentInTag) {
   ValidateExpected("comment_in_tag", "<div><!--</div>-->", "<div>");
 }
 
+TEST_F(RemoveCommentsFilterTest, CommentEndsWhereBrowsersEndIt) {
+  static const char kExpected[] = "<p>a</p><textarea>--><b>text</b></textarea>";
+  ValidateExpected("empty_comment",
+                   "<p>a<!--></p><textarea>--><b>text</b></textarea>",
+                   kExpected);
+  ValidateExpected("empty_comment_dash",
+                   "<p>a<!---></p><textarea>--><b>text</b></textarea>",
+                   kExpected);
+  ValidateExpected("comment_end_bang",
+                   "<p>a<!--x--!></p><textarea>--><b>text</b></textarea>",
+                   kExpected);
+}
+
 TEST_F(RemoveCommentsFilterTest, CommentInXmp) {
   ValidateNoChanges("comment_in_xmp", "<xmp><!-- keep me --></xmp>");
   ValidateNoChanges("comment_in_overlapping_xmp", "<xmp><!--</xmp>-->");
