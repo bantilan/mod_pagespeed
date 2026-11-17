@@ -693,16 +693,27 @@ TEST_P(JavascriptFilterTest, IdentifyAjaxLibrary) {
 
 TEST_P(JavascriptFilterTest, InvalidInputMimetype) {
   InitFilters();
-  // Make sure we can rewrite properly even when input has corrupt mimetype.
+  // A script whose origin content type we do not recognize is left alone,
+  // like any other input the origin did not label as script (see
+  // NotRewrittenWhenOriginTypeIsNotScript).
   ContentType not_java_script = kContentTypeJavascript;
   not_java_script.mime_type_ = "text/semicolon-inserted";
   const char* kNotJsFile = "script.notjs";
 
   SetResponseWithDefaultHeaders(kNotJsFile, not_java_script, kJsData, 100);
-  ValidateExpected("wrong_mime",
-                   GenerateHtml(kNotJsFile),
-                   GenerateHtml(Encode("", kFilterId, "0",
-                                       kNotJsFile, "js").c_str()));
+  ValidateNoChanges("wrong_mime", GenerateHtml(kNotJsFile));
+  EXPECT_EQ(0, blocks_minified_->Get());
+}
+
+// A file the origin labels text/plain is not minified.
+TEST_P(JavascriptFilterTest, NotRewrittenWhenOriginTypeIsNotScript) {
+  InitFilters();
+  SetResponseWithDefaultHeaders("note.txt", kContentTypeText, kJsData, 100);
+  ValidateNoChanges("origin_type_not_script", GenerateHtml("note.txt"));
+  GoogleString content;
+  EXPECT_FALSE(
+      FetchResource(kTestDomain, kFilterId, "note.txt", "js", &content));
+  EXPECT_EQ(0, blocks_minified_->Get());
 }
 
 TEST_P(JavascriptFilterTest, RewriteJs404) {

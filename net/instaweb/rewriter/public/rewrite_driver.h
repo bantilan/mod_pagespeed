@@ -1140,6 +1140,28 @@ class RewriteDriver : public HtmlParse {
   void InsertUnauthorizedDomainDebugComment(StringPiece url, InputRole role,
                                             HtmlElement* element);
 
+  // Like HtmlParse::InsertComment, for a debug message: inserts it at the
+  // current event when the document's debug budget allows. Returns false only
+  // when the comment could not be placed there safely (see InsertComment), so
+  // the caller may retry later; a message refused for the budget is dropped,
+  // and true is returned.
+  bool InsertDebugCommentHere(StringPiece unescaped);
+
+  // For a debug message a filter places itself, e.g. at the end of the body:
+  // returns a new comment node holding it when the document's debug budget
+  // allows. Otherwise returns, the first time only, the one comment saying
+  // the output was truncated, and NULL after that. The caller inserts
+  // whatever is returned.
+  HtmlNode* NewBudgetedDebugCommentNode(StringPiece unescaped);
+
+  // Bytes of debug comments this document may still receive under
+  // RewriteOptions::debug_output_max_bytes(): -1 when there is no limit, 0
+  // once the budget is spent. Safe to call from any thread.
+  int64 DebugOutputBytesRemaining() const;
+
+  // The comment text saying debug output was truncated at the limit.
+  GoogleString DebugTruncatedMessage() const;
+
   // Generates an unauthorized domain debug comment. Public for unit tests.
   GoogleString GenerateUnauthorizedDomainDebugComment(const GoogleUrl& gurl,
                                                       InputRole role);
@@ -1722,6 +1744,16 @@ class RewriteDriver : public HtmlParse {
   std::unique_ptr<CriticalImagesInfo> critical_images_info_;
   std::unique_ptr<CriticalSelectorInfo> critical_selector_info_;
 
+  // Takes num_bytes from the document's debug output budget and returns
+  // true, or returns false, and refuses every later request too, when it
+  // does not fit. Always true when there is no limit.
+  bool ReserveDebugOutputBytes(int64 num_bytes);
+
+  // Inserts a comment holding `escaped` after `node` when the document's
+  // debug budget allows, and returns it; otherwise returns NULL, and the
+  // first refusal inserts the one comment saying the output was truncated.
+  HtmlNode* InsertBoundedDebugComment(StringPiece escaped, HtmlNode* node);
+
   // Memoized computation of whether the current doc has an XHTML mimetype.
   bool xhtml_mimetype_computed_;
   XhtmlStatus xhtml_status_ : 8;
@@ -1729,6 +1761,12 @@ class RewriteDriver : public HtmlParse {
   // Number of images whose low quality images are inlined in the html page by
   // InlinePreviewFilter.
   int num_inline_preview_images_;
+
+  // Bytes of debug comments written into this document, and whether the
+  // debug budget is spent / its truncation noted.
+  std::atomic<int64> debug_output_bytes_;
+  std::atomic<bool> debug_output_truncated_;
+  std::atomic<bool> debug_truncation_noted_;
 
   // The total number of bytes for which ParseText is called.
   int num_bytes_in_;

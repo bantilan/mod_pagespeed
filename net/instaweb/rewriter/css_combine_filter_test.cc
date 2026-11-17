@@ -20,6 +20,7 @@
 //     and sligocki@google.com (Shawn Ligocki)
 
 #include "net/instaweb/rewriter/public/css_combine_filter.h"
+#include "net/instaweb/rewriter/public/css_filter.h"
 
 #include <vector>
 
@@ -1440,6 +1441,28 @@ TEST_F(CssCombineFilterTest, ShardSubresources) {
 }
 
 // Verifies that we don't produce URLs that are too long in a corner case.
+// Fragment-only references stay as written in a combination whose other
+// references are sharded.
+TEST_F(CssCombineFilterTest, FragmentReferenceKeptWithShards) {
+  UseMd5Hasher();
+  AddShard(kTestDomain, "shard1.com,shard2.com");
+
+  CssLink::Vector css_in, css_out;
+  css_in.Add("1.css", ".a {mask: url('#m'); background-image: url('1.png');}\n",
+             "", true);
+  css_in.Add("2.css", ".b {mask: url(#n);}\n", "", true);
+  BarrierTestHelper("combine_fragment", css_in, &css_out);
+  EXPECT_EQ(1, css_out.size());
+
+  GoogleString expected_combination =
+      ".a {mask: url('#m'); background-image: url('http://shard1.com/1.png');}"
+      "\n"
+      ".b {mask: url(#n);}\n";
+  GoogleString actual_combination;
+  EXPECT_TRUE(FetchResourceUrl(css_out[0]->url_, &actual_combination));
+  EXPECT_EQ(expected_combination, actual_combination);
+}
+
 TEST_F(CssCombineFilterTest, CrossAcrossPathsExceedingUrlSize) {
   CssLink::Vector css_in, css_out;
   GoogleString long_name(600, 'z');
@@ -2253,6 +2276,69 @@ TEST_F(CollapseWhitespaceGeneralTest, CollapseAfterCombine) {
            incompatible domain
            intervening inline style tag (TODO(jmarantz): outline first?)
 */
+
+// Builds a stylesheet of exactly `size` bytes out of numbered rulesets and
+// trailing whitespace.
+GoogleString MakeCombineCssOfSize(int64 size) {
+  GoogleString css;
+  for (int i = 0;; ++i) {
+    const GoogleString rule = StrCat(".c", IntegerToString(i), "{color:red}\n");
+    if (static_cast<int64>(css.size() + rule.size()) > size) {
+      break;
+    }
+    StrAppend(&css, rule);
+  }
+  css.append(size - css.size(), ' ');
+  CHECK_EQ(size, static_cast<int64>(css.size()));
+  return css;
+}
+
+class CssCombineFilterParseMaxBytesTest : public CssCombineFilterTest {
+ protected:
+  static const int64 kParseMaxBytes = 4096;
+
+  void SetUp() override {
+    CssCombineFilterTest::SetUp();
+    options()->ClearSignatureForTesting();
+    options()->set_css_parse_max_bytes(kParseMaxBytes);
+    server_context()->ComputeSignature(options());
+  }
+
+  // Links small.css and big.css (of `big_size` bytes) and returns the
+  // stylesheet URLs in the rewritten page.
+  StringVector CombineWithBig(StringPiece id, int64 big_size) {
+    SetHtmlMimetype();
+    SetResponseWithDefaultHeaders(StrCat(kDomain, "small.css"), kContentTypeCss,
+                                  ".s{color:blue}", 100);
+    SetResponseWithDefaultHeaders(StrCat(kDomain, "big.css"), kContentTypeCss,
+                                  MakeCombineCssOfSize(big_size), 100);
+    ParseUrl(StrCat(kDomain, id, ".html"),
+             StrCat("<link rel='stylesheet' type='text/css' href='small.css'>",
+                    "<link rel='stylesheet' type='text/css' href='big.css'>"));
+    StringVector css_urls;
+    CollectCssLinks(id, output_buffer_, &css_urls);
+    return css_urls;
+  }
+
+  int64 Exceeded() {
+    return statistics()->GetVariable(CssFilter::kParseMaxBytesExceeded)->Get();
+  }
+};
+
+TEST_F(CssCombineFilterParseMaxBytesTest, OverBoundIsNotCombined) {
+  const StringVector css_urls = CombineWithBig("over", kParseMaxBytes + 1);
+  ASSERT_EQ(2, css_urls.size());
+  EXPECT_EQ("small.css", css_urls[0]);
+  EXPECT_EQ("big.css", css_urls[1]);
+  EXPECT_LT(0, Exceeded());
+}
+
+TEST_F(CssCombineFilterParseMaxBytesTest, AtBoundIsCombined) {
+  const StringVector css_urls = CombineWithBig("at", kParseMaxBytes);
+  ASSERT_EQ(1, css_urls.size());
+  EXPECT_NE(StringPiece::npos, css_urls[0].find("small.css+big.css"));
+  EXPECT_EQ(0, Exceeded());
+}
 
 }  // namespace
 

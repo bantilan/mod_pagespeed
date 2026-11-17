@@ -891,6 +891,172 @@ TEST_F(RewriteOptionsTest, ForbidFilter) {
       RewriteOptions::FilterId(RewriteOptions::kFlattenCssImports)));
 }
 
+TEST_F(RewriteOptionsTest, ForbidAllDisabledRefusesRequestEnablingLevelOff) {
+  // The configuration forbids all disabled filters at the core level; the
+  // request asks for a filter that is off only because the level leaves it
+  // out, and for one the configuration disabled.
+  RewriteOptions site(&thread_system_), request(&thread_system_),
+      later(&thread_system_);
+  site.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  site.DisableFilter(RewriteOptions::kCombineCss);
+  site.set_forbid_all_disabled_filters(true);
+  NullMessageHandler handler;
+  ASSERT_TRUE(request.AdjustFiltersByCommaSeparatedList(
+      "+remove_comments,+combine_css", &handler));
+  MergeOptions(site, request);
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kRemoveComments));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kRemoveComments));
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kCombineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kCombineCss));
+  EXPECT_TRUE(options_.Enabled(RewriteOptions::kRewriteCss));
+
+  // The refusal is recorded: a later merge asking again changes nothing.
+  ASSERT_TRUE(
+      later.AdjustFiltersByCommaSeparatedList("+remove_comments", &handler));
+  options_.Merge(later);
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kRemoveComments));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kRemoveComments));
+}
+
+TEST_F(RewriteOptionsTest, ForbidAllDisabledRefusesRequestRaisingLevel) {
+  RewriteOptions site(&thread_system_), request(&thread_system_);
+  site.SetRewriteLevel(RewriteOptions::kPassThrough);
+  site.EnableFilter(RewriteOptions::kRewriteCss);
+  site.set_forbid_all_disabled_filters(true);
+  request.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  MergeOptions(site, request);
+  EXPECT_TRUE(options_.Enabled(RewriteOptions::kRewriteCss));
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kCombineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kCombineCss));
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kInlineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kInlineCss));
+}
+
+TEST_F(RewriteOptionsTest, ForbidAllDisabledRefusesRequestDroppingPreserve) {
+  RewriteOptions site(&thread_system_), request(&thread_system_);
+  site.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  site.set_css_preserve_urls(true);
+  site.set_forbid_all_disabled_filters(true);
+  request.set_css_preserve_urls(false);
+  options_.Merge(site);
+  ASSERT_FALSE(options_.Enabled(RewriteOptions::kExtendCacheCss));
+  options_.Merge(request);
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kExtendCacheCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kExtendCacheCss));
+}
+
+TEST_F(RewriteOptionsTest, ForbidAllDisabledNoscriptRequestEnablesNothing) {
+  // A noscript request turns off filters that need script and asks for the
+  // noscript redirect handler, which was not on: only the first takes.
+  RewriteOptions site(&thread_system_), request(&thread_system_);
+  site.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  site.EnableFilter(RewriteOptions::kDeferJavascript);
+  site.set_forbid_all_disabled_filters(true);
+  request.DisableFiltersRequiringScriptExecution();
+  request.EnableFilter(RewriteOptions::kHandleNoscriptRedirect);
+  MergeOptions(site, request);
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kDeferJavascript));
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kHandleNoscriptRedirect));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kHandleNoscriptRedirect));
+}
+
+TEST_F(RewriteOptionsTest, ForbidAllDisabledKeepsSubsetAndSameScopeEnables) {
+  // Directory scopes as Apache merges them: the parent enables three filters
+  // and disables one; the child forbids all disabled filters, disables the
+  // three and enables the fourth again in the same scope; a grandchild tries
+  // to enable the three again; then a request turns one filter off and asks
+  // for the three.
+  NullMessageHandler handler;
+  RewriteOptions parent(&thread_system_), child(&thread_system_),
+      grandchild(&thread_system_), request(&thread_system_);
+  parent.set_forbid_all_disabled_filters(false);
+  parent.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  parent.DisableFilter(RewriteOptions::kInlineCss);
+  ASSERT_TRUE(parent.AdjustFiltersByCommaSeparatedList(
+      "+remove_quotes,+remove_comments,+collapse_whitespace", &handler));
+  child.set_forbid_all_disabled_filters(true);
+  ASSERT_TRUE(child.AdjustFiltersByCommaSeparatedList(
+      "-remove_quotes,-remove_comments,-collapse_whitespace", &handler));
+  child.EnableFilter(RewriteOptions::kInlineCss);
+  grandchild.set_forbid_all_disabled_filters(false);
+  grandchild.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  ASSERT_TRUE(grandchild.AdjustFiltersByCommaSeparatedList(
+      "+remove_quotes,+remove_comments,+collapse_whitespace", &handler));
+
+  RewriteOptions child_dir(&thread_system_), grandchild_dir(&thread_system_);
+  child_dir.Merge(parent);
+  child_dir.Merge(child);
+  EXPECT_TRUE(child_dir.Enabled(RewriteOptions::kInlineCss));
+  EXPECT_FALSE(child_dir.Enabled(RewriteOptions::kRemoveComments));
+  grandchild_dir.Merge(child_dir);
+  grandchild_dir.Merge(grandchild);
+  EXPECT_TRUE(grandchild_dir.forbid_all_disabled_filters());
+  EXPECT_TRUE(grandchild_dir.Enabled(RewriteOptions::kInlineCss));
+  EXPECT_FALSE(grandchild_dir.Enabled(RewriteOptions::kRemoveComments));
+  EXPECT_TRUE(grandchild_dir.Forbidden(RewriteOptions::kRemoveComments));
+
+  ASSERT_TRUE(request.AdjustFiltersByCommaSeparatedList(
+      "-rewrite_css,+remove_quotes,+remove_comments", &handler));
+  options_.Merge(grandchild_dir);
+  options_.Merge(request);
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kRewriteCss));
+  EXPECT_TRUE(options_.Enabled(RewriteOptions::kInlineCss));
+  EXPECT_TRUE(options_.Enabled(RewriteOptions::kCombineCss));
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kRemoveQuotes));
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kRemoveComments));
+}
+
+TEST_F(RewriteOptionsTest, DisabledButNotForbiddenFilterCanBeRequested) {
+  // Control: without a forbid, a request may still enable a filter that a
+  // scope above it merely disabled.
+  RewriteOptions site(&thread_system_), request(&thread_system_);
+  site.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  site.DisableFilter(RewriteOptions::kCombineCss);
+  NullMessageHandler handler;
+  ASSERT_TRUE(
+      request.AdjustFiltersByCommaSeparatedList("+combine_css", &handler));
+  MergeOptions(site, request);
+  EXPECT_FALSE(options_.forbid_all_disabled_filters());
+  EXPECT_TRUE(options_.Enabled(RewriteOptions::kCombineCss));
+  EXPECT_FALSE(options_.Forbidden(RewriteOptions::kCombineCss));
+  EXPECT_FALSE(options_.Forbidden(RewriteOptions::kCssCombinerId));
+}
+
+TEST_F(RewriteOptionsTest, ForbiddenFilterStaysOffInExperimentArm) {
+  // The configuration forbids a filter; an experiment arm with its own level
+  // that would include it, and that names it, is assigned to the request.
+  NullMessageHandler handler;
+  options_.SetRewriteLevel(RewriteOptions::kPassThrough);
+  options_.ForbidFilter(RewriteOptions::kCombineCss);
+  options_.set_running_experiment(true);
+  ASSERT_TRUE(options_.AddExperimentSpec(
+      "id=41;percent=50;level=AllFilters;enable=combine_css", &handler));
+  options_.SetExperimentStateStr("a");
+  EXPECT_EQ(41, options_.experiment_id());
+  EXPECT_EQ(RewriteOptions::kAllFilters, options_.level());
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kCombineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kCombineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kCssCombinerId));
+}
+
+TEST_F(RewriteOptionsTest, ForbidAllDisabledHoldsInExperimentArm) {
+  // The configuration disables a filter and forbids all disabled filters; an
+  // experiment arm whose level includes it is assigned to the request.
+  NullMessageHandler handler;
+  options_.SetRewriteLevel(RewriteOptions::kCoreFilters);
+  options_.DisableFilter(RewriteOptions::kInlineCss);
+  options_.set_forbid_all_disabled_filters(true);
+  options_.set_running_experiment(true);
+  ASSERT_TRUE(options_.AddExperimentSpec("id=43;percent=50;level=AllFilters",
+                                         &handler));
+  options_.SetExperimentStateStr("a");
+  EXPECT_EQ(43, options_.experiment_id());
+  EXPECT_EQ(RewriteOptions::kAllFilters, options_.level());
+  EXPECT_FALSE(options_.Enabled(RewriteOptions::kInlineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kInlineCss));
+  EXPECT_TRUE(options_.Forbidden(RewriteOptions::kCssInlineId));
+}
+
 TEST_F(RewriteOptionsTest, AllDoesNotImplyStripScrips) {
   options_.SetRewriteLevel(RewriteOptions::kAllFilters);
   EXPECT_TRUE(options_.Enabled(RewriteOptions::kCombineCss));
@@ -1077,6 +1243,7 @@ TEST_F(RewriteOptionsTest, LookupOptionByNameTest) {
     RewriteOptions::kCssOutlineMinBytes,
     RewriteOptions::kCssPreserveURLs,
     RewriteOptions::kCssParseMaxBytes,
+    RewriteOptions::kDebugOutputMaxBytes,
     RewriteOptions::kDefaultCacheHtml,
     RewriteOptions::kDisableBackgroundFetchesForBots,
     RewriteOptions::kDisableRewriteOnNoTransform,
@@ -1572,6 +1739,22 @@ TEST_F(RewriteOptionsTest, ParseAndSetOptionFromName2) {
   EXPECT_TRUE(
       options_.file_load_policy()->ShouldLoadFromFile(url4, &file_out));
   EXPECT_EQ("/example/images/a.jpeg", file_out);
+
+  // Directive names are matched case-insensitively.
+  EXPECT_EQ(RewriteOptions::kOptionOk, options_.ParseAndSetOptionFromName2(
+                                           "loadfromfilerulematch", "Disallow",
+                                           "\\.css$", &msg, &handler));
+  EXPECT_FALSE(
+      options_.file_load_policy()->ShouldLoadFromFile(url1, &file_out));
+  GoogleUrl url5("http://www.example.com/images/a.gif");
+  EXPECT_EQ(RewriteOptions::kOptionOk,
+            options_.ParseAndSetOptionFromName2(
+                "LOADFROMFILERULEMATCH", "Allow", "\\.gif$", &msg, &handler));
+  EXPECT_TRUE(options_.file_load_policy()->ShouldLoadFromFile(url5, &file_out));
+  EXPECT_EQ("/example/images/a.gif", file_out);
+  EXPECT_EQ(RewriteOptions::kOptionValueInvalid,
+            options_.ParseAndSetOptionFromName2(
+                "LoadFromFileRulematch", "Allow", "[a-", &msg, &handler));
 
   // Domain lawyer options.
   scoped_ptr<RewriteOptions> options2(new RewriteOptions(&thread_system_));

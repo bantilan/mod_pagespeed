@@ -29,6 +29,8 @@
 
 namespace net_instaweb {
 
+const size_t HtmlDetector::kMaxBufferedBytes;
+
 HtmlDetector::HtmlDetector() : already_decided_(false), probable_html_(false) {}
 
 HtmlDetector::~HtmlDetector() {}
@@ -68,7 +70,13 @@ bool HtmlDetector::ConsiderInput(const StringPiece& data) {
     }
   }
 
-  // Looks like we managed to get entirely whitespace --- buffer it up.
+  // Looks like we managed to get entirely whitespace --- buffer it up, unless
+  // that would take more than we are willing to hold.
+  if (data.size() > kMaxBufferedBytes - buffer_.size()) {
+    already_decided_ = true;
+    probable_html_ = false;
+    return true;
+  }
   StrAppend(&buffer_, data);
 
   return false;

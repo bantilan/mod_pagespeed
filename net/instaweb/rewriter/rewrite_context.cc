@@ -1087,6 +1087,7 @@ RewriteContext::RewriteContext(RewriteDriver* driver, RewriteContext* parent,
       is_metadata_cache_miss_(false),
       rewrite_uncacheable_(false),
       dependent_request_trace_(nullptr),
+      debug_message_bytes_(0),
       num_rewrites_abandoned_for_lock_contention_(
           ContextVariable(Driver(),
                           &RewriteStats::
@@ -1217,11 +1218,37 @@ void RewriteContext::Start() {
           new OutputCacheCallback(this, &RewriteContext::OutputCacheDone));
     }
   } else {
+    ContextSet visited;
+    if (IsWaitedOnBy(previous_handler, &visited)) {
+      // previous_handler cannot finish before we do, so waiting for it would
+      // never finish. Fail the way a recursive rewrite would.
+      RepeatedFailure();
+      return;
+    }
     if (previous_handler->slow()) {
       MarkSlow();
     }
     previous_handler->repeated_.push_back(this);
   }
+}
+
+bool RewriteContext::IsWaitedOnBy(const RewriteContext* context,
+                                  ContextSet* visited) {
+  if (this == context) {
+    return true;
+  }
+  if (!visited->insert(this).second) {
+    return false;
+  }
+  if ((parent_ != NULL) && parent_->IsWaitedOnBy(context, visited)) {
+    return true;
+  }
+  for (size_t i = 0; i < repeated_.size(); ++i) {
+    if (repeated_[i]->IsWaitedOnBy(context, visited)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 namespace {
@@ -1586,6 +1613,12 @@ void RewriteContext::RepeatedSuccess(const RewriteContext* primary) {
 
   ok_to_write_output_partitions_ = false;
   Finalize();
+  if (!has_parent()) {
+    // Finalize() has rendered us, so our copy of the primary's partitions is
+    // no longer needed.  Nested contexts keep theirs: their parent still reads
+    // them when it harvests.
+    partitions_.reset(new OutputPartitions());
+  }
 }
 
 void RewriteContext::RepeatedFailure() {
@@ -1645,7 +1678,19 @@ void RewriteContext::FetchInputs() {
       // resource object (e.g. if we got a metadata hit on the previous step).
       bool handled_internally = false;
       GoogleUrl resource_gurl(resource->url());
-      if (FindServerContext()->IsPagespeedResource(resource_gurl)) {
+      bool is_pagespeed_resource =
+          FindServerContext()->IsPagespeedResource(resource_gurl);
+      if (is_pagespeed_resource && has_parent() && Driver()->is_nested()) {
+        // A nested context inside a reconstruction does not start another
+        // one. As with a lock failure, this says nothing about the resource,
+        // so don't remember it.
+        handled_internally = true;
+        ok_to_write_output_partitions_ = false;
+        Driver()->message_handler()->Message(
+            kInfo, "Not reconstructing %s inside another reconstruction",
+            resource->UrlForDebug().c_str());
+        ResourceCallbackUtils(this, resource, i).Done(false);
+      } else if (is_pagespeed_resource) {
         RewriteDriver* nested_driver = Driver()->Clone();
         RewriteFilter* filter = nullptr;
         // We grab the filter now (and not just call DecodeOutputResource
@@ -1829,11 +1874,40 @@ void RewriteContext::PartitionDone(RewriteResult result_or_busy) {
   }
 }
 
+bool RewriteContext::FetchWritesPartition() const {
+  if (fetch_ == NULL || num_slots() != 1) {
+    return false;
+  }
+  ResourcePtr input(slot(0)->resource());
+  if (input.get() == NULL || !input->is_authorized_domain()) {
+    return false;
+  }
+  // The output an HTML rewrite of this input creates, through the same
+  // domain mapping (RewriteDriver::CreateOutputResourceFromResource).
+  GoogleString failure_reason;
+  OutputResourcePtr canonical(Driver()->CreateOutputResourceFromResource(
+      id(), encoder(), resource_context(), input, kind(), &failure_reason));
+  if (canonical.get() == NULL) {
+    return false;
+  }
+  // Give it the hash, extension and signature of what the fetch produced, so
+  // that the two URLs agree exactly when the directory, domain, shard and
+  // encoded name do.
+  OutputResourcePtr fetched(fetch_->output_resource());
+  canonical->clear_hash();
+  ResourceNamer* canonical_name = canonical->mutable_full_name();
+  const ResourceNamer& fetched_name = fetched->full_name();
+  canonical_name->set_hash(fetched_name.hash());
+  canonical_name->set_ext(fetched_name.ext());
+  canonical_name->set_signature(fetched_name.signature());
+  return canonical->UrlEvenIfHashNotSet() == fetched->UrlEvenIfHashNotSet();
+}
+
 void RewriteContext::WritePartition() {
   ServerContext* server_context = FindServerContext();
   // If this was an IPRO rewrite which was forced for uncacheable rewrite, we
-  // should not write partition data.  Nor may a fetch write it for a filter
-  // whose partitioning the fetch path does not run.
+  // should not write partition data.  Nor may a fetch write it unless the
+  // result is the one an HTML rewrite would store (FetchWritesPartition()).
   const bool fetch_may_write = !IsFetchRewrite() || FetchWritesPartition();
   if (fetch_may_write && ok_to_write_output_partitions_ &&
       !server_context->shutting_down()) {
@@ -1970,6 +2044,13 @@ void RewriteContext::CheckAndAddOtherDependency(const InputInfo& input_info) {
   if (input_info.has_url() && HasDuplicateOtherDependency(input_info)) {
     return;
   }
+  // An entry can have more than one expiry for the same url, so de-dup every
+  // entry on its contents.
+  InputInfo key = input_info;
+  key.clear_index();
+  if (!other_dependency_set_.insert(key.SerializeAsString()).second) {
+    return;
+  }
 
   CheckNotFrozen();
   InputInfo* dep = partitions_->add_other_dependency();
@@ -1985,6 +2066,34 @@ void RewriteContext::CheckAndAddOtherDependency(const InputInfo& input_info) {
   if (dep->has_url()) {
     int index = partitions_->other_dependency_size() - 1;
     other_dependency_map_[dep->url()] = index;
+  }
+}
+
+void RewriteContext::AddDebugMessages(
+    const protobuf::RepeatedPtrField<GoogleString>& messages) {
+  const int64 remaining = Driver()->DebugOutputBytesRemaining();
+  for (int i = 0, n = messages.size(); i < n; ++i) {
+    const GoogleString& message = messages.Get(i);
+    if (debug_message_set_.find(message) != debug_message_set_.end()) {
+      continue;
+    }
+    const int64 size = static_cast<int64>(message.size());
+    if (remaining >= 0 && size > remaining - debug_message_bytes_) {
+      // This context cannot emit more than the document's budget allows, so
+      // it does not hold on to messages past it.
+      return;
+    }
+    debug_message_set_.insert(message);
+    partitions_->add_debug_message(message);
+    debug_message_bytes_ += size;
+  }
+}
+
+void RewriteContext::AddDebugMessageToParent(const GoogleString& message) {
+  if (has_parent()) {
+    protobuf::RepeatedPtrField<GoogleString> messages;
+    *messages.Add() = message;
+    parent()->AddDebugMessages(messages);
   }
 }
 
@@ -2101,8 +2210,7 @@ void RewriteContext::Propagate(RenderOp render_op) {
     }
     CHECK_EQ(num_output_partitions(), num_outputs());
     if (has_parent()) {
-      parent()->partitions()->mutable_debug_message()->MergeFrom(
-          partitions_->debug_message());
+      parent()->AddDebugMessages(partitions_->debug_message());
     } else if (num_slots() >= 1) {
       if (render_slots) {
         Driver()->InsertDebugComments(partitions_->debug_message(),
@@ -2125,8 +2233,7 @@ void RewriteContext::Propagate(RenderOp render_op) {
       int n = partition->input_size();
       if (partition->debug_message_size() > 0) {
         if (has_parent()) {
-          parent()->partitions()->mutable_debug_message()->MergeFrom(
-              partition->debug_message());
+          parent()->AddDebugMessages(partition->debug_message());
         } else if (render_slots) {
           // If no input slots defined, then we created a partition just to hold
           // debug information.  Put that information in 0th slot of context.
@@ -2899,10 +3006,9 @@ bool RewriteContext::FetchContextDetached() {
   return fetch_->detached();
 }
 
-bool RewriteContext::SendFallbackResponse(StringPiece output_url_base,
-                                          StringPiece contents,
-                                          AsyncFetch* async_fetch,
-                                          MessageHandler* handler) {
+bool RewriteContext::IsFallbackContentTypeAllowed(StringPiece output_url_base,
+                                                  AsyncFetch* async_fetch,
+                                                  MessageHandler* handler) {
   const ContentType* content_type =
       async_fetch->response_headers()->DetermineContentType();
   if (content_type == nullptr ||
@@ -2918,6 +3024,16 @@ bool RewriteContext::SendFallbackResponse(StringPiece output_url_base,
         (content_type == nullptr ? "[missing or unrecognized]"
                                  : content_type->mime_type()));
 
+    return false;
+  }
+  return true;
+}
+
+bool RewriteContext::SendFallbackResponse(StringPiece output_url_base,
+                                          StringPiece contents,
+                                          AsyncFetch* async_fetch,
+                                          MessageHandler* handler) {
+  if (!IsFallbackContentTypeAllowed(output_url_base, async_fetch, handler)) {
     return false;
   }
 

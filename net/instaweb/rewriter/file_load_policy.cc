@@ -18,6 +18,7 @@
  */
 
 
+#include <algorithm>
 #include <list>
 
 #include "net/instaweb/rewriter/public/file_load_mapping.h"
@@ -30,6 +31,27 @@
 #include "pagespeed/kernel/util/re2.h"
 
 namespace net_instaweb {
+
+namespace {
+
+// Normalises repeated slashes. On Windows the first unc_skip characters are
+// left alone, since a leading "//" starts a UNC path.
+void CollapseSlashes(GoogleString* filename, size_t unc_skip) {
+  GoogleString::iterator begin = filename->begin();
+#ifdef _WIN32
+  begin += std::min(unc_skip, filename->size());
+#endif  // _WIN32
+  filename->erase(
+      std::unique(begin, filename->end(),
+                  [](char a, char b) { return a == '/' && b == '/'; }),
+      filename->end());
+}
+
+void CollapseSlashes(GoogleString* filename) {
+  CollapseSlashes(filename, 1);
+}
+
+}  // namespace
 
 FileLoadPolicy::~FileLoadPolicy() {
   for (FileLoadMappings::const_iterator it = file_load_mappings_.begin();
@@ -61,6 +83,9 @@ bool FileLoadPolicy::ShouldLoadFromFileHelper(const GoogleUrl& url,
         // GoogleUrl will decode most %XX escapes, but it does not convert
         // "%20" -> " " which has come up often.
         GlobalReplaceSubstring("%20", " ", filename);
+
+        // The rules below must see the path the filesystem will see.
+        CollapseSlashes(filename);
 
         // We know know what file this url should map to, and we want know
         // whether this one is safe to load directly or whether we need to back
@@ -104,14 +129,23 @@ bool FileLoadPolicy::AddRule(const GoogleString& rule_str, bool is_regexp,
                              bool allow, GoogleString* error) {
   FileLoadRule* rule = NULL;
   if (is_regexp) {
-    const RE2 re(rule_str);
+    // Filenames are matched with their slashes collapsed, so the pattern text
+    // is collapsed too.  A leading "^//" is kept on Windows.
+    GoogleString pattern = rule_str;
+    CollapseSlashes(&pattern,
+                    StringPiece(pattern).starts_with("^/") ? 2 : 0);
+    const RE2 re(pattern);
     if (!re.ok()) {
       error->assign(re.error());
       return false;
     }
-    rule = new FileLoadRuleRegexp(rule_str, allow);
+    rule = new FileLoadRuleRegexp(pattern, allow);
   } else {
-    rule = new FileLoadRuleLiteral(rule_str, allow);
+    // Filenames are matched with their slashes collapsed, so the prefix has to
+    // be spelled that way too.
+    GoogleString prefix = rule_str;
+    CollapseSlashes(&prefix);
+    rule = new FileLoadRuleLiteral(prefix, allow);
   }
   file_load_rules_.push_back(rule);
   return true;

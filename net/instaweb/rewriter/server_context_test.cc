@@ -1940,4 +1940,71 @@ TEST_F(ServerContextTest, RewriteTestBaseDefaultResponseHeaders) {
   EXPECT_EQ(timer()->NowMs() + 100 * Timer::kSecondMs, expire_time_ms);
 }
 
+TEST_F(ServerContextTest, RequestCannotRaiseSizeThresholds) {
+  RequestHeaders request_headers;
+  scoped_ptr<RewriteOptions> options(GetCustomOptions(
+      StrCat("http://example.com/"
+             "?PageSpeedFilters=inline_images,inline_css,inline_javascript",
+             "&PageSpeedImageInlineMaxBytes=",
+             Integer64ToString(RewriteOptions::kDefaultImageInlineMaxBytes + 1),
+             "&PageSpeedCssImageInlineMaxBytes=",
+             Integer64ToString(
+                 RewriteOptions::kDefaultCssImageInlineMaxBytes + 1),
+             "&PageSpeedCssInlineMaxBytes=",
+             Integer64ToString(RewriteOptions::kDefaultCssInlineMaxBytes + 1),
+             "&PageSpeedJsInlineMaxBytes=",
+             Integer64ToString(RewriteOptions::kDefaultJsInlineMaxBytes + 1),
+             "&PageSpeedGoogleFontCssInlineMaxBytes=",
+             Integer64ToString(
+                 RewriteOptions::kDefaultGoogleFontCssInlineMaxBytes + 1),
+             "&PageSpeedCssFlattenMaxBytes=",
+             Integer64ToString(
+                 RewriteOptions::kDefaultCssFlattenMaxBytes + 1)),
+      &request_headers, NULL));
+  ASSERT_TRUE(options.get() != NULL);
+  EXPECT_EQ(RewriteOptions::kDefaultImageInlineMaxBytes,
+            options->ImageInlineMaxBytes());
+  EXPECT_EQ(RewriteOptions::kDefaultCssImageInlineMaxBytes,
+            options->CssImageInlineMaxBytes());
+  EXPECT_EQ(RewriteOptions::kDefaultCssInlineMaxBytes,
+            options->css_inline_max_bytes());
+  EXPECT_EQ(RewriteOptions::kDefaultJsInlineMaxBytes,
+            options->js_inline_max_bytes());
+  EXPECT_EQ(RewriteOptions::kDefaultGoogleFontCssInlineMaxBytes,
+            options->google_font_css_inline_max_bytes());
+  EXPECT_EQ(RewriteOptions::kDefaultCssFlattenMaxBytes,
+            options->css_flatten_max_bytes());
+
+  // Nor can it lift a bound with a value that a filter reads as no bound at
+  // all: a negative size turns into the largest size_t in the inline filters,
+  // and a flatten threshold of zero means unlimited.
+  options.reset(GetCustomOptions(
+      StrCat("http://example.com/"
+             "?PageSpeedFilters=inline_images,inline_css,inline_javascript"
+             "&PageSpeedImageInlineMaxBytes=-1"
+             "&PageSpeedCssImageInlineMaxBytes=-1",
+             "&PageSpeedCssInlineMaxBytes=",
+             Integer64ToString(-RewriteOptions::kDefaultCssInlineMaxBytes),
+             "&PageSpeedJsInlineMaxBytes=",
+             Integer64ToString(-RewriteOptions::kDefaultJsInlineMaxBytes),
+             "&PageSpeedGoogleFontCssInlineMaxBytes=",
+             Integer64ToString(
+                 -RewriteOptions::kDefaultGoogleFontCssInlineMaxBytes),
+             "&PageSpeedCssFlattenMaxBytes=0"),
+      &request_headers, NULL));
+  ASSERT_TRUE(options.get() != NULL);
+  EXPECT_EQ(RewriteOptions::kDefaultImageInlineMaxBytes,
+            options->ImageInlineMaxBytes());
+  EXPECT_EQ(RewriteOptions::kDefaultCssImageInlineMaxBytes,
+            options->CssImageInlineMaxBytes());
+  EXPECT_EQ(RewriteOptions::kDefaultCssInlineMaxBytes,
+            options->css_inline_max_bytes());
+  EXPECT_EQ(RewriteOptions::kDefaultJsInlineMaxBytes,
+            options->js_inline_max_bytes());
+  EXPECT_EQ(RewriteOptions::kDefaultGoogleFontCssInlineMaxBytes,
+            options->google_font_css_inline_max_bytes());
+  EXPECT_EQ(RewriteOptions::kDefaultCssFlattenMaxBytes,
+            options->css_flatten_max_bytes());
+}
+
 }  // namespace net_instaweb

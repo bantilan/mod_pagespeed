@@ -277,6 +277,7 @@ class RewriteOptions {
   static const char kCssInlineMaxBytes[];
   static const char kCssOutlineMinBytes[];
   static const char kCssParseMaxBytes[];
+  static const char kDebugOutputMaxBytes[];
   static const char kCssPreserveURLs[];
   static const char kDefaultCacheHtml[];
   static const char kDisableBackgroundFetchesForBots[];
@@ -631,7 +632,7 @@ class RewriteOptions {
   // This version number should be incremented if any default-values
   // are changed, either in an Add*Property() call or via
   // options->set_default.
-  static const int kOptionsVersion = 15;
+  static const int kOptionsVersion = 16;
 
   // Number of bytes used for signature hashing.
   static const int kHashBytes = 20;
@@ -852,6 +853,7 @@ class RewriteOptions {
   static const int64 kDefaultCssInlineMaxBytes;
   static const int64 kDefaultCssOutlineMinBytes;
   static const int64 kDefaultCssParseMaxBytes;
+  static const int64 kDefaultDebugOutputMaxBytes;
   static const int64 kDefaultGoogleFontCssInlineMaxBytes;
   static const int64 kDefaultImageInlineMaxBytes;
   static const int64 kDefaultJsInlineMaxBytes;
@@ -1648,6 +1650,14 @@ class RewriteOptions {
   void set_css_parse_max_bytes(int64 x) {
     set_option(x, &css_parse_max_bytes_);
   }
+  // The most bytes of debug comments written into one document; zero or less
+  // means no limit.
+  int64 debug_output_max_bytes() const {
+    return debug_output_max_bytes_.value();
+  }
+  void set_debug_output_max_bytes(int64 x) {
+    set_option(x, &debug_output_max_bytes_);
+  }
   bool cache_small_images_unrewritten() const {
     return cache_small_images_unrewritten_.value();
   }
@@ -1672,6 +1682,12 @@ class RewriteOptions {
   // The larger of ImageInlineMaxBytes and CssImageInlineMaxBytes.
   int64 MaxImageInlineMaxBytes() const;
 
+  // For options built from a request: replaces each size threshold that this
+  // object sets above the value in `ceiling` (the configured options the
+  // request is merged onto) with that value, and likewise a negative one, or
+  // a zero CssFlattenMaxBytes (unlimited) under a positive ceiling. A request
+  // may lower the thresholds but not raise them.
+  void LimitSizeThresholdsTo(const RewriteOptions& ceiling);
   // For options set by a configuration source that the server configuration
   // does not trust with resource use, such as an .htaccess file on a shared
   // host: replaces each per-document or per-resource work bound
@@ -3793,6 +3809,7 @@ class RewriteOptions {
   scoped_ptr<ThreadSystem::RWLock> cache_purge_mutex_;
   Option<int64> css_flatten_max_bytes_;
   Option<int64> css_parse_max_bytes_;
+  Option<int64> debug_output_max_bytes_;
   Option<bool> cache_small_images_unrewritten_;
   Option<bool> no_transform_optimized_images_;
 

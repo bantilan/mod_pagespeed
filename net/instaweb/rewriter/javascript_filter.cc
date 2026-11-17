@@ -162,6 +162,18 @@ class JavascriptFilter::Context : public SingleRewriteContext {
 
     ServerContext* server_context = FindServerContext();
     MessageHandler* message_handler = server_context->message_handler();
+    // The output is labelled as script, so only rewrite inputs the origin
+    // labelled as script.
+    const ContentType* input_type =
+        input->response_headers()->DetermineContentType();
+    if (input_type == NULL || !input_type->IsJsLike()) {
+      message_handler->Message(
+          kInfo, "Script %s not rewritten: origin content type %s.",
+          input->UrlForDebug().c_str(),
+          (input_type == NULL ? "[missing or unrecognized]"
+                              : input_type->mime_type()));
+      return kRewriteFailed;
+    }
     JavascriptCodeBlock code_block(input->ExtractUncompressedContents(),
                                    config_, input->url(), message_handler);
     code_block.Rewrite();

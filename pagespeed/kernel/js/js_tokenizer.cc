@@ -1049,6 +1049,21 @@ JsKeywords::Type JsTokenizer::ConsumeString(StringPiece* token_out) {
     // EOF or an unescaped linebreak in the string will cause an error.
     return Error(token_out);
   }
+  // The pattern can fall back to reading a backslash as an ordinary byte, and
+  // so close the literal on a quote that is in fact escaped (for example an
+  // input ending in `'abc\'`).  The closing quote is escaped iff an odd
+  // number of backslashes directly precede it; the literal is then
+  // unterminated.  Only the body is scanned, never the opening quote.
+  {
+    const size_t close = input_.size() - unconsumed.size() - 1;
+    size_t backslashes = 0;
+    while (backslashes + 1 < close && input_[close - 1 - backslashes] == '\\') {
+      ++backslashes;
+    }
+    if (backslashes % 2 == 1) {
+      return Error(token_out);
+    }
+  }
   PushExpression();
   return Emit(JsKeywords::kStringLiteral, input_.size() - unconsumed.size(),
               token_out);

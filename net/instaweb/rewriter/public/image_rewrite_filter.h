@@ -272,6 +272,11 @@ class ImageRewriteFilter : public RewriteFilter {
   // even if they're not parsable.
   bool HasAnyDimensions(HtmlElement* element);
 
+  // The bound a style attribute read for image dimensions is parsed up to.
+  // With count_over_bound, an over-bound value is also reported through
+  // CssFilter::OverParseMaxBytes (counted and logged once per page).
+  int64 StyleParseBound(HtmlElement* element, bool count_over_bound);
+
   // Resizes low quality image. It further reduces the size of inlined low
   // quality image for mobile.
   void ResizeLowQualityImage(Image* low_image,
@@ -298,6 +303,9 @@ class ImageRewriteFilter : public RewriteFilter {
 
   // # of images rewritten successfully.
   Variable* image_rewrites_;
+  // # of image style attributes left unread because they are larger than
+  // CssParseMaxBytes (shares the CssFilter counter).
+  Variable* parse_max_bytes_exceeded_;
   // # of images resized using rendered dimensions;
   Variable* image_resized_using_rendered_dimensions_;
   // # of images that we decided not to rewrite because of size constraint.

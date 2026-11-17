@@ -99,6 +99,9 @@ class InPlaceRewriteContext : public SingleRewriteContext {
                        GoogleUrlStarVector* url_vector) override;
   // Implements RewriteContext::StartFetchReconstruction().
   void StartFetchReconstruction() override;
+  // The in-place output is named by the URL of its own input, which is
+  // what DecodeFetchUrls() reads, so its result is always the one to store.
+  bool FetchWritesPartition() const override { return true; }
 
   static void InitStats(Statistics* statistics);
 

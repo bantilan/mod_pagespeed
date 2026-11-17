@@ -69,7 +69,9 @@ DimensionState GetDimensions(Css::Declarations* decls, int* width, int* height);
 
 class StyleExtractor {
  public:
-  explicit StyleExtractor(HtmlElement* element);
+  // A style attribute longer than `max_style_bytes` (when that is positive)
+  // is not parsed and is reported as not parsable (kNotParsable).
+  explicit StyleExtractor(HtmlElement* element, int64 max_style_bytes = 0);
   virtual ~StyleExtractor();
 
   DimensionState state() const { return state_; }
@@ -85,7 +87,11 @@ class StyleExtractor {
   DimensionState dimension_state() { return state_; }
 
  private:
-  static Css::Declarations* GetDeclsFromElement(HtmlElement* element);
+  // Sets *over_bound when the style attribute is longer than the bound and
+  // so was not parsed.
+  static Css::Declarations* GetDeclsFromElement(HtmlElement* element,
+                                                int64 max_style_bytes,
+                                                bool* over_bound);
   std::unique_ptr<Css::Declarations> decls_;
   int width_px_;
   int height_px_;

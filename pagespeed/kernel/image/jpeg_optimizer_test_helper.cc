@@ -20,9 +20,12 @@
 
 #include "pagespeed/kernel/image/jpeg_optimizer_test_helper.h"
 
+#include <cstdlib>
 #include <setjmp.h>
+#include <vector>
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/null_mutex.h"
+#include "pagespeed/kernel/image/image_util.h"
 #include "pagespeed/kernel/image/jpeg_reader.h"
 
 extern "C" {
@@ -35,7 +38,9 @@ extern "C" {
 
 using net_instaweb::MockMessageHandler;
 using net_instaweb::NullMutex;
+using pagespeed::image_compression::GRAY_8;
 using pagespeed::image_compression::JpegReader;
+using pagespeed::image_compression::JpegScanlineReader;
 
 namespace pagespeed_testing {
 namespace image_compression {
@@ -128,6 +133,165 @@ int GetNumScansInJpeg(const GoogleString& data) {
   }
 
   return num_scans;
+}
+
+namespace {
+
+// Error manager for the encoder below: jumps back instead of exiting.
+struct EncodeErrorManager {
+  jpeg_error_mgr manager;
+  jmp_buf env;
+};
+
+void EncodeErrorExit(j_common_ptr cinfo) {
+  longjmp(reinterpret_cast<EncodeErrorManager*>(cinfo->err)->env, 1);
+}
+
+void EncodeOutputMessage(j_common_ptr cinfo) {}
+
+// Destination manager writing into a GoogleString, mirroring the one in
+// jpeg_optimizer.cc (this libjpeg has no jpeg_mem_dest).
+#define ENCODE_DEST_BUFFER_SIZE 4096
+struct EncodeDestinationManager : public jpeg_destination_mgr {
+  JOCTET buffer[ENCODE_DEST_BUFFER_SIZE];
+  GoogleString* str;
+};
+
+METHODDEF(void) EncodeInitDestination(j_compress_ptr cinfo) {
+  EncodeDestinationManager& dest =
+      *reinterpret_cast<EncodeDestinationManager*>(cinfo->dest);
+  dest.next_output_byte = dest.buffer;
+  dest.free_in_buffer = ENCODE_DEST_BUFFER_SIZE;
+}
+
+METHODDEF(boolean) EncodeEmptyOutputBuffer(j_compress_ptr cinfo) {
+  EncodeDestinationManager& dest =
+      *reinterpret_cast<EncodeDestinationManager*>(cinfo->dest);
+  dest.str->append(reinterpret_cast<char*>(dest.buffer),
+                   ENCODE_DEST_BUFFER_SIZE);
+  dest.free_in_buffer = ENCODE_DEST_BUFFER_SIZE;
+  dest.next_output_byte = dest.buffer;
+  return TRUE;
+}
+
+METHODDEF(void) EncodeTermDestination(j_compress_ptr cinfo) {
+  EncodeDestinationManager& dest =
+      *reinterpret_cast<EncodeDestinationManager*>(cinfo->dest);
+  const size_t datacount = ENCODE_DEST_BUFFER_SIZE - dest.free_in_buffer;
+  if (datacount > 0) {
+    dest.str->append(reinterpret_cast<char*>(dest.buffer), datacount);
+  }
+}
+
+jpeg_scan_info SingleComponentScan(int ss, int se, int ah, int al) {
+  jpeg_scan_info scan = {};
+  scan.comps_in_scan = 1;
+  scan.component_index[0] = 0;
+  scan.Ss = ss;
+  scan.Se = se;
+  scan.Ah = ah;
+  scan.Al = al;
+  return scan;
+}
+
+// Writes `pixels` (width * height grayscale samples) with the given scan
+// script. Kept free of C++ objects with destructors, since an encoder error
+// longjmps out of it.
+bool EncodeGrayWithScript(const unsigned char* pixels, JDIMENSION width,
+                          JDIMENSION height, const jpeg_scan_info* script,
+                          int script_length, GoogleString* out) {
+  jpeg_compress_struct cinfo;
+  EncodeErrorManager error;
+  cinfo.err = jpeg_std_error(&error.manager);
+  error.manager.error_exit = EncodeErrorExit;
+  error.manager.output_message = EncodeOutputMessage;
+  if (setjmp(error.env)) {
+    jpeg_destroy_compress(&cinfo);
+    return false;
+  }
+  jpeg_create_compress(&cinfo);
+  cinfo.dest = (struct jpeg_destination_mgr*)
+      (*cinfo.mem->alloc_small)((j_common_ptr)&cinfo, JPOOL_PERMANENT,
+                               sizeof(EncodeDestinationManager));
+  EncodeDestinationManager& dest =
+      *reinterpret_cast<EncodeDestinationManager*>(cinfo.dest);
+  dest.str = out;
+  dest.init_destination = EncodeInitDestination;
+  dest.empty_output_buffer = EncodeEmptyOutputBuffer;
+  dest.term_destination = EncodeTermDestination;
+  cinfo.image_width = width;
+  cinfo.image_height = height;
+  cinfo.input_components = 1;
+  cinfo.in_color_space = JCS_GRAYSCALE;
+  jpeg_set_defaults(&cinfo);
+  cinfo.scan_info = script;
+  cinfo.num_scans = script_length;
+  jpeg_start_compress(&cinfo, TRUE);
+  while (cinfo.next_scanline < cinfo.image_height) {
+    JSAMPROW row = const_cast<JSAMPROW>(pixels) +
+                   static_cast<size_t>(cinfo.next_scanline) * width;
+    jpeg_write_scanlines(&cinfo, &row, 1);
+  }
+  jpeg_finish_compress(&cinfo);
+  jpeg_destroy_compress(&cinfo);
+  return true;
+}
+
+}  // namespace
+
+bool EncodeGrayJpegWithScans(const GoogleString& source, int num_scans,
+                             GoogleString* out) {
+  // Two DC scans, then two scans per AC band (first pass at Al=1, refinement
+  // to Al=0). For an odd count the first band starts one bit lower (Al=2)
+  // and takes one refinement more. There are 63 AC coefficients, so at most
+  // 63 bands.
+  const int ac_scans = num_scans - 2;
+  const int num_bands = ac_scans / 2;
+  if (num_bands < 1 || num_bands > 63) {
+    return false;
+  }
+
+  MockMessageHandler message_handler(new NullMutex);
+  JpegScanlineReader reader(&message_handler);
+  if (!reader.Initialize(source.data(), source.size()) ||
+      reader.GetPixelFormat() != GRAY_8) {
+    return false;
+  }
+  const size_t width = reader.GetImageWidth();
+  const size_t height = reader.GetImageHeight();
+  std::vector<unsigned char> pixels;
+  pixels.reserve(width * height);
+  for (size_t y = 0; y < height; ++y) {
+    void* row = NULL;
+    if (!reader.ReadNextScanline(&row)) {
+      return false;
+    }
+    const unsigned char* bytes = static_cast<const unsigned char*>(row);
+    pixels.insert(pixels.end(), bytes, bytes + width);
+  }
+
+  std::vector<jpeg_scan_info> script;
+  script.push_back(SingleComponentScan(0, 0, 0, 1));
+  script.push_back(SingleComponentScan(0, 0, 1, 0));
+  for (int band = 0; band < num_bands; ++band) {
+    const int ss = 1 + band * 63 / num_bands;
+    const int se = (band + 1) * 63 / num_bands;
+    if (band == 0 && ac_scans % 2 == 1) {
+      script.push_back(SingleComponentScan(ss, se, 0, 2));
+      script.push_back(SingleComponentScan(ss, se, 2, 1));
+    } else {
+      script.push_back(SingleComponentScan(ss, se, 0, 1));
+    }
+    script.push_back(SingleComponentScan(ss, se, 1, 0));
+  }
+  if (static_cast<int>(script.size()) != num_scans) {
+    return false;
+  }
+
+  out->clear();
+  return EncodeGrayWithScript(pixels.data(), static_cast<JDIMENSION>(width),
+                              static_cast<JDIMENSION>(height), script.data(),
+                              static_cast<int>(script.size()), out);
 }
 
 int GetColorProfileMarker() {

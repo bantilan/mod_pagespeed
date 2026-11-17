@@ -20,6 +20,7 @@
 #ifndef NET_INSTAWEB_REWRITER_PUBLIC_SCAN_FILTER_H_
 #define NET_INSTAWEB_REWRITER_PUBLIC_SCAN_FILTER_H_
 
+#include "pagespeed/kernel/base/string_util.h"
 #include "pagespeed/kernel/html/empty_html_filter.h"
 
 namespace net_instaweb {
@@ -61,6 +62,8 @@ class ScanFilter : public EmptyHtmlFilter {
   bool seen_refs_;
   bool seen_base_;
   bool seen_meta_tag_charset_;
+
+  void AddCspPolicies(StringPiece value);
 };
 
 }  // namespace net_instaweb

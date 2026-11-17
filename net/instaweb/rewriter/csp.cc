@@ -29,6 +29,8 @@
 
 namespace net_instaweb {
 
+const size_t CspContext::kMaxCspPolicies;
+
 namespace {
 
 void TrimCspWhitespace(StringPiece* input) {
@@ -619,9 +621,24 @@ bool CspPolicy::IsBasePermitted(const GoogleUrl& previous_origin,
 }
 
 void CspContext::AddPolicy(std::unique_ptr<CspPolicy> policy) {
-  if (policy != nullptr) {
-    policies_.push_back(std::move(policy));
+  if (policy == nullptr) {
+    return;
   }
+  // The policies all have to agree, so the ones past the limit can't just be
+  // ignored: one that permits nothing stands in for them. Its base-uri makes us
+  // give up on <base> (see ScanFilter), as we can't tell whether the browser
+  // would honor it.
+  const size_t num_policies = policies_.size();
+  if (num_policies > kMaxCspPolicies) {
+    return;
+  }
+  if (num_policies == kMaxCspPolicies) {
+    // script-src is named explicitly: this tree's inline-script check does
+    // not fall back to default-src.
+    policy = CspPolicy::Parse(
+        "default-src 'none'; script-src 'none'; base-uri 'self'");
+  }
+  policies_.push_back(std::move(policy));
 }
 
 }  // namespace net_instaweb

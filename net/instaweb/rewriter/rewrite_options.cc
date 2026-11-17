@@ -94,6 +94,7 @@ const char RewriteOptions::kCssImageInlineMaxBytes[] = "CssImageInlineMaxBytes";
 const char RewriteOptions::kCssInlineMaxBytes[] = "CssInlineMaxBytes";
 const char RewriteOptions::kCssOutlineMinBytes[] = "CssOutlineMinBytes";
 const char RewriteOptions::kCssParseMaxBytes[] = "CssParseMaxBytes";
+const char RewriteOptions::kDebugOutputMaxBytes[] = "DebugOutputMaxBytes";
 const char RewriteOptions::kCssPreserveURLs[] = "CssPreserveURLs";
 const char RewriteOptions::kDefaultCacheHtml[] = "DefaultCacheHtml";
 const char RewriteOptions::kDisableRewriteOnNoTransform[] =
@@ -419,6 +420,7 @@ const int64 RewriteOptions::kDefaultCssImageInlineMaxBytes = 0;
 const int64 RewriteOptions::kDefaultCssOutlineMinBytes = 3000;
 // CSS parsing has a substantially larger memory cost than the source bytes.
 const int64 RewriteOptions::kDefaultCssParseMaxBytes = 2 << 20;
+const int64 RewriteOptions::kDefaultDebugOutputMaxBytes = 1 << 20;
 // 3K is bigger than Roboto loader for Chrome (2.2k)
 const int64 RewriteOptions::kDefaultGoogleFontCssInlineMaxBytes = 3 * 1024;
 const int64 RewriteOptions::kDefaultImageInlineMaxBytes = 3072;
@@ -1263,6 +1265,11 @@ void RewriteOptions::AddProperties() {
       kCssParseMaxBytes, kDirectoryScope,
       "Largest stylesheet, in bytes, that the CSS rewriter parses; larger "
       "ones are passed through unmodified (<= 0 for no limit).", true);
+  AddBaseProperty(
+      kDefaultDebugOutputMaxBytes, &RewriteOptions::debug_output_max_bytes_,
+      "dob", kDebugOutputMaxBytes, kDirectoryScope,
+      "Most bytes of debug comments written into one document "
+      "(0 = unbounded).", true);
   AddBaseProperty(
       kDefaultCssImageInlineMaxBytes,
       &RewriteOptions::css_image_inline_max_bytes_,
@@ -2822,7 +2829,9 @@ void RewriteOptions::ClearFilters() {
   modified_ = true;
   enabled_filters_.clear();
   disabled_filters_.clear();
-  forbidden_filters_.clear();
+  // Forbidden filters are left alone: a forbid is the operator's limit, not a
+  // filter choice, so resetting the filter choices (as an experiment arm
+  // does) must not lift it.
 
   // Re-enable HtmlWriterFilter by default.
   EnableFilter(kHtmlWriterFilter);
@@ -3332,7 +3341,7 @@ RewriteOptions::OptionSettingResult RewriteOptions::ParseAndSetOptionFromName2(
     }
   } else if (StringCaseEqual(name, kLoadFromFileRule) ||
              StringCaseEqual(name, kLoadFromFileRuleMatch)) {
-    bool is_regexp = (name == kLoadFromFileRuleMatch);
+    bool is_regexp = StringCaseEqual(name, kLoadFromFileRuleMatch);
     bool allow;
     if (StringCaseEqual(arg1, "Allow")) {
       allow = true;
@@ -3718,6 +3727,36 @@ int64 RewriteOptions::MaxImageInlineMaxBytes() const {
                   CssImageInlineMaxBytes());
 }
 
+void RewriteOptions::LimitSizeThresholdsTo(const RewriteOptions& ceiling) {
+  // A request value is replaced by the configured one when it is larger, and
+  // also when it is negative: the inline filters store their threshold in a
+  // size_t, where a negative value becomes the largest size there is. For
+  // CssFlattenMaxBytes any value <= 0 means unlimited, so a request may not
+  // send zero either while the configuration sets a positive bound.
+  struct Limiter {
+    static void Limit(Option<int64>* mine, const Option<int64>& cap,
+                      bool zero_is_unlimited) {
+      if (!mine->was_set()) {
+        return;
+      }
+      const int64 value = mine->value();
+      if (value > cap.value() || value < 0 ||
+          (zero_is_unlimited && value == 0 && cap.value() > 0)) {
+        mine->set(cap.value());
+      }
+    }
+  };
+  Limiter::Limit(&image_inline_max_bytes_, ceiling.image_inline_max_bytes_,
+                 false);
+  Limiter::Limit(&css_image_inline_max_bytes_,
+                 ceiling.css_image_inline_max_bytes_, false);
+  Limiter::Limit(&css_inline_max_bytes_, ceiling.css_inline_max_bytes_, false);
+  Limiter::Limit(&js_inline_max_bytes_, ceiling.js_inline_max_bytes_, false);
+  Limiter::Limit(&google_font_css_inline_max_bytes_,
+                 ceiling.google_font_css_inline_max_bytes_, false);
+  Limiter::Limit(&css_flatten_max_bytes_, ceiling.css_flatten_max_bytes_,
+                 true);
+}
 
 void RewriteOptions::LimitWorkBound(Option<int64>* mine, int64 bound,
                                     bool zero_or_less_is_unlimited) {
@@ -3808,6 +3847,20 @@ void RewriteOptions::Merge(const RewriteOptions& src) {
 #endif
 
   bool modify = src.modified_;
+
+  // Options that already forbid all disabled filters accept no merge that
+  // turns on a filter not on before it, whether through the enabled set, a
+  // higher rewrite level or a dropped preserve option: remember what is on.
+  const bool forbid_all_latched = forbid_all_disabled_filters();
+  FilterSet enabled_before_merge;
+  if (forbid_all_latched) {
+    for (int i = kFirstFilter; i != kEndOfFilters; ++i) {
+      Filter filter = static_cast<Filter>(i);
+      if (Enabled(filter)) {
+        enabled_before_merge.Insert(filter);
+      }
+    }
+  }
 
   DCHECK_EQ(all_options_.size(), src.all_options_.size());
   DCHECK_EQ(initialized_options_, src.initialized_options_);
@@ -3949,6 +4002,19 @@ void RewriteOptions::Merge(const RewriteOptions& src) {
   ApplyMergeOverride(override_images, kExtendCacheImages,
                      &image_preserve_urls_);
   ApplyMergeOverride(override_scripts, kExtendCacheScripts, &js_preserve_urls_);
+
+  // Refuse every filter this merge would have turned on. Recording it as
+  // disabled keeps it off, and forbidden, through later merges too.
+  if (forbid_all_latched) {
+    for (int i = kFirstFilter; i != kEndOfFilters; ++i) {
+      Filter filter = static_cast<Filter>(i);
+      if (!enabled_before_merge.IsSet(filter) && Enabled(filter)) {
+        enabled_filters_.Erase(filter);
+        disabled_filters_.Insert(filter);
+        modify = true;
+      }
+    }
+  }
 
   if (modify) {
     Modify();
@@ -4788,6 +4854,12 @@ bool RewriteOptions::SetupExperimentRewriters() {
   // the level. Note that we cannot set the level if 'default' is on because
   // the default level is PassThrough which breaks the idea of 'default'.
   if (!spec->use_default()) {
+    // ForbidAllDisabledFilters forbids the filters disabled at this point;
+    // make those forbids explicit so that clearing the filter choices below
+    // cannot lift them.
+    if (forbid_all_disabled_filters()) {
+      ForbidFilters(disabled_filters_);
+    }
     ClearFilters();
     SetRewriteLevel(spec->rewrite_level());
   }

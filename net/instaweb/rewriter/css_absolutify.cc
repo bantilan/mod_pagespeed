@@ -20,6 +20,7 @@
 #include "net/instaweb/rewriter/public/css_absolutify.h"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
@@ -34,6 +35,52 @@
 #include "third_party/css_parser/src/webutil/css/value.h"
 
 namespace net_instaweb {
+
+namespace {
+
+// Returns a copy of the FUNCTION value 'function' in which every url() among
+// its parameters, at any depth, has gone through transformer, or NULL when
+// no parameter is a url() or a function holding one. Sets *saw_url when a
+// url() was found.
+Css::Value* TransformFunctionUrls(const Css::Value& function,
+                                  CssTagScanner::Transformer* transformer,
+                                  bool* saw_url) {
+  const Css::FunctionParameters* params =
+      function.GetParametersWithSeparators();
+  if (params == NULL) {
+    return NULL;
+  }
+  bool changed = false;
+  std::unique_ptr<Css::FunctionParameters> copy(
+      new Css::FunctionParameters());
+  for (int i = 0, n = params->size(); i < n; ++i) {
+    const Css::Value* param = params->value(i);
+    std::unique_ptr<Css::Value> replacement;
+    if (param->GetLexicalUnitType() == Css::Value::URI) {
+      *saw_url = true;
+      GoogleString url = UnicodeTextToUTF8(param->GetStringValue());
+      if (transformer->Transform(&url) ==
+          CssTagScanner::Transformer::kSuccess) {
+        replacement.reset(new Css::Value(Css::Value::URI,
+                                         UTF8ToUnicodeText(url)));
+      }
+    } else if (param->GetLexicalUnitType() == Css::Value::FUNCTION) {
+      replacement.reset(TransformFunctionUrls(*param, transformer, saw_url));
+    }
+    if (replacement.get() != NULL) {
+      changed = true;
+    } else {
+      replacement.reset(new Css::Value(*param));
+    }
+    copy->AddSepValue(params->separator(i), replacement.release());
+  }
+  if (!changed) {
+    return NULL;
+  }
+  return new Css::Value(function.GetFunctionName(), copy.release());
+}
+
+}  // namespace
 
 // TODO(sligocki): Move this into AbsolutifyUrls(). We don't ever want
 // to use them separately. If we want to absolutify URLs, we want to
@@ -166,6 +213,15 @@ bool CssAbsolutify::AbsolutifyDeclarations(
             delete (*values)[value_index];
             (*values)[value_index] =
                 new Css::Value(Css::Value::URI, UTF8ToUnicodeText(url));
+          }
+        } else if (value->GetLexicalUnitType() == Css::Value::FUNCTION) {
+          // A url() passed to a function, such as image-set(), is resolved
+          // against the same base as one that stands on its own.
+          Css::Value* replacement =
+              TransformFunctionUrls(*value, transformer, &urls_modified);
+          if (replacement != NULL) {
+            delete (*values)[value_index];
+            (*values)[value_index] = replacement;
           }
         }
       }

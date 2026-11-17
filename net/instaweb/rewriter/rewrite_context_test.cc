@@ -2247,6 +2247,52 @@ TEST_F(RewriteContextTest, ReconstructChainedWrongHash) {
       << headers.ToString();
 }
 
+// A rewritten URL in the contents of a resource being reconstructed is left
+// as it is.
+class NestedReconstructionTest : public RewriteContextTest {
+ protected:
+  // Serves four stylesheets and returns how many fetches it takes to get the
+  // rewritten a.css.
+  int FetchCount(StringPiece a, StringPiece b, StringPiece c, StringPiece d) {
+    // Need normal filters since cloned RewriteDriver instances wouldn't
+    // know about test-only stuff.
+    options()->EnableFilter(RewriteOptions::kRewriteCss);
+    options()->EnableFilter(RewriteOptions::kFlattenCssImports);
+    options()->EnableFilter(RewriteOptions::kExtendCacheImages);
+    rewrite_driver()->AddFilters();
+    SetResponseWithDefaultHeaders("a.css", kContentTypeCss, a, 100);
+    SetResponseWithDefaultHeaders("b.css", kContentTypeCss, b, 100);
+    SetResponseWithDefaultHeaders("c.css", kContentTypeCss, c, 100);
+    SetResponseWithDefaultHeaders("d.css", kContentTypeCss, d, 100);
+    GoogleString content;
+    EXPECT_TRUE(FetchResourceUrl(Encode(kTestDomain, "cf", "0", "a.css", "css"),
+                                 &content));
+    return counting_url_async_fetcher()->fetch_count();
+  }
+};
+
+TEST_F(NestedReconstructionTest, NestedReconstructionIsBoundedForUrl) {
+  EXPECT_EQ(2, FetchCount(".x{background:url(A.b.css.pagespeed.cf.0.css)}",
+                          ".x{background:url(A.c.css.pagespeed.cf.0.css)}",
+                          ".x{background:url(A.d.css.pagespeed.cf.0.css)}",
+                          ".y{color:red}"));
+}
+
+TEST_F(NestedReconstructionTest, NestedReconstructionIsBoundedForImport) {
+  EXPECT_EQ(2, FetchCount("@import url(A.b.css.pagespeed.cf.0.css);",
+                          "@import url(A.c.css.pagespeed.cf.0.css);",
+                          "@import url(A.d.css.pagespeed.cf.0.css);",
+                          ".y{color:red}"));
+}
+
+TEST_F(NestedReconstructionTest, NestedReconstructionIsBoundedWithTwoUrls) {
+  EXPECT_EQ(3, FetchCount(".x{background:url(A.b.css.pagespeed.cf.0.css)}"
+                          ".y{background:url(A.c.css.pagespeed.cf.0.css)}",
+                          ".x{background:url(A.d.css.pagespeed.cf.0.css)}",
+                          ".x{background:url(A.d.css.pagespeed.cf.0.css)}",
+                          ".y{color:red}"));
+}
+
 TEST_F(RewriteContextTest, NestedRewriteWith404) {
   ResponseHeaders default_css_header;
   SetDefaultLongCacheHeaders(&kContentTypeCss, &default_css_header);
@@ -2380,6 +2426,20 @@ TEST_F(RewriteContextTest, Nested) {
   EXPECT_EQ(StrCat(Encode(kTestDomain, "uc", "0", "a.css", "css"), "\n",
                    Encode(kTestDomain, "uc", "0", "b.css", "css"), "\n"),
             rewritten_contents);
+}
+
+TEST_F(RewriteContextTest, RepeatedContextReleasesPartitions) {
+  // A top-level repeat holds no partitions by the time it is deleted.
+  const GoogleString kRewrittenUrl = Encode("", "nf", "0", "c.css", "css");
+  InitNestedFilter(NestedFilter::kExpectNestedRewritesSucceed);
+  InitResources();
+  ValidateExpected(
+      "repeated", StrCat(CssLinkHref("c.css"), CssLinkHref("c.css")),
+      StrCat(CssLinkHref(kRewrittenUrl), CssLinkHref(kRewrittenUrl)));
+  EXPECT_EQ(1, nested_filter_->num_top_rewrites());
+  EXPECT_EQ(1, metadata_cache_info().num_repeated_rewrites());
+  // Only the primary still held its partition when it was deleted.
+  EXPECT_EQ(1, nested_filter_->num_partitions_at_delete());
 }
 
 TEST_F(RewriteContextTest, NestedFailed) {

@@ -20,8 +20,11 @@
 #include "net/instaweb/rewriter/public/css_filter.h"
 
 #include <algorithm>  // for std::merge.
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 #include <utility>  // for pair
 #include <vector>
 
@@ -125,14 +128,30 @@ const RewriteOptions::Filter kRelatedFilters[] = {
 };
 const int kRelatedFiltersSize = arraysize(kRelatedFilters);
 
+// Options that a URL's options segment may set. List only options that shape
+// the optimized bytes, never limits on the work the server accepts: those
+// must come from the configuration alone.
 const char* const kRelatedOptions[] = {
-    RewriteOptions::kCssFlattenMaxBytes,
     RewriteOptions::kCssImageInlineMaxBytes,
     RewriteOptions::kCssPreserveURLs,
     RewriteOptions::kImagePreserveURLs,
-    RewriteOptions::kMaxUrlSegmentSize,
-    RewriteOptions::kMaxUrlSize,
 };
+
+// Whether a stylesheet skipped for its size should be logged: each URL is
+// logged at most once per process. Only hashes are kept, and at most
+// kMaxLoggedUrls of them; once that many URLs have been logged no more are,
+// which keeps the set small whatever URLs a site serves.
+bool ShouldLogParseMaxBytesExceeded(StringPiece url) {
+  static const size_t kMaxLoggedUrls = 4096;
+  static std::mutex* mutex = new std::mutex;
+  static std::unordered_set<size_t>* logged = new std::unordered_set<size_t>;
+  const size_t hash = std::hash<GoogleString>()(url.as_string());
+  std::lock_guard<std::mutex> lock(*mutex);
+  if (logged->size() >= kMaxLoggedUrls) {
+    return false;
+  }
+  return logged->insert(hash).second;
+}
 
 bool IsInlineResource(const ResourcePtr& resource) {
   // InlineOutputResources have no URL, but original inline resources are
@@ -151,6 +170,8 @@ StringPieceVector* CssFilter::related_options_ = nullptr;
 // Statistics variable names.
 const char CssFilter::kBlocksRewritten[] = "css_filter_blocks_rewritten";
 const char CssFilter::kParseFailures[] = "css_filter_parse_failures";
+const char CssFilter::kParseMaxBytesExceeded[] =
+    "css_filter_parse_max_bytes_exceeded";
 const char CssFilter::kFallbackRewrites[] = "css_filter_fallback_rewrites";
 const char CssFilter::kFallbackFailures[] = "css_filter_fallback_failures";
 const char CssFilter::kRewritesDropped[] = "css_filter_rewrites_dropped";
@@ -245,6 +266,10 @@ bool CssFilter::Context::SendFallbackResponse(StringPiece output_url_base,
                                               StringPiece input_contents,
                                               AsyncFetch* async_fetch,
                                               MessageHandler* handler) {
+  if (!IsFallbackContentTypeAllowed(output_url_base, async_fetch, handler)) {
+    return false;
+  }
+
   // Do not set the content length, since we may need to mutate the
   // content as we stream out the bytes to correct for URL changes.
   async_fetch->HeadersComplete();
@@ -360,27 +385,46 @@ void CssFilter::Context::RewriteSingle(
   AttachDependentRequestTrace(is_ipro ? "IproProcessCSS" : "ProcessCSS");
   input_resource_ = input_resource;
   output_resource_ = output_resource;
+
+  // The output is labelled text/css, so only rewrite inputs the origin
+  // labelled as CSS. Inline CSS arrives as a data:text/css resource.
+  const ContentType* input_type =
+      input_resource_->response_headers()->DetermineContentType();
+  if (input_type == NULL || !input_type->IsCss()) {
+    Driver()->message_handler()->Message(
+        kInfo, "CSS %s not rewritten: origin content type %s.",
+        input_resource_->UrlForDebug().c_str(),
+        (input_type == NULL ? "[missing or unrecognized]"
+                            : input_type->mime_type()));
+    RewriteDone(kRewriteFailed, 0);
+    return;
+  }
+
   StringPiece input_contents = input_resource_->ExtractUncompressedContents();
   in_text_size_ = input_contents.size();
   has_utf8_bom_ = StripUtf8Bom(&input_contents);
 
   GoogleUrl css_base_gurl_to_use;
   GetCssBaseUrlToUse(input_resource, &css_base_gurl_to_use);
-  GoogleUrl css_trim_gurl_to_use;
-  GetCssTrimUrlToUse(input_resource, output_resource_, &css_trim_gurl_to_use);
-  const int64 parse_max_bytes = Driver()->options()->css_parse_max_bytes();
-  if (parse_max_bytes > 0 && in_text_size_ > parse_max_bytes) {
-    Driver()->message_handler()->Message(
-        kInfo, "CSS %s not rewritten: %s bytes exceeds CssParseMaxBytes (%s).",
-        css_base_gurl_to_use.spec_c_str(),
-        Integer64ToString(in_text_size_).c_str(),
-        Integer64ToString(parse_max_bytes).c_str());
-    mutable_output_partition(0)->add_debug_message(
-        StrCat("CSS not rewritten because it exceeds CssParseMaxBytes: ",
-               css_base_gurl_to_use.Spec()));
+
+  // Parsing costs memory many times the size of the stylesheet, so one over
+  // the configured bound is passed through as it is: not parsed, not
+  // rewritten (fallback rewriting included) and not flattened, so none of
+  // its @imports are fetched. This covers every top-level stylesheet: an
+  // external one, one inlined in the HTML (a <style> block or a style=
+  // attribute) and the root of a flattened tree; nested ones are bounded by
+  // the flattening limits in CssHierarchy.
+  GoogleString message;
+  if (OverParseMaxBytes(Options(), in_text_size_, css_base_gurl_to_use.Spec(),
+                        "CSS not rewritten",
+                        filter_->num_parse_max_bytes_exceeded_,
+                        Driver()->message_handler(), &message)) {
+    mutable_output_partition(0)->add_debug_message(message);
     RewriteDone(kRewriteFailed, 0);
     return;
   }
+  GoogleUrl css_trim_gurl_to_use;
+  GetCssTrimUrlToUse(input_resource, output_resource_, &css_trim_gurl_to_use);
   bool parsed = RewriteCssText(css_base_gurl_to_use, css_trim_gurl_to_use,
                                input_contents, in_text_size_,
                                IsInlineAttribute() /* text_is_declarations */,
@@ -854,6 +898,8 @@ CssFilter::CssFilter(RewriteDriver* driver, CacheExtender* cache_extender,
   Statistics* stats = server_context()->statistics();
   num_blocks_rewritten_ = stats->GetVariable(CssFilter::kBlocksRewritten);
   num_parse_failures_ = stats->GetVariable(CssFilter::kParseFailures);
+  num_parse_max_bytes_exceeded_ =
+      stats->GetVariable(CssFilter::kParseMaxBytesExceeded);
   num_fallback_rewrites_ = stats->GetVariable(CssFilter::kFallbackRewrites);
   num_fallback_failures_ = stats->GetVariable(CssFilter::kFallbackFailures);
   num_rewrites_dropped_ = stats->GetVariable(CssFilter::kRewritesDropped);
@@ -870,9 +916,32 @@ CssFilter::CssFilter(RewriteDriver* driver, CacheExtender* cache_extender,
 
 CssFilter::~CssFilter() {}
 
+bool CssFilter::OverParseMaxBytes(const RewriteOptions* options, int64 size,
+                                  StringPiece url, StringPiece what,
+                                  Variable* counter, MessageHandler* handler,
+                                  GoogleString* message) {
+  const int64 parse_max_bytes = options->css_parse_max_bytes();
+  if (parse_max_bytes <= 0 || size <= parse_max_bytes) {
+    return false;
+  }
+  counter->Add(1);
+  const GoogleString text =
+      StrCat(what, ": ", Integer64ToString(size),
+             " bytes is more than CssParseMaxBytes (",
+             Integer64ToString(parse_max_bytes), ") in ", url);
+  if (ShouldLogParseMaxBytesExceeded(url)) {
+    handler->Message(kInfo, "%s", text.c_str());
+  }
+  if (message != NULL) {
+    *message = text;
+  }
+  return true;
+}
+
 void CssFilter::InitStats(Statistics* statistics) {
   statistics->AddVariable(CssFilter::kBlocksRewritten);
   statistics->AddVariable(CssFilter::kParseFailures);
+  statistics->AddVariable(CssFilter::kParseMaxBytesExceeded);
   statistics->AddVariable(CssFilter::kFallbackRewrites);
   statistics->AddVariable(CssFilter::kFallbackFailures);
   statistics->AddVariable(CssFilter::kRewritesDropped);

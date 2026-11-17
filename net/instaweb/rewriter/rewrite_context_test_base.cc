@@ -91,6 +91,7 @@ NestedFilter::~NestedFilter() {
 }
 
 NestedFilter::Context::~Context() {
+  filter_->num_partitions_at_delete_ += num_output_partitions();
   STLDeleteElements(&strings_);
 }
 

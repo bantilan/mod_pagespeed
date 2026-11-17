@@ -36,6 +36,7 @@
 #include "net/instaweb/rewriter/cached_result.pb.h"
 #include "net/instaweb/rewriter/public/critical_images_beacon_filter.h"
 #include "net/instaweb/rewriter/public/critical_images_finder.h"
+#include "net/instaweb/rewriter/public/css_filter.h"
 #include "net/instaweb/rewriter/public/css_url_encoder.h"
 #include "net/instaweb/rewriter/public/css_util.h"
 #include "net/instaweb/rewriter/public/domain_rewrite_filter.h"
@@ -177,6 +178,9 @@ bool ShouldInlinePreview(const int64 low_res_size, const int64 full_res_size,
   return (low_res_is_small && low_res_smaller_than_full_res);
 }
 
+// Options that a URL's options segment may set. List only options that shape
+// the optimized bytes, never limits on the work the server accepts: those
+// must come from the configuration alone.
 const char* const kRelatedOptions[] = {
   RewriteOptions::kImageJpegNumProgressiveScans,
   RewriteOptions::kImageJpegNumProgressiveScansForSmallScreens,
@@ -185,10 +189,8 @@ const char* const kRelatedOptions[] = {
   RewriteOptions::kImageJpegQualityForSaveData,
   RewriteOptions::kImageLimitOptimizedPercent,
   RewriteOptions::kImageLimitResizeAreaPercent,
-  RewriteOptions::kImageMaxRewritesAtOnce,
   RewriteOptions::kImagePreserveURLs,
   RewriteOptions::kImageRecompressionQuality,
-  RewriteOptions::kImageResolutionLimitBytes,
   RewriteOptions::kImageWebpRecompressionQuality,
   RewriteOptions::kImageWebpRecompressionQualityForSmallScreens,
   RewriteOptions::kImageWebpAnimatedRecompressionQuality,
@@ -598,16 +600,15 @@ void ImageRewriteFilter::Context::Render() {
     if (place_ == Place::kCss) {
       rewrote_url = filter_->FinishRewriteCssImageUrl(
           css_image_inline_max_bytes_, result, resource_slot, &inline_result);
-      if (Driver()->options()->Enabled(RewriteOptions::kInlineImages)) {
+      if (Driver()->DebugMode() &&
+          Driver()->options()->Enabled(RewriteOptions::kInlineImages)) {
         const char* message = MessageForInlineResult(inline_result);
         if (message != nullptr) {
-          RewriteContext* context = parent();
-          if (context != nullptr) {
-            CachedResult* css_result = context->mutable_output_partition(0);
-            // We want to have the CSS context retain this, so we can
-            // annotate the HTML that references the CSS with the image.
-            // So we write the debug message into the CSS context.
-            filter_->SaveDebugMessageToCache(message, css_result);
+          // The stylesheet's context keeps the message, so the HTML that
+          // references the stylesheet can show it, within the document's
+          // debug budget.
+          if (has_parent() && message[0] != 0) {
+            AddDebugMessageToParent(message);
           }
         }
       }
@@ -670,6 +671,8 @@ ImageRewriteFilter::ImageRewriteFilter(RewriteDriver* driver)
       saw_end_document_(false) {
   Statistics* stats = server_context()->statistics();
   image_rewrites_ = stats->GetVariable(kImageRewrites);
+  parse_max_bytes_exceeded_ =
+      stats->GetVariable(CssFilter::kParseMaxBytesExceeded);
   image_resized_using_rendered_dimensions_ =
       stats->GetVariable(kImageResizedUsingRenderedDimensions);
   image_norewrites_high_resolution_ = stats->GetVariable(
@@ -972,9 +975,12 @@ bool ImageRewriteFilter::ResizeImageIfNecessary(
   image->Dimensions(&image_dim);
 
   if (image_dim.width() <= 0 || image_dim.height() <= 0) {
-    cached->add_debug_message(
-        StringPrintf("Cannot resize %s: Image must be at least 1x1",
-                     UrlForDebugMessages(rewrite_context).c_str()));
+    if (driver()->DebugMode()) {
+      SaveDebugMessageToCache(
+          StringPrintf("Cannot resize %s: Image must be at least 1x1",
+                       UrlForDebugMessages(rewrite_context).c_str()),
+          cached);
+    }
     return false;
   }
 
@@ -1001,11 +1007,12 @@ bool ImageRewriteFilter::ResizeImageIfNecessary(
                      message, url.c_str(),
                      image_dim.width(), image_dim.height(),
                      desired_dim->width(), desired_dim->height());
-    cached->add_debug_message(image->resize_debug_message());
-  } else {
-    cached->add_debug_message(
+    SaveDebugMessageToCache(image->resize_debug_message(), cached);
+  } else if (driver()->DebugMode()) {
+    SaveDebugMessageToCache(
         StringPrintf("Image %s does not appear to need resizing.",
-                     UrlForDebugMessages(rewrite_context).c_str()));
+                     UrlForDebugMessages(rewrite_context).c_str()),
+        cached);
   }
 
   // Cache image dimensions, including any resizing we did.
@@ -1868,9 +1875,11 @@ bool ImageRewriteFilter::FinishRewriteImageUrl(
 
 void ImageRewriteFilter::SaveDebugMessageToCache(const GoogleString& message,
                                                  CachedResult* cached_result) {
-  if (!message.empty()) {
-    // We always save our result to our cache entry, since it will be propagated
-    // to the parent automatically, and we need to be replayable independently.
+  // Debug messages are kept only for a request with debug on, so a page
+  // without it does not hold one per image. When kept, they go into our cache
+  // entry, since they are propagated to the parent automatically and must be
+  // replayable independently.
+  if (!message.empty() && driver()->DebugMode()) {
     cached_result->add_debug_message(message);
   }
 }
@@ -1946,6 +1955,22 @@ bool ImageRewriteFilter::StoreUrlInPropertyCache(const StringPiece& url) {
   return true;
 }
 
+int64 ImageRewriteFilter::StyleParseBound(HtmlElement* element,
+                                          bool count_over_bound) {
+  const RewriteOptions* options = driver()->options();
+  const HtmlElement::Attribute* style =
+      element->FindAttribute(HtmlName::kStyle);
+  if (count_over_bound && style != NULL &&
+      style->DecodedValueOrNull() != NULL) {
+    // A style attribute over CssParseMaxBytes is not parsed here either.
+    CssFilter::OverParseMaxBytes(
+        options, strlen(style->DecodedValueOrNull()),
+        driver()->google_url().Spec(), "Image style attribute not read",
+        parse_max_bytes_exceeded_, driver()->message_handler(), NULL);
+  }
+  return options->css_parse_max_bytes();
+}
+
 bool ImageRewriteFilter::HasAnyDimensions(HtmlElement* element) {
   if (element->FindAttribute(HtmlName::kWidth)) {
     return true;
@@ -1953,7 +1978,7 @@ bool ImageRewriteFilter::HasAnyDimensions(HtmlElement* element) {
   if (element->FindAttribute(HtmlName::kHeight)) {
     return true;
   }
-  css_util::StyleExtractor extractor(element);
+  css_util::StyleExtractor extractor(element, StyleParseBound(element, false));
   return extractor.HasAnyDimensions();
 }
 
@@ -2023,7 +2048,7 @@ void ImageRewriteFilter::GetDimensions(
     ImageDim* page_dim,
     const HtmlElement::Attribute* src,
     bool* is_resized_using_rendered_dimensions) {
-  css_util::StyleExtractor extractor(element);
+  css_util::StyleExtractor extractor(element, StyleParseBound(element, true));
   css_util::DimensionState state = extractor.state();
   int32 width = extractor.width();
   int32 height = extractor.height();

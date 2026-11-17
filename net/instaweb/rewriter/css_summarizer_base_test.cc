@@ -20,6 +20,7 @@
 
 #include "net/instaweb/rewriter/public/css_summarizer_base.h"
 
+#include "net/instaweb/rewriter/public/css_filter.h"
 #include "net/instaweb/rewriter/public/css_minify.h"
 #include "net/instaweb/rewriter/public/rewrite_driver.h"
 #include "net/instaweb/rewriter/public/rewrite_options.h"
@@ -283,6 +284,41 @@ TEST_F(CssSummarizerBaseTest, BasicOperation) {
   expected = FullTest("basic", "<body> <p>some content</p> ", "</body></html>");
   EXPECT_STREQ(expected, output_buffer_);
   EXPECT_STREQ(kExpectedResult, filter_->result());
+}
+
+// Builds a stylesheet of exactly `size` bytes: `head`, then numbered
+// rulesets, then trailing whitespace.
+GoogleString MakeCssOfSize(StringPiece head, int64 size) {
+  GoogleString css(head.data(), head.size());
+  for (int i = 0;; ++i) {
+    const GoogleString rule = StrCat(".c", IntegerToString(i), "{color:red}\n");
+    if (static_cast<int64>(css.size() + rule.size()) > size) {
+      break;
+    }
+    StrAppend(&css, rule);
+  }
+  css.append(size - css.size(), ' ');
+  CHECK_EQ(size, static_cast<int64>(css.size()));
+  return css;
+}
+
+TEST_F(CssSummarizerBaseTest, OverParseMaxBytesIsNotSummarized) {
+  const int64 kParseMaxBytes = 4096;
+  options()->ClearSignatureForTesting();
+  options()->set_css_parse_max_bytes(kParseMaxBytes);
+  server_context()->ComputeSignature(options());
+  SetResponseWithDefaultHeaders("over.css", kContentTypeCss,
+                                MakeCssOfSize("", kParseMaxBytes + 1), 100);
+  SetResponseWithDefaultHeaders("at.css", kContentTypeCss,
+                                MakeCssOfSize("", kParseMaxBytes), 100);
+  Parse("parse_max_bytes",
+        StrCat(CssLinkHref("over.css"), CssLinkHref("at.css")));
+  EXPECT_STREQ(
+      "ParseOrCloseStyleTagError//rel=stylesheet|"
+      "OK/.c0{color:/rel=stylesheet|",
+      filter_->result());
+  EXPECT_EQ(
+      1, statistics()->GetVariable(CssFilter::kParseMaxBytesExceeded)->Get());
 }
 
 TEST_F(CssSummarizerBaseTest, RenderSummary) {

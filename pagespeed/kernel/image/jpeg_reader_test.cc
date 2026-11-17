@@ -22,7 +22,9 @@
 #include "pagespeed/kernel/base/mock_message_handler.h"
 #include "pagespeed/kernel/base/null_mutex.h"
 #include "pagespeed/kernel/base/string.h"
+#include "pagespeed/kernel/image/jpeg_optimizer.h"
 #include "pagespeed/kernel/image/jpeg_reader.h"
+#include "pagespeed/kernel/image/jpeg_optimizer_test_helper.h"
 #include "pagespeed/kernel/image/read_image.h"
 #include "pagespeed/kernel/image/test_utils.h"
 
@@ -36,12 +38,16 @@ using net_instaweb::MockMessageHandler;
 using net_instaweb::NullMutex;
 using pagespeed::image_compression::IMAGE_JPEG;
 using pagespeed::image_compression::IMAGE_PNG;
+using pagespeed::image_compression::JpegCompressionOptions;
 using pagespeed::image_compression::JpegScanlineReader;
 using pagespeed::image_compression::kJpegTestDir;
 using pagespeed::image_compression::kMessagePatternLibJpegFailure;
+using pagespeed::image_compression::OptimizeJpegWithOptions;
 using pagespeed::image_compression::ReadImage;
 using pagespeed::image_compression::ReadTestFile;
 using pagespeed::image_compression::ReadTestFileWithExt;
+using pagespeed::image_compression::SCANLINE_STATUS_INTERNAL_ERROR;
+using pagespeed_testing::image_compression::EncodeGrayJpegWithScans;
 
 const char* kValidJpegImages[] = {
   "test411",        // RGB color space with 4:1:1 chroma sub-sampling.
@@ -57,6 +63,21 @@ const char *kInvalidFiles[] = {
   "emptyfile.jpg",  // A zero-byte file.
   "corrupt.jpg",    // Invalid huffman code in the image data section.
 };
+
+// The number of scans the reader accepts; jpeg_reader.cc refuses more.
+const int kScanLimit = 100;
+
+// Counts the start-of-scan markers in a JPEG stream. Entropy-coded data
+// stuffs a zero byte after every 0xff, so a marker cannot occur inside it.
+int CountStartOfScanMarkers(const GoogleString& jpeg) {
+  int count = 0;
+  for (size_t i = 0; i + 1 < jpeg.size(); ++i) {
+    if (jpeg[i] == '\xff' && jpeg[i + 1] == '\xda') {
+      ++count;
+    }
+  }
+  return count;
+}
 
 const size_t kValidJpegImageCount = arraysize(kValidJpegImages);
 const size_t kInvalidFileCount = arraysize(kInvalidFiles);
@@ -140,6 +161,49 @@ TEST(JpegReaderTest, PartialRead) {
 
   ASSERT_TRUE(reader4.Initialize(image2.c_str(), image2.length()));
   ASSERT_TRUE(reader4.ReadNextScanline(&scanline));
+}
+
+// A real image, re-encoded with a scan script of spectral bands and
+// successive-approximation refinements, decodes with as many scans as the
+// limit allows; one scan more stops the decode through libjpeg's error exit,
+// in the scanline reader and in both optimizer paths alike.
+TEST(JpegReaderTest, DecodeStopsAfterScanLimit) {
+  GoogleString source;
+  ASSERT_TRUE(ReadTestFile(kJpegTestDir, "testgray", "jpg", &source));
+  GoogleString at_limit, past_limit;
+  ASSERT_TRUE(EncodeGrayJpegWithScans(source, kScanLimit, &at_limit));
+  ASSERT_TRUE(EncodeGrayJpegWithScans(source, kScanLimit + 1, &past_limit));
+  ASSERT_EQ(kScanLimit, CountStartOfScanMarkers(at_limit));
+  ASSERT_EQ(kScanLimit + 1, CountStartOfScanMarkers(past_limit));
+
+  MockMessageHandler message_handler(new NullMutex);
+  message_handler.AddPatternToSkipPrinting(kMessagePatternLibJpegFailure);
+  void* scanline2 = NULL;
+
+  JpegScanlineReader reader(&message_handler);
+  ASSERT_TRUE(reader.Initialize(at_limit.data(), at_limit.length()));
+  EXPECT_TRUE(reader.IsProgressive());
+  while (reader.HasMoreScanLines()) {
+    ASSERT_TRUE(reader.ReadNextScanline(&scanline2));
+  }
+
+  ASSERT_TRUE(reader.Initialize(past_limit.data(), past_limit.length()));
+  EXPECT_EQ(SCANLINE_STATUS_INTERNAL_ERROR,
+            reader.ReadNextScanlineWithStatus(&scanline2).type());
+
+  JpegCompressionOptions lossless;
+  lossless.lossy = false;
+  JpegCompressionOptions lossy;
+  lossy.lossy = true;
+  GoogleString output;
+  EXPECT_TRUE(OptimizeJpegWithOptions(at_limit, &output, lossless,
+                                      &message_handler));
+  EXPECT_TRUE(OptimizeJpegWithOptions(at_limit, &output, lossy,
+                                      &message_handler));
+  EXPECT_FALSE(OptimizeJpegWithOptions(past_limit, &output, lossless,
+                                       &message_handler));
+  EXPECT_FALSE(OptimizeJpegWithOptions(past_limit, &output, lossy,
+                                       &message_handler));
 }
 
 }  // namespace

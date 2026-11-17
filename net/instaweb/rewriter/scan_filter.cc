@@ -63,11 +63,24 @@ void ScanFilter::StartDocument() {
   if (driver_->options()->honor_csp() && headers != nullptr) {
     ConstStringStarVector values;
     if (headers->Lookup(HttpAttributes::kContentSecurityPolicy, &values)) {
-      for (const GoogleString* policy : values) {
-        driver_->mutable_content_security_policy()->AddPolicy(
-            CspPolicy::Parse(*policy));
+      for (size_t i = 0; i < values.size(); ++i) {
+        AddCspPolicies(*values[i]);
       }
     }
+  }
+}
+
+void ScanFilter::AddCspPolicies(StringPiece value) {
+  // Multiple CSP header lines may be coalesced into a single
+  // comma-separated header value. A comma cannot occur inside a
+  // serialized policy, so split on it and enforce each segment as a
+  // separate policy; parsing the coalesced value as one policy would
+  // corrupt the directives around the comma.
+  StringPieceVector policies;
+  SplitStringPieceToVector(value, ",", &policies, true);
+  for (size_t i = 0; i < policies.size(); ++i) {
+    driver_->mutable_content_security_policy()->AddPolicy(
+        CspPolicy::Parse(policies[i]));
   }
 }
 
@@ -124,6 +137,15 @@ void ScanFilter::StartElement(HtmlElement* element) {
         return;
       }
 
+      // Don't adopt a base longer than any URL we would produce ourselves.
+      if (static_cast<int>(StringPiece(href->DecodedValueOrNull()).size()) >
+          driver_->options()->max_url_size()) {
+        driver_->InsertDebugComment(
+            "The base URL is too long, proceeding conservatively.", element);
+        driver_->set_other_base_problem();
+        return;
+      }
+
       // TODO(jmarantz): consider having rewrite_driver access the url in this
       // class, rather than poking it into rewrite_driver.
       GoogleString new_base = href->DecodedValueOrNull();
@@ -164,8 +186,7 @@ void ScanFilter::StartElement(HtmlElement* element) {
     if (equiv && content &&
         StringCaseEqual(equiv, HttpAttributes::kContentSecurityPolicy) &&
         !StringPiece(content).empty()) {
-      driver_->mutable_content_security_policy()->AddPolicy(
-          CspPolicy::Parse(content));
+      AddCspPolicies(content);
     }
   }
 

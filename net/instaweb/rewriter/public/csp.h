@@ -307,6 +307,10 @@ class CspContext {
     return false;
   }
 
+  // The most CSP policies kept for one document. A document with more
+  // than this many policies is treated as one that permits nothing.
+  static const size_t kMaxCspPolicies = 32;
+
   void AddPolicy(std::unique_ptr<CspPolicy> policy);
   void Clear() { policies_.clear(); }
   size_t policies_size() const { return policies_.size(); }

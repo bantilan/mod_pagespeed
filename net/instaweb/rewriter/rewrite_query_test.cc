@@ -1039,6 +1039,29 @@ TEST_F(RewriteQueryTest, GenerateResourceOptionRecompressImages) {
   // TODO(jmarantz): test all relevant filter/option combinations.
 }
 
+TEST_F(RewriteQueryTest, GenerateResourceOptionForUnregisteredIdIsEmpty) {
+  // An ID with no registered RewriteFilter yields no options segment, even
+  // with options in URLs on and settings that differ from the defaults.
+  options()->set_add_options_to_urls(true);
+  options()->EnableFilter(RewriteOptions::kFlattenCssImports);
+  options()->set_css_flatten_max_bytes(4321);
+  EXPECT_EQ("", RewriteQuery::GenerateResourceOption(
+                    RewriteOptions::kCssImportFlattenerId, rewrite_driver()));
+  EXPECT_EQ("", RewriteQuery::GenerateResourceOption("qz", rewrite_driver()));
+}
+
+TEST_F(RewriteQueryTest, ResourceNamerForUnregisteredIdHasNoOptions) {
+  options()->set_add_options_to_urls(true);
+  options()->EnableFilter(RewriteOptions::kFlattenCssImports);
+  ResourceNamer namer;
+  namer.set_options("stale");
+  rewrite_driver()->PopulateResourceNamer(RewriteOptions::kCssImportFlattenerId,
+                                          "own-sheet.css", &namer);
+  EXPECT_EQ(RewriteOptions::kCssImportFlattenerId, namer.id());
+  EXPECT_EQ("own-sheet.css", namer.name());
+  EXPECT_EQ("", namer.options());
+}
+
 TEST_F(RewriteQueryTest, DontAllowArbitraryOptionsForNonPagespeedResources) {
   allow_related_options_ = true;
   // The kHtmlUrl is a .jsp, which is not .pagespeed.
@@ -1156,6 +1179,43 @@ TEST_F(RewriteQueryTest, OptionSegmentCannotSetServerScopeOption) {
   parsed.reset(server_context()->factory()->NewRewriteOptionsForQuery());
   EXPECT_EQ(RewriteQuery::kSuccess,
             ParseResourceOptionForTest("iq=61", parsed.get(), &filter));
+}
+
+// An options segment that names a server-side work limit is refused as a
+// whole: one value past each default, so that a value that would loosen the
+// limit is what the URL tries to carry. The options the filters do list stay
+// accepted with their value.
+TEST_F(RewriteQueryTest, OptionSegmentNamingWorkLimitIsRefused) {
+  allow_related_options_ = true;
+  const GoogleString resolution = StrCat(
+      "irlb=",
+      Integer64ToString(RewriteOptions::kDefaultImageResolutionLimitBytes + 1));
+  const GoogleString concurrency = StrCat(
+      "im=",
+      IntegerToString(RewriteOptions::kDefaultImageMaxRewritesAtOnce + 1));
+  EXPECT_TRUE(ParseAndScanImageOptions(resolution, "", "") == NULL);
+  EXPECT_TRUE(ParseAndScanImageOptions(StrCat("rj+", concurrency), "", "") ==
+              NULL);
+  const RewriteOptions* image_options = ParseAndScanImageOptions("rj", "", "");
+  ASSERT_TRUE(image_options != NULL);
+  EXPECT_TRUE(image_options->Enabled(RewriteOptions::kRecompressJpeg));
+
+  const GoogleString stylesheet =
+      Encode(kTestDomain, "cf", "0", "style.css", "css");
+  const GoogleString segment_size = StrCat(
+      "uss=", IntegerToString(RewriteOptions::kDefaultMaxUrlSegmentSize + 1));
+  const GoogleString url_size =
+      StrCat("us=", IntegerToString(RewriteOptions::kDefaultMaxUrlSize + 1));
+  EXPECT_TRUE(ParseAndScan(AddOptionsToEncodedUrl(stylesheet, segment_size), "",
+                           "") == NULL);
+  EXPECT_TRUE(ParseAndScan(AddOptionsToEncodedUrl(stylesheet, url_size), "",
+                           "") == NULL);
+  // CssImageInlineMaxBytes is one the stylesheet filter lists.
+  const GoogleString css_image_bytes = StrCat(
+      "cii=",
+      Integer64ToString(RewriteOptions::kDefaultImageInlineMaxBytes / 2));
+  EXPECT_TRUE(ParseAndScan(AddOptionsToEncodedUrl(stylesheet, css_image_bytes),
+                           "", "") != NULL);
 }
 
 TEST_F(RewriteQueryTest, ClientOptionsEmptyHeader) {

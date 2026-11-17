@@ -788,6 +788,38 @@ TEST_F(TrimQuoteTest, TrimUrlQuoteTestAll) {
   EXPECT_STREQ("one two", RemoveUrlQuotes("%5C%27'one two'%5C%27"));
 }
 
+TEST_F(TrimQuoteTest, TrimUrlQuoteNestedTest) {
+  // Nested quotes on both ends.
+  EXPECT_STREQ("abc", RemoveUrlQuotes("\"abc''\""));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("''abc''"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("\"\"abc\"\""));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("'''abc'''"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("%27%27abc%27%27"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("%22%22abc%22%22"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("%5C%27%5C%27abc%5C%27%5C%27"));
+
+  // Quotes on one end only.
+  EXPECT_STREQ("abc", RemoveUrlQuotes("abc'"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("abc''"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("abc\"\""));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("abc%27%27"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("abc%5C%27%5C%27"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("'abc"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("''abc"));
+
+  // Mixed single and double quotes.
+  EXPECT_STREQ("abc", RemoveUrlQuotes("\"'abc'\""));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("'\"abc\"'"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("\"'abc\"'"));
+  EXPECT_STREQ("abc", RemoveUrlQuotes("%22%27abc%27%22"));
+
+  // The simple cases keep their results.
+  EXPECT_STREQ("one", RemoveUrlQuotes(" \'one\'"));
+  EXPECT_STREQ("one", RemoveUrlQuotes(" %27one%27"));
+  EXPECT_STREQ("one", RemoveUrlQuotes(" %5c%27one %5c%27"));
+  EXPECT_STREQ("one two", RemoveUrlQuotes("%5C%27'one two'%5C%27"));
+}
+
 TEST(SplitStringPieceToIntegerVectorTest, SplitStringPieceToIntegerVector) {
   std::vector<int> ints;
 

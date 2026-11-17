@@ -156,6 +156,12 @@ class ResponseHeadersTest : public testing::Test {
     return response_headers_.cache_fields_dirty_;
   }
 
+  // Wrapper method to expose CombineContentTypes, which is private but
+  // befriended to this fixture.
+  bool CombineContentTypes(const StringPiece& orig, const StringPiece& fresh) {
+    return response_headers_.CombineContentTypes(orig, fresh);
+  }
+
   bool IsProxyCacheable(const RequestHeaders& request_headers,
                         ResponseHeaders::VaryOption respect_vary) {
     return response_headers_.IsProxyCacheable(request_headers.GetProperties(),
@@ -2367,6 +2373,64 @@ TEST_F(ResponseHeadersTest, HasCacheControlDirectiveMatchesByName) {
   EXPECT_FALSE(response_headers_.HasCacheControlDirective("no-store"));
   EXPECT_FALSE(response_headers_.HasCacheControlDirective("no-transform"));
   EXPECT_TRUE(response_headers_.HasCacheControlDirective("no-cache"));
+}
+
+TEST_F(ResponseHeadersTest, CombineContentTypesCompleteValueUnchanged) {
+  response_headers_.Clear();
+  response_headers_.Replace(HttpAttributes::kContentType,
+                            "text/html; charset=UTF-8");
+  response_headers_.ComputeCaching();
+  ASSERT_FALSE(ResponseCachingDirty());
+  // The original already has a mime type and a charset, so the merge must
+  // leave the header alone and report no change.
+  EXPECT_FALSE(CombineContentTypes("text/html; charset=UTF-8",
+                                   "text/html; charset=ISO-8859-1"));
+  EXPECT_STREQ("text/html; charset=UTF-8",
+               response_headers_.Lookup1(HttpAttributes::kContentType));
+  EXPECT_FALSE(ResponseCachingDirty());
+}
+
+TEST_F(ResponseHeadersTest, CombineContentTypesWithoutCharset) {
+  response_headers_.Clear();
+  response_headers_.Replace(HttpAttributes::kContentType, "text/html");
+  response_headers_.ComputeCaching();
+  // Neither side has a charset, so the merged value is the mime type alone,
+  // with no dangling semicolon.
+  EXPECT_TRUE(CombineContentTypes("text/html", "text/html"));
+  EXPECT_STREQ("text/html",
+               response_headers_.Lookup1(HttpAttributes::kContentType));
+  EXPECT_TRUE(ResponseCachingDirty());
+}
+
+TEST_F(ResponseHeadersTest, CombineContentTypesFillsMissingCharset) {
+  response_headers_.Clear();
+  response_headers_.Replace(HttpAttributes::kContentType, "text/html");
+  response_headers_.ComputeCaching();
+  // The charset missing from the original is taken from the fresh value.
+  EXPECT_TRUE(CombineContentTypes("text/html", "; charset=UTF-8"));
+  EXPECT_STREQ("text/html; charset=UTF-8",
+               response_headers_.Lookup1(HttpAttributes::kContentType));
+  EXPECT_TRUE(ResponseCachingDirty());
+}
+
+TEST_F(ResponseHeadersTest, MergeContentTypeCompleteValueUnchanged) {
+  response_headers_.Clear();
+  response_headers_.Replace(HttpAttributes::kContentType,
+                            "text/html; charset=UTF-8");
+  response_headers_.ComputeCaching();
+  ASSERT_FALSE(ResponseCachingDirty());
+  EXPECT_FALSE(response_headers_.MergeContentType("; charset=UTF-8"));
+  EXPECT_FALSE(response_headers_.MergeContentType("text/html; charset=UTF-8"));
+  EXPECT_STREQ("text/html; charset=UTF-8",
+               response_headers_.Lookup1(HttpAttributes::kContentType));
+  EXPECT_FALSE(ResponseCachingDirty());
+}
+
+TEST_F(ResponseHeadersTest, ReasonPhraseMatchesStatus) {
+  response_headers_.Clear();
+  response_headers_.SetStatusAndReason(HttpStatus::kTemporaryRedirect);
+  EXPECT_EQ(307, response_headers_.status_code());
+  EXPECT_STREQ("Temporary Redirect", response_headers_.reason_phrase());
 }
 
 }  // namespace net_instaweb

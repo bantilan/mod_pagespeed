@@ -24,6 +24,7 @@
 #include "base/logging.h"
 #include "net/instaweb/rewriter/cached_result.pb.h"
 #include "net/instaweb/rewriter/public/common_filter.h"
+#include "net/instaweb/rewriter/public/css_filter.h"
 #include "net/instaweb/rewriter/public/css_inline_filter.h"
 #include "net/instaweb/rewriter/public/css_tag_scanner.h"
 #include "net/instaweb/rewriter/public/data_url_input_resource.h"
@@ -195,6 +196,22 @@ void CssSummarizerBase::Context::RewriteSingle(
     const ResourcePtr& input_resource,
     const OutputResourcePtr& output_resource) {
   StringPiece input_contents = input_resource->ExtractUncompressedContents();
+
+  // A stylesheet over CssParseMaxBytes is not parsed and gets no summary,
+  // just as one that fails to parse.
+  const GoogleString url =
+      (input_resource->has_url() && !IsDataUrl(input_resource->url()))
+          ? input_resource->url()
+          : Driver()->base_url().Spec().as_string();
+  if (CssFilter::OverParseMaxBytes(
+          Options(), input_contents.size(), url, "CSS not summarized",
+          FindServerContext()->statistics()->GetVariable(
+              CssFilter::kParseMaxBytesExceeded),
+          Driver()->message_handler(), NULL)) {
+    mutable_output_partition(0)->clear_inlined_data();
+    RewriteDone(kRewriteFailed, 0);
+    return;
+  }
 
   // TODO(morlovich): Should we keep track of this so it can be restored?
   StripUtf8Bom(&input_contents);

@@ -55,6 +55,10 @@ namespace net_instaweb {
 // }
 class HtmlDetector {
  public:
+  // The most leading whitespace we hold while undecided. Content that starts
+  // with more than this is treated as not being HTML.
+  static const size_t kMaxBufferedBytes = 64 * 1024;
+
   HtmlDetector();
   ~HtmlDetector();
 

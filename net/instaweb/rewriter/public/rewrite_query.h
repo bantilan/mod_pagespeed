@@ -143,6 +143,9 @@ class RewriteQuery {
   const RewriteOptions* options() const { return options_.get(); }
   RewriteOptions* ReleaseOptions() { return options_.release(); }
 
+  // Caps the request-built size thresholds at the configured values.
+  void LimitSizeThresholdsTo(const RewriteOptions& ceiling);
+
   // Determines whether the status code is one that is acceptable for
   // processing requests.
   static bool IsOK(Status status) {

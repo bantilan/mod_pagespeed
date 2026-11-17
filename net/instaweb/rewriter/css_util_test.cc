@@ -95,6 +95,30 @@ TEST_F(CssUtilTest, TestGetDimensions) {
   html_parse.DeleteNode(img);
 }
 
+TEST_F(CssUtilTest, StyleOverBoundIsNotParsed) {
+  HtmlParse html_parse(&message_handler_);
+  HtmlElement* img = html_parse.NewElement(NULL, HtmlName::kImg);
+  GoogleString style = "height:50px;width:80px;";
+  style.append(1000, ' ');
+  html_parse.AddAttribute(img, HtmlName::kStyle, style);
+
+  // At the bound the value parses as usual.
+  scoped_ptr<StyleExtractor> extractor(
+      new StyleExtractor(img, style.size()));
+  EXPECT_EQ(kHasBothDimensions, extractor->state());
+  EXPECT_EQ(80, extractor->width());
+  EXPECT_EQ(50, extractor->height());
+
+  // One byte over, it is not read and counts as one we cannot process:
+  // no usable dimensions, though dimensions may be present.
+  extractor.reset(new StyleExtractor(img, style.size() - 1));
+  EXPECT_EQ(kNotParsable, extractor->state());
+  EXPECT_EQ(kNoValue, extractor->width());
+  EXPECT_EQ(kNoValue, extractor->height());
+  EXPECT_TRUE(extractor->HasAnyDimensions());
+  html_parse.DeleteNode(img);
+}
+
 TEST_F(CssUtilTest, TestAnyDimensions) {
   HtmlParse html_parse(&message_handler_);
   HtmlElement* img = html_parse.NewElement(NULL, HtmlName::kImg);

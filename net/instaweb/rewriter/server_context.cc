@@ -944,11 +944,15 @@ bool ServerContext::GetQueryOptions(const RequestContextPtr& request_context,
   }
   // Note: success==false is treated as an error (we return 405 in
   // proxy_interface.cc).
-  return RewriteQuery::IsOK(rewrite_query->Scan(
+  const bool ok = RewriteQuery::IsOK(rewrite_query->Scan(
       domain_options->add_options_to_urls(),
       domain_options->allow_options_to_be_set_by_cookies(),
       domain_options->request_option_override(), request_context, factory(),
       this, request_url, request_headers, response_headers, message_handler_));
+  // A request may lower the size thresholds but not raise them above the
+  // configured ones.
+  rewrite_query->LimitSizeThresholdsTo(*domain_options);
+  return ok;
 }
 
 // TODO(gee): Seems like this should all be in RewriteOptionsManager.

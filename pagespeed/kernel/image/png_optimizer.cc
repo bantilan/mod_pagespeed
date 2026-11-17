@@ -156,6 +156,11 @@ void PngWarningFn(png_structp png_ptr, png_const_charp msg) {
 // no-op
 void PngFlush(png_structp write_ptr) {}
 
+// The engine does not use these chunks, so have libpng skip them.
+void DiscardCachedChunks(png_structp read_ptr) {
+  png_set_chunk_cache_max(read_ptr, 1);
+}
+
 // Helper that reads an unsigned 32-bit integer from a stream of
 // big-endian bytes.
 inline uint32 ReadUint32FromBigEndianBytes(const unsigned char* read_head) {
@@ -199,6 +204,7 @@ ScopedPngStruct::ScopedPngStruct(Type type,
     case READ:
       png_ptr_ = png_create_read_struct(PNG_LIBPNG_VER_STRING,
                                         NULL, NULL, NULL);
+      DiscardCachedChunks(png_ptr_);
       break;
     case WRITE:
       png_ptr_ = png_create_write_struct(PNG_LIBPNG_VER_STRING,
@@ -221,6 +227,7 @@ bool ScopedPngStruct::reset() {
     png_destroy_read_struct(&png_ptr_, &info_ptr_, NULL);
     png_ptr_ = png_create_read_struct(PNG_LIBPNG_VER_STRING,
                                       NULL, NULL, NULL);
+    DiscardCachedChunks(png_ptr_);
   } else {
     png_destroy_write_struct(&png_ptr_, &info_ptr_);
     png_ptr_ = png_create_write_struct(PNG_LIBPNG_VER_STRING,

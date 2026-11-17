@@ -280,6 +280,9 @@ RewriteDriver::RewriteDriver(MessageHandler* message_handler,
       xhtml_mimetype_computed_(false),
       xhtml_status_(kXhtmlUnknown),
       num_inline_preview_images_(0),
+      debug_output_bytes_(0),
+      debug_output_truncated_(false),
+      debug_truncation_noted_(false),
       num_bytes_in_(0),
       debug_filter_(NULL),
       can_rewrite_resources_(true),
@@ -463,6 +466,9 @@ void RewriteDriver::Clear() NO_THREAD_SAFETY_ANALYSIS {
   fully_rewrite_on_flush_ = false;
   fast_blocking_rewrite_ = true;
   num_inline_preview_images_ = 0;
+  debug_output_bytes_ = 0;
+  debug_output_truncated_ = false;
+  debug_truncation_noted_ = false;
   num_bytes_in_ = 0;
   flush_early_info_.reset(NULL);
   can_rewrite_resources_ = true;
@@ -823,7 +829,10 @@ void RewriteDriver::FlushAsyncDone(int num_rewrites, Function* callback) {
     slots_.clear();
     inline_slots_.clear();
     inline_attribute_slots_.clear();
+    // Nothing in this flush window renders any more, so write each srcset
+    // back once with whatever its slots rendered.
     for(auto c : srcset_collections_) {
+      c->Commit();
       c->Detach();
     }
     srcset_collections_.clear();
@@ -1689,6 +1698,12 @@ bool RewriteDriver::DecodeUrlGivenOptions(
     GoogleUrl gurl_base(url_base);
     for (int i = 0, n = decoded_urls->size(); i < n; ++i) {
       GoogleUrl full_url(gurl_base, (*decoded_urls)[i]);
+      // The names we produce are always relative to url_base; reject any
+      // other, as RewriteContext::PrepareFetch does.
+      if (!full_url.IsWebValid() || full_url.Origin() != gurl_base.Origin()) {
+        decoded_urls->clear();
+        return false;
+      }
       (*decoded_urls)[i] = full_url.Spec().as_string();
     }
   }
@@ -3306,14 +3321,101 @@ FlushEarlyInfo* RewriteDriver::flush_early_info() {
   return flush_early_info_.get();
 }
 
+// Bounds the number of comments one call of InsertDebugComments adds, that is,
+// for each list of debug messages.
+const int kMaxDebugCommentsPerList = 32;
+
+// What a comment adds to the output besides its text: "<!--" and "-->".
+const int64 kCommentDelimiterBytes = 7;
+
+int64 RewriteDriver::DebugOutputBytesRemaining() const {
+  const int64 limit = options()->debug_output_max_bytes();
+  if (limit <= 0) {
+    return -1;
+  }
+  if (debug_output_truncated_.load()) {
+    return 0;
+  }
+  return std::max<int64>(0, limit - debug_output_bytes_.load());
+}
+
+bool RewriteDriver::ReserveDebugOutputBytes(int64 num_bytes) {
+  const int64 limit = options()->debug_output_max_bytes();
+  if (limit <= 0) {
+    return true;
+  }
+  int64 used = debug_output_bytes_.load();
+  while (!debug_output_truncated_.load() && num_bytes <= limit - used) {
+    if (debug_output_bytes_.compare_exchange_weak(used, used + num_bytes)) {
+      return true;
+    }
+  }
+  debug_output_truncated_ = true;
+  return false;
+}
+
+GoogleString RewriteDriver::DebugTruncatedMessage() const {
+  return StrCat("Debug output truncated at ",
+                RewriteOptions::kDebugOutputMaxBytes, "=",
+                Integer64ToString(options()->debug_output_max_bytes()));
+}
+
+HtmlNode* RewriteDriver::InsertBoundedDebugComment(StringPiece escaped,
+                                                   HtmlNode* node) {
+  if (!ReserveDebugOutputBytes(static_cast<int64>(escaped.size()) +
+                               kCommentDelimiterBytes)) {
+    if (!debug_truncation_noted_.exchange(true)) {
+      InsertNodeAfterNode(
+          node, NewCommentNode(node->parent(), DebugTruncatedMessage()));
+    }
+    return NULL;
+  }
+  HtmlNode* comment_node = NewCommentNode(node->parent(), escaped);
+  InsertNodeAfterNode(node, comment_node);
+  return comment_node;
+}
+
+HtmlNode* RewriteDriver::NewBudgetedDebugCommentNode(StringPiece unescaped) {
+  GoogleString escaped;
+  HtmlKeywords::Escape(unescaped, &escaped);
+  if (!ReserveDebugOutputBytes(static_cast<int64>(escaped.size()) +
+                               kCommentDelimiterBytes)) {
+    if (!debug_truncation_noted_.exchange(true)) {
+      return NewCommentNode(NULL, DebugTruncatedMessage());
+    }
+    return NULL;
+  }
+  return NewCommentNode(NULL, escaped);
+}
+
+bool RewriteDriver::InsertDebugCommentHere(StringPiece unescaped) {
+  GoogleString escaped;
+  HtmlKeywords::Escape(unescaped, &escaped);
+  const int64 size =
+      static_cast<int64>(escaped.size()) + kCommentDelimiterBytes;
+  if (!ReserveDebugOutputBytes(size)) {
+    if (!debug_truncation_noted_.load() &&
+        InsertComment(DebugTruncatedMessage())) {
+      debug_truncation_noted_ = true;
+    }
+    return true;
+  }
+  if (!InsertComment(unescaped)) {
+    // Not placed: give the bytes back so a later attempt can use them.
+    if (options()->debug_output_max_bytes() > 0) {
+      debug_output_bytes_ -= size;
+    }
+    return false;
+  }
+  return true;
+}
+
 void RewriteDriver::InsertDebugComment(StringPiece unescaped,
                                        HtmlNode* node) {
   if (DebugMode() && node != NULL && IsRewritable(node)) {
     GoogleString escaped;
     HtmlKeywords::Escape(unescaped, &escaped);
-
-    HtmlNode* comment_node = NewCommentNode(node->parent(), escaped);
-    InsertNodeAfterNode(node, comment_node);
+    InsertBoundedDebugComment(escaped, node);
   }
 }
 
@@ -3322,16 +3424,23 @@ void RewriteDriver::InsertDebugComments(
     HtmlElement* element) {
   if (DebugMode() && element != NULL && IsRewritable(element)) {
     HtmlNode* preceding_node = element;
-    for (protobuf::RepeatedPtrField<GoogleString>::const_iterator unescaped =
-             unescaped_messages.begin();
-         unescaped != unescaped_messages.end(); ++unescaped) {
+    int num_messages = unescaped_messages.size();
+    int num_inserted = std::min(num_messages, kMaxDebugCommentsPerList);
+    for (int i = 0; i < num_inserted; ++i) {
       GoogleString escaped;
-      HtmlKeywords::Escape(*unescaped, &escaped);
-
+      HtmlKeywords::Escape(unescaped_messages.Get(i), &escaped);
       HtmlNode* comment_node =
-          NewCommentNode(preceding_node->parent(), escaped);
-      InsertNodeAfterNode(preceding_node, comment_node);
+          InsertBoundedDebugComment(escaped, preceding_node);
+      if (comment_node == NULL) {
+        return;
+      }
       preceding_node = comment_node;
+    }
+    if (num_messages > num_inserted) {
+      InsertBoundedDebugComment(
+          StrCat(IntegerToString(num_messages - num_inserted),
+                 " more debug messages omitted"),
+          preceding_node);
     }
   }
 }
@@ -3340,10 +3449,8 @@ void RewriteDriver::InsertUnauthorizedDomainDebugComment(
     StringPiece url, InputRole role, HtmlElement* element) {
   if (DebugMode() && element != NULL && IsRewritable(element)) {
     GoogleUrl gurl(url);
-    InsertNodeAfterNode(
-        element,
-        NewCommentNode(element->parent(),
-                       GenerateUnauthorizedDomainDebugComment(gurl, role)));
+    InsertBoundedDebugComment(
+        GenerateUnauthorizedDomainDebugComment(gurl, role), element);
   }
 }
 

@@ -35,6 +35,10 @@ class GzipInflater {
  public:
   enum InflateType { kGzip, kDeflate };
 
+  // The most that a compressed HTML response may inflate to on every port. A
+  // response past it is cut off at that point, like a corrupt one.
+  static const int64 kMaxInflatedHtmlBytes = 64 << 20;
+
   explicit GzipInflater(InflateType type);
   ~GzipInflater();
 
@@ -67,6 +71,19 @@ class GzipInflater {
 
   // Was an error encountered during inflating?
   bool error() const { return error_; }
+
+  // Limits how many bytes InflateBytes() produces over the life of this
+  // inflater; a negative value (the default) means no limit. Once the input
+  // would inflate past the limit, InflateBytes() fails like it does for a
+  // corrupt stream: it returns -1, error() is true, limit_exceeded() is true,
+  // and no further input is accepted. At most max_inflated_bytes bytes have
+  // been handed out by then.
+  void set_max_inflated_bytes(int64 max_inflated_bytes) {
+    max_inflated_bytes_ = max_inflated_bytes;
+  }
+
+  // Did the input try to inflate past the limit set above?
+  bool limit_exceeded() const { return limit_exceeded_; }
 
   // Deflates a stringpiece, writing output to Writer.  Returns false
   // if there was some kind of failure, though none are expected.
@@ -106,6 +123,9 @@ class GzipInflater {
   StreamFormat format_;
   bool finished_;
   bool error_;
+  int64 max_inflated_bytes_;
+  int64 inflated_bytes_;
+  bool limit_exceeded_;
 
   DISALLOW_COPY_AND_ASSIGN(GzipInflater);
 };

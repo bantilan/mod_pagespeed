@@ -422,6 +422,31 @@ TEST_F(RewriteDriverTestUrlNamer, TestEncodedUrls) {
   EXPECT_FALSE(CanDecodeUrl(encoded_url));
 }
 
+// A name that does not stay on the encoded URL's origin is not one we
+// produced, and is not decoded.
+TEST_F(RewriteDriverTestUrlNamer, DecodeRejectsNamesLeavingTheOrigin) {
+  rewrite_driver()->AddFilters();
+  TestUrlNamer::SetProxyMode(UrlNamer::ProxyExtent::kNone);
+  SetUseTestUrlNamer(false);
+  StringVector urls;
+  GoogleUrl other_scheme(
+      "http://example.com/ftp,3A,_,_x.example,_a.pagespeed.ce.HASH.css");
+  EXPECT_FALSE(rewrite_driver()->DecodeUrl(other_scheme, &urls));
+  EXPECT_EQ(0, urls.size());
+  urls.clear();
+  GoogleUrl other_host(
+      "http://example.com/a.css+,hother.example,_b.css.pagespeed.cc.HASH.css");
+  EXPECT_FALSE(rewrite_driver()->DecodeUrl(other_host, &urls));
+  EXPECT_EQ(0, urls.size());
+  // A relative reference within the origin still decodes.
+  urls.clear();
+  GoogleUrl same_origin(
+      "http://example.com/dir/..,_Puzzle.jpg.pagespeed.ce.HASH.jpg");
+  EXPECT_TRUE(rewrite_driver()->DecodeUrl(same_origin, &urls));
+  EXPECT_EQ(1, urls.size());
+  EXPECT_EQ("http://example.com/Puzzle.jpg", urls[0]);
+}
+
 TEST_F(RewriteDriverTestUrlNamer, TestDecodeUrls) {
   // Sanity-check on a valid one
   GoogleUrl gurl_good(Encode(
@@ -1711,6 +1736,158 @@ TEST_F(RewriteDriverTest, ResponseHeadersAccess) {
   driver->FinishParse();
 }
 
+// Inserts the given number of debug messages after every <link>.
+class InsertDebugCommentsFilter : public EmptyHtmlFilter {
+ public:
+  InsertDebugCommentsFilter(RewriteDriver* driver, int num_messages)
+      : driver_(driver), num_messages_(num_messages) {}
+
+  void EndElement(HtmlElement* element) override {
+    if (element->keyword() == HtmlName::kLink) {
+      protobuf::RepeatedPtrField<GoogleString> messages;
+      for (int i = 0; i < num_messages_; ++i) {
+        *messages.Add() = StrCat("message ", IntegerToString(i));
+      }
+      driver_->InsertDebugComments(messages, element);
+    }
+  }
+
+  const char* Name() const override { return "InsertDebugCommentsFilter"; }
+
+ private:
+  RewriteDriver* driver_;
+  int num_messages_;
+};
+
+// Each list of debug messages is limited to 32 comments plus one stating how
+// many were omitted.
+TEST_F(RewriteDriverTest, InsertDebugCommentsIsBounded) {
+  options()->EnableFilter(RewriteOptions::kDebug);
+  rewrite_driver()->AddOwnedEarlyPreRenderFilter(
+      new InsertDebugCommentsFilter(rewrite_driver(), 1000));
+  Parse("bounded_debug_comments",
+        "<link rel=stylesheet href=a.css><link rel=stylesheet href=a.css>");
+  EXPECT_EQ(2, CountSubstring(output_buffer_, "<!--message 0-->"));
+  EXPECT_EQ(2, CountSubstring(output_buffer_, "<!--message 31-->"));
+  EXPECT_EQ(0, CountSubstring(output_buffer_, "<!--message 32-->"));
+  EXPECT_EQ(2, CountSubstring(output_buffer_,
+                              "<!--968 more debug messages omitted-->"));
+}
+
+// Inserts after every <a> one debug comment quoting its href.
+class DebugCommentPerLinkFilter : public EmptyHtmlFilter {
+ public:
+  explicit DebugCommentPerLinkFilter(RewriteDriver* driver) : driver_(driver) {}
+
+  void EndElement(HtmlElement* element) override {
+    if (element->keyword() == HtmlName::kA) {
+      const char* href = element->AttributeValue(HtmlName::kHref);
+      driver_->InsertDebugComment(StrCat("link ", href == NULL ? "" : href),
+                                  element);
+    }
+  }
+
+  const char* Name() const override { return "DebugCommentPerLinkFilter"; }
+
+ private:
+  RewriteDriver* driver_;
+};
+
+// A page of num_links links, each with a URL of about url_size bytes.
+GoogleString PageOfLongLinks(int num_links, int url_size) {
+  GoogleString page;
+  for (int i = 0; i < num_links; ++i) {
+    StrAppend(&page, "<a href=\"http://example.com/", IntegerToString(i), "/",
+              GoogleString(url_size, 'u'), "\">", IntegerToString(i), "</a>");
+  }
+  return page;
+}
+
+// Total bytes of every <!--...--> in html.
+int64 CommentBytes(StringPiece html) {
+  int64 total = 0;
+  size_t pos = 0;
+  while ((pos = html.find("<!--", pos)) != StringPiece::npos) {
+    size_t end = html.find("-->", pos + 4);
+    if (end == StringPiece::npos) {
+      break;
+    }
+    total += end + 3 - pos;
+    pos = end + 3;
+  }
+  return total;
+}
+
+GoogleString DebugTruncatedComment(int64 budget) {
+  return StrCat("<!--Debug output truncated at DebugOutputMaxBytes=",
+                Integer64ToString(budget), "-->");
+}
+
+class RewriteDriverDebugBudgetTest : public RewriteDriverTest {
+ protected:
+  void ParseLinks(int64 budget, int num_links, int url_size) {
+    options()->EnableFilter(RewriteOptions::kDebug);
+    ASSERT_EQ(RewriteOptions::kOptionOk,
+              options()->SetOptionFromName("DebugOutputMaxBytes",
+                                           Integer64ToString(budget)));
+    rewrite_driver()->AddOwnedEarlyPreRenderFilter(
+        new DebugCommentPerLinkFilter(rewrite_driver()));
+    input_ = PageOfLongLinks(num_links, url_size);
+    Parse("debug_budget", input_);
+  }
+
+  GoogleString input_;
+};
+
+// Debug comments for a page of many long links stop at the budget, and one
+// comment says so.
+TEST_F(RewriteDriverDebugBudgetTest, DebugOutputStopsAtBudget) {
+  const int64 kBudget = 64 * 1024;
+  const int kLinks = 2000;
+  const int kUrlSize = 1000;
+  ParseLinks(kBudget, kLinks, kUrlSize);
+  const GoogleString truncated = DebugTruncatedComment(kBudget);
+  EXPECT_EQ(1, CountSubstring(output_buffer_, truncated));
+  EXPECT_EQ(1, CountSubstring(output_buffer_, "Debug output truncated"));
+  EXPECT_LE(static_cast<int64>(output_buffer_.size()),
+            static_cast<int64>(input_.size()) + kBudget +
+                static_cast<int64>(truncated.size()));
+  EXPECT_LE(CommentBytes(output_buffer_),
+            kBudget + static_cast<int64>(truncated.size()));
+  // The budget was used: some comments were written, not all of them.
+  const int written = CountSubstring(output_buffer_, "<!--link ");
+  EXPECT_LT(0, written);
+  EXPECT_GT(kLinks, written);
+  // The page itself is intact.
+  EXPECT_EQ(kLinks, CountSubstring(output_buffer_, "</a>"));
+}
+
+// Under the budget every comment is written and nothing says truncated.
+TEST_F(RewriteDriverDebugBudgetTest, DebugOutputUnderBudgetIsComplete) {
+  const int kLinks = 50;
+  ParseLinks(1 << 20, kLinks, 1000);
+  EXPECT_EQ(kLinks, CountSubstring(output_buffer_, "<!--link http://"));
+  EXPECT_EQ(0, CountSubstring(output_buffer_, "Debug output truncated"));
+}
+
+// Zero means no limit.
+TEST_F(RewriteDriverDebugBudgetTest, DebugOutputZeroBudgetIsUnlimited) {
+  const int kLinks = 2000;
+  ParseLinks(0, kLinks, 1000);
+  EXPECT_EQ(kLinks, CountSubstring(output_buffer_, "<!--link http://"));
+  EXPECT_EQ(0, CountSubstring(output_buffer_, "Debug output truncated"));
+}
+
+// The default budget is 1 MiB.
+TEST_F(RewriteDriverDebugBudgetTest, DebugOutputDefaultBudget) {
+  std::unique_ptr<RewriteOptions> fresh(options()->NewOptions());
+  const char* id = NULL;
+  bool was_set = true;
+  GoogleString value;
+  ASSERT_TRUE(fresh->OptionValue("DebugOutputMaxBytes", &id, &was_set, &value));
+  EXPECT_FALSE(was_set);
+  EXPECT_EQ("1048576", value);
+}
 TEST_F(RewriteDriverTest, SetSessionFetcherTest) {
   AddFilter(RewriteOptions::kExtendCacheCss);
 
