@@ -59,6 +59,24 @@ namespace {
 const char kInlineCspMessage[] =
     "Avoiding modifying inline script with CSP present";
 
+// Whether text has an end tag of an element whose content a browser reads as
+// text: a script inside one would end it there.
+bool HasTextElementEndTag(StringPiece text) {
+  static const char* const kEndTags[] = {
+      "</script", "</noscript", "</noembed", "</noframes", "</textarea",
+      "</title",  "</style",    "</iframe",  "</xmp",
+  };
+  if (text.find("</") == StringPiece::npos) {
+    return false;
+  }
+  for (const char* end_tag : kEndTags) {
+    if (FindIgnoreCase(text, end_tag) != StringPiece::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void CleanupWhitespaceScriptBody(RewriteDriver* driver,
                                  HtmlCharactersNode* node) {
   // Note that an external script tag might contain body data.  We erase this
@@ -440,6 +458,18 @@ void JavascriptFilter::InitializeConfigIfNecessary() {
   }
 }
 
+bool JavascriptFilter::MinifiedScriptMayEndElement(StringPiece original,
+                                                   StringPiece minified) {
+  // Minification must not change where an HTML parser ends the element (see
+  // JsInlineFilter::RenderInline), or the element the script is in. Any such
+  // end tag in a changed script counts, wherever it is and whether or not the
+  // original had one there.
+  return minified != original &&
+         (HasTextElementEndTag(minified) ||
+          (minified.find("<!--") != StringPiece::npos &&
+           FindIgnoreCase(minified, "<script") != StringPiece::npos));
+}
+
 void JavascriptFilter::RewriteInlineScript(HtmlCharactersNode* body_node) {
   if (!driver()->content_security_policy().CanModifyInlineScript()) {
     driver()->InsertDebugComment(kInlineCspMessage, body_node->parent());
@@ -459,10 +489,15 @@ void JavascriptFilter::RewriteInlineScript(HtmlCharactersNode* body_node) {
     driver()->InfoHere("Script is inlined version of %s",
                        library_url.as_string().c_str());
   }
+  // Minification must not change where an HTML parser ends the element (see
+  // JsInlineFilter::RenderInline); keep the original script if it could.
   if (code_block.successfully_rewritten() &&
-      driver()->MimeTypeXhtmlStatus() != RewriteDriver::kIsNotXhtml &&
-      code_block.rewritten_code().find("]]>") != StringPiece::npos &&
-      script->find("]]>") == GoogleString::npos) {
+      MinifiedScriptMayEndElement(*script, code_block.rewritten_code())) {
+    config_->did_not_shrink()->Add(1);
+  } else if (code_block.successfully_rewritten() &&
+             driver()->MimeTypeXhtmlStatus() != RewriteDriver::kIsNotXhtml &&
+             code_block.rewritten_code().find("]]>") != StringPiece::npos &&
+             script->find("]]>") == GoogleString::npos) {
     // Minification can join adjacent brackets into "]]>", which is not allowed
     // in XHTML character data; keep the original script.
     config_->did_not_shrink()->Add(1);

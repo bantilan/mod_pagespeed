@@ -31,6 +31,7 @@
 namespace {
 
 using net_instaweb::StrAppend;
+using net_instaweb::StrCat;
 
 // This sample code comes from Douglas Crockford's jsmin example.
 const char* kBeforeCompilation =
@@ -325,6 +326,43 @@ TEST_F(JsMinifyTest, DoNotCreateSgmlLineComment1) {
 TEST_F(JsMinifyTest, DoNotCreateSgmlLineComment2) {
   // Yes, this is legal code.  It tests if x is less than not(decrement y).
   CheckMinification("if (x < !--y) { x = 0; }\n", "if(x< !--y){x=0;}");
+}
+
+TEST_F(JsMinifyTest, DoNotCreateHtmlEndTag) {
+  // "<" followed by a regular expression: joining the two would put an HTML
+  // end tag such as "</textarea" in the output, which the input does not
+  // have; the space (or the linebreak) between them is kept instead.
+  static const char* const kNames[] = {
+      "script", "noscript", "noembed", "noframes", "textarea",
+      "title",  "style",    "iframe",  "xmp",      "TEXTAREA",
+      "NoScript", "Style",  "XMP",
+  };
+  for (const char* name : kNames) {
+    SCOPED_TRACE(name);
+    CheckNewMinification(StrCat("var ok = 1 < /* note */ /", name, "/ > 0;"),
+                         StrCat("var ok=1< /", name, "/>0;"));
+    CheckNewMinification(StrCat("var ok = 1 < /", name, "/.test(s);"),
+                         StrCat("var ok=1< /", name, "/.test(s);"));
+    CheckNewMinification(StrCat("var ok = 1 <\n/", name, "/ > 0;"),
+                         StrCat("var ok=1<\n/", name, "/>0;"));
+    CheckNewMinification(StrCat("x = y << /* c */ /", name, "/g.lastIndex;"),
+                         StrCat("x=y<< /", name, "/g.lastIndex;"));
+  }
+  // Text that already has the pair keeps it as it is.
+  CheckNewMinification("var ok = 1</textarea/ > 0;", "var ok=1</textarea/>0;");
+  // Nor at the very end of the input, where minification may stop and keep
+  // the rest of the input as it is.
+  for (const char* input :
+       {"x = 1 <", "x = 1 <  ", "x = 1 < /", "x = 1 < /textarea",
+        "x = 1 < /* c */ /textarea", "x = 1 <\n/TITLE"}) {
+    SCOPED_TRACE(input);
+    GoogleString output;
+    pagespeed::js::MinifyUtf8Js(&patterns_, input, &output);
+    EXPECT_EQ(GoogleString::npos, output.find("</")) << output;
+  }
+  CheckNewMinification("x = 1 <", "x=1<");
+  // Other tokens after "<" still join.
+  CheckNewMinification("if (a < b) { c = a <= b; }", "if(a<b){c=a<=b;}");
 }
 
 TEST_F(JsMinifyTest, DoNotJoinDecimalIntegerAndDot) {
