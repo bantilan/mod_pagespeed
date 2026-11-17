@@ -25,6 +25,7 @@
 
 #include <cstddef>                     // for size_t
 #include <algorithm>
+#include <vector>
 
 #include "pagespeed/kernel/base/basictypes.h"
 #include "pagespeed/kernel/base/google_message_handler.h"
@@ -1487,6 +1488,43 @@ TEST_F(ResponseHeadersTest, TestGzippedNotLast) {
   EXPECT_EQ(2, values.size());
   EXPECT_TRUE(response_headers_.IsGzipped());
   EXPECT_FALSE(response_headers_.WasGzippedLast());
+}
+
+// Only an absent coding, identity, and one layer of gzip are codings the
+// HTTP cache can adapt to each client.
+TEST_F(ResponseHeadersTest, ContentCodingOtherThanSingleGzip) {
+  struct Case {
+    std::vector<const char*> header_lines;
+    bool expected;
+  };
+  const Case kCases[] = {
+      {{}, false},
+      {{"identity"}, false},
+      {{"gzip"}, false},
+      {{"GZIP"}, false},
+      {{"identity", "gzip"}, false},
+      {{"identity, gzip"}, false},
+      {{"br"}, true},
+      {{"zstd"}, true},
+      {{"deflate"}, true},
+      {{"x-unknown"}, true},
+      {{"gzip, br"}, true},
+      {{"gzip", "zstd"}, true},
+      {{"gzip, gzip"}, true},
+      {{"gzip", "gzip"}, true},
+  };
+  for (size_t i = 0; i < arraysize(kCases); ++i) {
+    const Case& c = kCases[i];
+    ResponseHeaders headers;
+    GoogleString described;
+    for (size_t j = 0; j < c.header_lines.size(); ++j) {
+      const char* line = c.header_lines[j];
+      headers.Add(HttpAttributes::kContentEncoding, line);
+      StrAppend(&described, "[", line, "]");
+    }
+    EXPECT_EQ(c.expected, headers.HasContentCodingOtherThanSingleGzip())
+        << described;
+  }
 }
 
 TEST_F(ResponseHeadersTest, TestRemove) {
